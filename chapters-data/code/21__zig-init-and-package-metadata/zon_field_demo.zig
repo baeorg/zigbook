@@ -2,7 +2,9 @@ const std = @import("std");
 
 pub fn main() !void {
     // Demonstrate parsing and introspecting build.zig.zon fields
+    // Demonstrate 解析 和 introspecting 构建.zig.zon fields
     // In practice, the build runner handles this automatically
+    // 在 practice, 构建 runner handles 此 automatically
     const zon_example =
         \\.{
         \\    .name = .demo,

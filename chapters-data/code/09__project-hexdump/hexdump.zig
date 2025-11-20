@@ -1,14 +1,20 @@
 const std = @import("std");
 
 // Chapter 9 – Project: Hexdump
+// 章节 9 – Project: Hexdump
 //
 // A small, alignment-aware hexdump that prints:
-//   OFFSET: 16 hex bytes (grouped 8|8)  ASCII
+// 一个 small, alignment-aware hexdump 该 prints:
+// OFFSET: 16 hex bytes (grouped 8|8)  ASCII
+// OFFSET: 16 hex bytes (grouped 8|8) ASCII
 // Default width is 16 bytes per line; override with --width N (4..32).
+// 默认 width is 16 bytes per line; override 使用 --width N (4..32).
 //
 // Usage:
-//   zig run hexdump.zig -- <path>
-//   zig run hexdump.zig -- --width 8 <path>
+// zig run hexdump.zig -- <path>
+// zig run hexdump.zig -- <路径>
+// zig run hexdump.zig -- --width 8 <path>
+// zig run hexdump.zig -- --width 8 <路径>
 
 const Cli = struct {
     width: usize = 16,
@@ -49,6 +55,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Cli {
     }
 
     // Duplicate the path so it remains valid after freeing args.
+    // Duplicate 路径 so it remains valid after freeing 参数.
     cli.path = try allocator.dupe(u8, args[i]);
     return cli;
 }
@@ -60,15 +67,18 @@ fn isPrintable(c: u8) bool {
 
 fn dumpLine(stdout: *std.Io.Writer, offset: usize, bytes: []const u8, width: usize) !void {
     // OFFSET (8 hex digits), colon and space
+    // OFFSET (8 hex digits), colon 和 space
     try stdout.print("{X:0>8}: ", .{offset});
 
     // Hex bytes with grouping at 8
+    // Hex bytes 使用 grouping 在 8
     var i: usize = 0;
     while (i < width) : (i += 1) {
         if (i < bytes.len) {
             try stdout.print("{X:0>2} ", .{bytes[i]});
         } else {
             // pad absent bytes to keep ASCII column aligned
+            // pad absent bytes 到 keep ASCII column aligned
             try stdout.print("   ", .{});
         }
         if (i + 1 == width / 2) {
@@ -77,6 +87,7 @@ fn dumpLine(stdout: *std.Io.Writer, offset: usize, bytes: []const u8, width: usi
     }
 
     // Two spaces before ASCII gutter
+    // 两个 spaces before ASCII gutter
     try stdout.print("  ", .{});
 
     i = 0;
@@ -102,6 +113,7 @@ pub fn main() !void {
     defer file.close();
 
     // Buffered stdout using the modern File.Writer + Io.Writer interface.
+    // 缓冲 stdout 使用 modern 文件.Writer + Io.Writer 接口.
     var out_buf: [16 * 1024]u8 = undefined;
     var file_writer = std.fs.File.writer(std.fs.File.stdout(), &out_buf);
     const stdout = &file_writer.interface;
@@ -118,6 +130,7 @@ pub fn main() !void {
         var idx: usize = 0;
         while (idx < n) {
             // fill a line from carry + buffer bytes
+            // fill 一个 line 从 carry + 缓冲区 bytes
             const need = cli.width - carry_len;
             const take = @min(need, n - idx);
             @memcpy(carry[carry_len .. carry_len + take], buf[idx .. idx + take]);

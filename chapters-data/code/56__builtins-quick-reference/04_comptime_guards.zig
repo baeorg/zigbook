@@ -1,4 +1,5 @@
-//! Demonstrates compile-time guards using @compileError and @setEvalBranchQuota.
+// ! Demonstrates compile-time guards using @compileError and @setEvalBranchQuota.
+// ! 演示 编译-time guards 使用 @compileError 和 @setEvalBranchQuota.
 const std = @import("std");
 
 fn ensureVectorLength(comptime len: usize) type {
@@ -23,7 +24,9 @@ test "guard accepts valid size" {
     const info = @typeInfo(Vec);
     try std.testing.expectEqual(@as(usize, 4), info.vector.len);
     // Uncommenting the next line triggers the compile-time guard:
+    // Uncommenting 下一个 line triggers 编译-time guard:
     // const invalid = ensureVectorLength(1);
+    // const 无效 = ensureVectorLength(1);
 }
 
 test "branch quota enables deeper recursion" {

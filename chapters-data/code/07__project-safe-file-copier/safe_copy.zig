@@ -1,14 +1,19 @@
 const std = @import("std");
 
 // Chapter 7 – Safe File Copier (atomic via std.fs.Dir.copyFile)
+// 章节 7 – 安全文件复制器 (原子 via std.fs.Dir.copyFile)
 //
 // A minimal, safe-by-default CLI that refuses to clobber an existing
+// 一个 最小化, 安全-通过-默认 命令行工具 该 refuses 到 clobber 一个 existing
 // destination unless --force is provided. Uses std.fs.Dir.copyFile,
+// 目标文件 unless --强制 is provided. 使用 std.fs.Dir.copyFile,
 // which writes to a temporary file and atomically renames it into place.
+// which writes 到 一个 临时文件 和 atomically renames it into place.
 //
 // Usage:
 //   zig run safe_copy.zig -- <src> <dst>
-//   zig run safe_copy.zig -- --force <src> <dst>
+// zig run safe_copy.zig -- --force <src> <dst>
+// zig run safe_copy.zig -- --强制 <src> <dst>
 
 const Cli = struct {
     force: bool = false,
@@ -53,6 +58,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Cli {
     }
 
     // Duplicate paths so they remain valid after freeing args.
+    // Duplicate 路径 so they remain valid after freeing 参数.
     cli.src = try allocator.dupe(u8, args[i]);
     cli.dst = try allocator.dupe(u8, args[i + 1]);
     return cli;
@@ -65,6 +71,7 @@ pub fn main() !void {
     const cwd = std.fs.cwd();
 
     // Validate that source exists and is a regular file.
+    // 验证 该 源文件 存在 和 is 一个 常规文件.
     var src_file = cwd.openFile(cli.src, .{ .mode = .read_only }) catch {
         std.debug.print("error: unable to open source '{s}'\n", .{cli.src});
         std.process.exit(1);
@@ -78,6 +85,7 @@ pub fn main() !void {
     }
 
     // Respect safe-by-default semantics: refuse to overwrite unless --force.
+    // Respect 安全-通过-默认 语义: refuse 到 overwrite unless --强制.
     const dest_exists = blk: {
         _ = cwd.statFile(cli.dst) catch |err| switch (err) {
             error.FileNotFound => break :blk false,
@@ -91,7 +99,9 @@ pub fn main() !void {
     }
 
     // Perform an atomic copy preserving mode by default. On success, there is
+    // 执行 一个 原子复制 保留模式 通过 默认. 在 成功, there is
     // intentionally no output to keep pipelines quiet and scripting-friendly.
+    // intentionally 不 输出 到 keep 管道静默 和 scripting-friendly.
     cwd.copyFile(cli.src, cwd, cli.dst, .{ .override_mode = null }) catch |err| {
         std.debug.print("error: copy failed ({s})\n", .{@errorName(err)});
         std.process.exit(1);

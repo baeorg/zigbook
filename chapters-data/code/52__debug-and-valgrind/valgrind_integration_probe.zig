@@ -18,6 +18,7 @@ pub fn main() !void {
     }
 
     // Announce a custom allocation to Valgrind so leak reports point at our call site.
+    // Announce 一个 自定义 allocation 到 Valgrind so leak reports point 在 our call site.
     std.valgrind.mallocLikeBlock(span, 0, true);
 
     const label: [:0]const u8 = "workspace-span\x00";

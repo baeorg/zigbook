@@ -1,4 +1,5 @@
-//! Demonstrates layering domain-specific error sets when loading configuration.
+// ! Demonstrates layering domain-specific error sets when loading configuration.
+// ! 演示 layering domain-specific 错误 sets 当 loading configuration.
 const std = @import("std");
 
 pub const ParseError = error{

@@ -1,4 +1,5 @@
-//! Minimal inline assembly example that adds two integers.
+// ! Minimal inline assembly example that adds two integers.
+// ! 最小化 inline assembly 示例 该 adds 两个 整数.
 const std = @import("std");
 
 pub fn addAsm(a: u32, b: u32) u32 {

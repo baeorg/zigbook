@@ -1,14 +1,19 @@
 const std = @import("std");
 
 // Chapter 7 – Safe File Copier (manual streaming with errdefer cleanup)
+// 章节 7 – 安全文件复制器 (manual streaming 使用 errdefer cleanup)
 //
 // Demonstrates opening, reading, writing, and cleaning up safely using
+// 演示 opening, reading, writing, 和 cleaning up safely 使用
 // defer/errdefer. If the copy fails after destination creation, we remove
+// defer/errdefer. 如果 复制 fails after 目标文件 creation, we remove
 // the partial file so callers never observe a truncated artifact.
+// partial 文件 so callers never observe 一个 truncated artifact.
 //
 // Usage:
 //   zig run copy_stream.zig -- <src> <dst>
-//   zig run copy_stream.zig -- --force <src> <dst>
+// zig run copy_stream.zig -- --force <src> <dst>
+// zig run copy_stream.zig -- --强制 <src> <dst>
 
 const Cli = struct {
     force: bool = false,
@@ -53,6 +58,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Cli {
     }
 
     // Duplicate paths so they remain valid after freeing args.
+    // Duplicate 路径 so they remain valid after freeing 参数.
     cli.src = try allocator.dupe(u8, args[i]);
     cli.dst = try allocator.dupe(u8, args[i + 1]);
     return cli;
@@ -65,6 +71,7 @@ pub fn main() !void {
     const cwd = std.fs.cwd();
 
     // Open source and inspect its metadata.
+    // Open 源文件 和 inspect its metadata.
     var src = cwd.openFile(cli.src, .{ .mode = .read_only }) catch {
         std.debug.print("error: unable to open source '{s}'\n", .{cli.src});
         std.process.exit(1);
@@ -78,6 +85,7 @@ pub fn main() !void {
     }
 
     // Safe-by-default: refuse to overwrite unless --force.
+    // 安全-通过-默认: refuse 到 overwrite unless --强制.
     if (!cli.force) {
         const dest_exists = blk: {
             _ = cwd.statFile(cli.dst) catch |err| switch (err) {
@@ -93,6 +101,7 @@ pub fn main() !void {
     }
 
     // Create destination with exclusive mode when not forcing overwrite.
+    // 创建 目标文件 使用 exclusive 模式 当 不 forcing overwrite.
     var dest = cwd.createFile(cli.dst, .{
         .read = false,
         .truncate = cli.force,
@@ -109,10 +118,12 @@ pub fn main() !void {
         },
     };
     // Ensure closure and cleanup order: close first, then delete on error.
+    // 确保 closure 和 cleanup order: close 首先, 那么 delete 在 错误.
     defer dest.close();
     errdefer cwd.deleteFile(cli.dst) catch {};
 
     // Wire a Reader/Writer pair and copy using the Writer interface.
+    // Wire 一个 Reader/Writer pair 和 复制 使用 Writer 接口.
     var reader: std.fs.File.Reader = .initSize(src, &.{}, st.size);
     var write_buf: [64 * 1024]u8 = undefined; // buffered writes
     var writer = std.fs.File.writer(dest, &write_buf);
@@ -123,5 +134,6 @@ pub fn main() !void {
     };
 
     // Flush buffered bytes and set the final file length.
+    // 刷新 缓冲 bytes 和 set 最终 文件 length.
     try writer.end();
 }

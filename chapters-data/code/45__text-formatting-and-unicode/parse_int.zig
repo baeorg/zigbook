@@ -11,10 +11,12 @@ pub fn main() !void {
     std.debug.print("Parsed binary: {d}\n", .{binary});
 
     // Auto-detect base with prefix
+    // Auto-detect base 使用 prefix
     const auto = try std.fmt.parseInt(i32, "0x1234", 0);
     std.debug.print("Auto-detected (0x): {d}\n", .{auto});
 
     // Error handling
+    // 错误处理
     const result = std.fmt.parseInt(i32, "not_a_number", 10);
     if (result) |_| {
         std.debug.print("Unexpected success\n", .{});

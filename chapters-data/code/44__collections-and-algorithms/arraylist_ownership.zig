@@ -6,6 +6,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // ArrayList with explicit allocator
+    // ArrayList 使用 explicit allocator
     var list: std.ArrayList(u32) = .empty;
     defer list.deinit(allocator);
 
@@ -16,6 +17,7 @@ pub fn main() !void {
     std.debug.print("Managed list length: {d}\n", .{list.items.len});
 
     // Transfer ownership to a slice
+    // Transfer ownership 到 一个 切片
     const owned_slice = try list.toOwnedSlice(allocator);
     defer allocator.free(owned_slice);
 

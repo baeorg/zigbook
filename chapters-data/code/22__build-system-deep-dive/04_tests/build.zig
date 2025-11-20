@@ -11,6 +11,7 @@ pub fn build(b: *std.Build) void {
     });
     
     // Create tests for the library module
+    // 创建 tests 用于 库 module
     const lib_tests = b.addTest(.{
         .root_module = lib_mod,
     });
@@ -18,10 +19,12 @@ pub fn build(b: *std.Build) void {
     const run_lib_tests = b.addRunArtifact(lib_tests);
     
     // Create a test step
+    // 创建一个 test step
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_lib_tests.step);
     
     // Also create an executable that uses the library
+    // Also 创建 一个 executable 该 使用 库
     const exe = b.addExecutable(.{
         .name = "app",
         .root_module = b.createModule(.{

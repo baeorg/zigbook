@@ -1,4 +1,5 @@
-//! Builds a statistics report using struct literals that forward into the caller's result location.
+// ! Builds a statistics report using struct literals that forward into the caller's result location.
+// ! Builds 一个 statistics report 使用 struct literals 该 forward into caller's result location.
 const std = @import("std");
 
 pub const Report = struct {

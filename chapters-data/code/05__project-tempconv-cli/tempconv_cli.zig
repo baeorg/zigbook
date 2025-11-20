@@ -1,8 +1,11 @@
 const std = @import("std");
 
 // Chapter 5 – TempConv CLI: walk from parsing arguments through producing a
+// 章节 5 – TempConv 命令行工具: walk 从 解析 arguments through producing 一个
 // formatted result, exercising everything we have learned about errors and
+// 格式化 result, exercising everything we have learned about 错误 和
 // deterministic cleanup along the way.
+// deterministic cleanup along way.
 
 const CliError = error{ MissingArgs, BadNumber, BadUnit };
 
@@ -15,6 +18,7 @@ fn printUsage() void {
 
 fn parseUnit(token: []const u8) CliError!Unit {
     // Section 1: we accept a single-letter token and normalise it so the CLI
+    // 节 1: we accept 一个 single-letter token 和 normalise it so 命令行工具
     // remains forgiving about casing.
     if (token.len != 1) return CliError.BadUnit;
     const ascii = std.ascii;
@@ -45,7 +49,9 @@ fn fromKelvin(value: f64, unit: Unit) f64 {
 
 fn convert(value: f64, from: Unit, to: Unit) f64 {
     // Section 2: normalise through Kelvin so every pair of units reuses the
+    // 节 2: normalise through Kelvin so 每个 pair 的 units reuses
     // same formulas, keeping the CLI easy to extend.
+    // same formulas, keeping 命令行工具 easy 到 extend.
     if (from == to) return value;
     const kelvin = toKelvin(value, from);
     return fromKelvin(kelvin, to);
@@ -70,6 +76,7 @@ pub fn main() !void {
     const raw_value = args[1];
     const value = std.fmt.parseFloat(f64, raw_value) catch {
         // Section 1 also highlights how parsing failures become user-facing
+        // 节 1 also highlights how 解析 failures become user-facing
         // diagnostics rather than backtraces.
         std.debug.print("error: '{s}' is not a floating-point value\n", .{raw_value});
         std.process.exit(1);

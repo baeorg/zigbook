@@ -1,4 +1,5 @@
-//! Demonstrates `@fieldParentPtr` to recover container pointers safely.
+// ! Demonstrates `@fieldParentPtr` to recover container pointers safely.
+// ! 演示 `@fieldParentPtr` 到 recover container pointers safely.
 const std = @import("std");
 
 const Node = struct {

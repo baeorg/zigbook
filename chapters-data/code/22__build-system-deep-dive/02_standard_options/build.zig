@@ -1,11 +1,14 @@
 const std = @import("std");
 
 // Demonstrating standardTargetOptions and standardOptimizeOption
+// Demonstrating standardTargetOptions 和 standardOptimizeOption
 pub fn build(b: *std.Build) void {
     // Allows user to choose target: zig build -Dtarget=x86_64-linux
+    // Allows user 到 choose target: zig 构建 -Dtarget=x86_64-linux
     const target = b.standardTargetOptions(.{});
     
     // Allows user to choose optimization: zig build -Doptimize=ReleaseFast
+    // Allows user 到 choose optimization: zig 构建 -Doptimize=ReleaseFast
     const optimize = b.standardOptimizeOption(.{});
     
     const exe = b.addExecutable(.{

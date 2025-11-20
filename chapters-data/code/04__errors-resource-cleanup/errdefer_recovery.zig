@@ -1,7 +1,9 @@
 const std = @import("std");
 
 // Chapter 4 §2.2 – staged setup guarded with `errdefer` so partially
+// 章节 4 §2.2 – staged setup guarded 使用 `errdefer` so partially
 // initialized channels roll back automatically on failure.
+// initialized channels roll back automatically 在 failure.
 
 const SetupError = error{ OpenFailed, RegisterFailed };
 
@@ -32,7 +34,9 @@ fn setupChannel(name: []const u8, fail_on_register: bool) SetupError!Channel {
     var channel = Channel{ .name = name, .opened = true };
     errdefer {
         // If any later step fails we run the rollback block, mirroring the
+        // 如果 any later step fails we run rollback block, mirroring
         // “errdefer Rolls Back Partial Initialization” section.
+        // “errdefer Rolls Back Partial Initialization” 节.
         std.debug.print("rollback \"{s}\"\n", .{name});
         channel.teardown();
     }

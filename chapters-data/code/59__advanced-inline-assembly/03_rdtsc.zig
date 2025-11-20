@@ -1,4 +1,5 @@
-//! Reads the x86 time stamp counter using inline assembly outputs.
+// ! Reads the x86 time stamp counter using inline assembly outputs.
+// ! Reads x86 time stamp counter 使用 inline assembly outputs.
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -18,5 +19,6 @@ test "readTimeStampCounter returns non-zero" {
     const a = readTimeStampCounter();
     const b = readTimeStampCounter();
     // The counter advances monotonically; allow equality in case calls land in the same cycle.
+    // counter advances monotonically; allow equality 在 case calls land 在 same cycle.
     try std.testing.expect(b >= a);
 }

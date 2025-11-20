@@ -1,6 +1,7 @@
 const std = @import("std");
 
 // Chapter 8 — Layout (packed/extern) and anonymous structs/tuples
+// 章节 8 — Layout (packed/extern) 和 anonymous structs/tuples
 
 const Packed = packed struct {
     a: u3,
@@ -14,12 +15,15 @@ const Extern = extern struct {
 
 pub fn main() !void {
     // Packed bit-fields combine into a single byte.
+    // Packed bit-fields combine into 一个 single byte.
     std.debug.print("packed.size={d}\n", .{@sizeOf(Packed)});
 
     // Extern layout matches the C ABI (padding may be inserted).
+    // Extern layout matches C ABI (padding may be inserted).
     std.debug.print("extern.size={d} align={d}\n", .{ @sizeOf(Extern), @alignOf(Extern) });
 
     // Anonymous struct (tuple) literals and destructuring.
+    // Anonymous struct (tuple) literals 和 destructuring.
     const pair = .{ "x", 42 };
     const name = @field(pair, "0");
     const value = @field(pair, "1");

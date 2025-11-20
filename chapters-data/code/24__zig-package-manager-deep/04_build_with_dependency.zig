@@ -5,12 +5,14 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Fetch the dependency defined in build.zig.zon
+    // Fetch dependency defined 在 构建.zig.zon
     const mylib_dep = b.dependency("mylib", .{
         .target = target,
         .optimize = optimize,
     });
 
     // Get the module from the dependency
+    // 获取 module 从 dependency
     const mylib_module = mylib_dep.module("mylib");
 
     const exe = b.addExecutable(.{
@@ -23,6 +25,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Import the dependency module
+    // 导入 dependency module
     exe.root_module.addImport("mylib", mylib_module);
 
     b.installArtifact(exe);

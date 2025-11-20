@@ -1,4 +1,5 @@
-//! Demonstrates manual result locations by filling a struct through a pointer parameter.
+// ! Demonstrates manual result locations by filling a struct through a pointer parameter.
+// ! 演示 manual result locations 通过 filling 一个 struct through 一个 pointer parameter.
 const std = @import("std");
 
 pub const ParseError = error{

@@ -23,6 +23,7 @@ pub fn main() !void {
     }
 
     // Access a single field slice for efficient iteration
+    // Access 一个 single field 切片 用于 efficient iteration
     const x_coords = entities.items(.x);
     var sum: f32 = 0;
     for (x_coords) |x| {

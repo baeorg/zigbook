@@ -18,6 +18,7 @@ pub fn main() !void {
     const out = stdout();
 
     // Reflect over Person using @TypeOf and @typeInfo
+    // Reflect over Person 使用 @TypeOf 和 @typeInfo
     const T = Person;
     try out.print("type name: {s}\n", .{@typeName(T)});
 
@@ -33,6 +34,7 @@ pub fn main() !void {
     }
 
     // Use reflection to initialize a default instance (here trivial)
+    // Use reflection 到 initialize 一个 默认 instance (here trivial)
     const p = Person{ .id = 42, .name = "Zig" };
     try out.print("example: id={} name={s} active={}\n", .{ p.id, p.name, p.active });
 

@@ -2,17 +2,21 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     // Standard target and optimization options
+    // 标准 target 和 optimization options
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     
     // ===== LIBRARY =====
+    // ===== 库 =====
     // Create the TextKit library module
+    // 创建 TextKit 库 module
     const textkit_mod = b.addModule("textkit", .{
         .root_source_file = b.path("src/textkit.zig"),
         .target = target,
     });
     
     // Build static library artifact
+    // 构建 static 库 artifact
     const lib = b.addLibrary(.{
         .name = "textkit",
         .root_module = b.createModule(.{
@@ -25,10 +29,12 @@ pub fn build(b: *std.Build) void {
     });
     
     // Install the library (to zig-out/lib/)
+    // Install 库 (到 zig-out/lib/)
     b.installArtifact(lib);
     
     // ===== EXECUTABLE =====
     // Create executable that uses the library
+    // 创建 executable 该 使用 库
     const exe = b.addExecutable(.{
         .name = "textkit-cli",
         .root_module = b.createModule(.{
@@ -42,14 +48,17 @@ pub fn build(b: *std.Build) void {
     });
     
     // Install the executable (to zig-out/bin/)
+    // Install executable (到 zig-out/bin/)
     b.installArtifact(exe);
     
     // ===== RUN STEP =====
     // Create a run step for the executable
+    // 创建一个 run step 用于 executable
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     
     // Forward command-line arguments to the application
+    // Forward command-line arguments 到 application
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
@@ -59,6 +68,7 @@ pub fn build(b: *std.Build) void {
     
     // ===== TESTS =====
     // Library tests
+    // 库 tests
     const lib_tests = b.addTest(.{
         .root_module = textkit_mod,
     });
@@ -66,6 +76,7 @@ pub fn build(b: *std.Build) void {
     const run_lib_tests = b.addRunArtifact(lib_tests);
     
     // Executable tests (minimal for main.zig)
+    // Executable tests (最小化 用于 主.zig)
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
     });
@@ -73,12 +84,15 @@ pub fn build(b: *std.Build) void {
     const run_exe_tests = b.addRunArtifact(exe_tests);
     
     // Test step that runs all tests
+    // Test step 该 runs 所有 tests
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     
     // ===== CUSTOM STEPS =====
+    // ===== 自定义 STEPS =====
     // Demo step that shows usage
+    // Demo step 该 shows usage
     const demo_step = b.step("demo", "Run demo commands");
     
     const demo_reverse = b.addRunArtifact(exe);
