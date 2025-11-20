@@ -1,0 +1,323 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>构建系统高级主题</title>
+<subtitle>工作区编排、目标矩阵和CI自动化</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>模块解析给了我们推理编译器图的词汇表。现在我们将这些词汇表转化为基础设施。本章深入探讨超越基础的<literal>std.Build</literal>，探索构件之旅和库/可执行文件工作区。我们将有意注册模块，组合多包工作区，生成构建输出而无需接触shell脚本，并从单个<literal>build.zig</literal>驱动跨目标矩阵。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build.zig">Build.zig</link>。</simpara>
+<simpara>你将学习命名写入文件、匿名模块和<literal>resolveTargetQuery</literal>如何馈送构建运行器，如何保持供应商代码与注册表依赖项隔离，以及如何连接在Debug和Release构建中都能证明你的图行为的CI作业。参见<link xl:href="https://github.com/ziglang/zig/blob/master/lib/compiler/build_runner.zig">build_runner.zig</link>。</simpara>
+<section xml:id="how-the-build-system-executes">
+<title>构建系统如何执行</title>
+<simpara>在深入高级模式之前，理解<literal>std.Build</literal>如何执行至关重要。下图显示了从Zig编译器调用你的<literal>build.zig</literal>脚本到最终构件安装的完整流程：</simpara>
+<figure>
+<title>构建系统执行流程</title>
+<mediaobject>
+<textobject><phrase>mermaid diagram</phrase></textobject>
+</mediaobject>
+</figure>
+<simpara>你的<literal>build.zig</literal>是一个由编译器编译和执行的常规Zig程序。<literal>build()</literal>函数是入口点，接收一个<literal>*std.Build</literal>实例，该实例提供定义步骤、构件和依赖项的API。构建参数（<literal>-D</literal>标志）由<literal>b.option()</literal>解析，并作为编译时常量流入你的构建逻辑。然后构建运行器遍历你声明的步骤依赖图，仅执行满足请求目标所需的步骤（默认为安装步骤）。这种声明式模型确保了可重现性：相同的输入总是产生相同的构建图。</simpara>
+</section>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>显式注册可重用模块和匿名包，控制哪些名称出现在导入命名空间中。<xref linkend="25__module-resolution-and-discovery-deep.adoc" xrefstyle="short">25</xref></simpara>
+</listitem>
+<listitem>
+<simpara>使用命名写入文件从构建图生成确定性构件（报告、清单），而不是临时shell脚本。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>resolveTargetQuery</literal>协调多目标构建，包括主机健全性检查和交叉编译管道。<xref linkend="22__build-system-deep-dive.adoc" xrefstyle="short">22</xref>，<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build/Step/Compile.zig">Compile.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>构建复合工作区，使供应商模块保持私有，而注册表包保持自包含。<xref linkend="24__zig-package-manager-deep.adoc" xrefstyle="short">24</xref></simpara>
+</listitem>
+<listitem>
+<simpara>在CI中捕获可重现性保证：安装步骤、运行步骤和生成的构件都依赖于<literal>std.Build.Step</literal>。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="workspace-surface">
+<title>构建工作区表面</title>
+<simpara>工作区只是一个具有清晰命名空间边界的构建图。以下示例提升了三个模块——<literal>analytics</literal>、<literal>reporting</literal>和一个供应商的<literal>adapters</literal>助手——并展示了根可执行文件如何使用它们。我们强调哪些模块是全局注册的，哪些保持匿名，以及如何直接从构建图发出文档。</simpara>
+<figure>
+<title>工作区构建示例</title>
+<mediaobject>
+<textobject><phrase>workspace build code</phrase></textobject>
+</mediaobject>
+</figure>
+<simpara><literal>build()</literal>函数遵循一个深思熟虑的节奏：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>b.addModule("analytics", …)</literal>注册一个公共名称，以便整个工作区都可以<literal>@import("analytics")</literal>。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build/Module.zig">Module.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>b.createModule</literal>创建一个私有模块（<literal>adapters</literal>），只有根可执行文件能看到——非常适合消费者不应访问的供应商代码。<xref linkend="24__zig-package-manager-deep.adoc" xrefstyle="short">24</xref></simpara>
+</listitem>
+<listitem>
+<simpara><literal>b.addNamedWriteFiles("workspace-graph")</literal>在<literal>zig-out/</literal>中生成一个<literal>module-graph.txt</literal>文件，记录命名空间映射，无需定制工具。</simpara>
+</listitem>
+<listitem>
+<simpara>每个依赖项都通过<literal>.imports</literal>连接，因此编译器永远不会回退到文件系统猜测。<xref linkend="25__module-resolution-and-discovery-deep.adoc" xrefstyle="short">25</xref></simpara>
+</listitem>
+</itemizedlist>
+<figure>
+<title>运行工作区应用</title>
+<mediaobject>
+<textobject><phrase>run workspace output</phrase></textobject>
+</mediaobject>
+</figure>
+<figure>
+<title>生成模块图</title>
+<mediaobject>
+<textobject><phrase>generate module graph</phrase></textobject>
+</mediaobject>
+</figure>
+<note>
+<simpara>命名写入文件服从缓存：在没有更改的情况下重新运行<literal>zig build … graph</literal>是即时的。检查<literal>zig-out/graph/module-graph.txt</literal>以查看构建运行器发出的映射。</simpara>
+</note>
+<section xml:id="workspace-library-code">
+<title>工作区的库代码</title>
+<simpara>为了保持此示例的自包含性，模块位于构建脚本旁边。你可以根据需要调整它们，或者将它们换成在<literal>build.zig.zon</literal>中声明的注册表依赖项。</simpara>
+<figure>
+<title>分析库代码</title>
+<mediaobject>
+<textobject><phrase>analytics library code</phrase></textobject>
+</mediaobject>
+</figure>
+<figure>
+<title>报告库代码</title>
+<mediaobject>
+<textobject><phrase>reporting library code</phrase></textobject>
+</mediaobject>
+</figure>
+<figure>
+<title>适配器供应商代码</title>
+<mediaobject>
+<textobject><phrase>adapters vendored code</phrase></textobject>
+</mediaobject>
+</figure>
+<figure>
+<title>应用主代码</title>
+<mediaobject>
+<textobject><phrase>application main code</phrase></textobject>
+</mediaobject>
+</figure>
+<tip>
+<simpara><literal>std.fmt.allocPrint</literal>与分配器管道配合得很好，当你希望构建时助手在没有堆全局变量的情况下操作时。在Zig 0.15.2中，在发出CSV或JSON快照时优先选择它而不是临时<literal>ArrayList</literal>用法。参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#upgrading-stdiogetstdoutwriterprint">v0.15.2</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link>。</simpara>
+</tip>
+</section>
+<section xml:id="dependency-hygiene">
+<title>依赖项卫生检查清单</title>
+<itemizedlist>
+<listitem>
+<simpara>使用不同的名称注册供应商模块，并仅通过<literal>.imports</literal>共享它们。除非消费者应直接导入它们，否则不要通过<literal>b.addModule</literal>泄漏它们。</simpara>
+</listitem>
+<listitem>
+<simpara>将<literal>zig-out/workspace-graph/module-graph.txt</literal>视为活动文档。提交CI验证的输出，或区分它们以捕获意外的命名空间更改。</simpara>
+</listitem>
+<listitem>
+<simpara>对于注册表依赖项，完全转发<literal>b.dependency()</literal>句柄一次，然后用本地模块包装它们。这保持升级流失隔离。<xref linkend="24__zig-package-manager-deep.adoc" xrefstyle="short">24</xref></simpara>
+</listitem>
+</itemizedlist>
+<section xml:id="build-options-as-configuration">
+<title>构建选项作为配置</title>
+<simpara>构建选项为你的工作区提供了强大的配置机制。下图显示了命令行<literal>-D</literal>标志如何通过<literal>b.option()</literal>流动，通过<literal>b.addOptions()</literal>添加到生成的模块，并成为可通过<literal>@import("build_options")</literal>访问的编译时常量：</simpara>
+<figure>
+<title>构建选项流程</title>
+<mediaobject>
+<textobject><phrase>mermaid diagram</phrase></textobject>
+</mediaobject>
+</figure>
+<simpara>这种模式对于参数化工作区至关重要。使用<literal>b.option(bool, "feature-x", "Enable feature X")</literal>声明选项，然后调用<literal>options.addOption("feature_x", feature_x)</literal>使它们在编译时可用。当选项更改时，生成的模块会自动重建，确保你的二进制文件始终反映当前配置。这种技术适用于版本字符串、功能标志、调试设置以及你的代码所需的任何其他构建时常量。</simpara>
+</section>
+</chapter>
+<chapter xml:id="target-matrix">
+<title>目标矩阵和发布渠道</title>
+<simpara>复杂项目通常发布多个二进制文件：供贡献者使用的调试工具、供生产使用的ReleaseFast构建，以及供自动化使用的WASI构件。与其为每个目标复制构建逻辑，不如组装一个迭代<literal>std.Target.Query</literal>定义的矩阵。</simpara>
+<section xml:id="understanding-target-resolution">
+<title>理解目标解析</title>
+<simpara>在迭代目标之前，理解<literal>b.resolveTargetQuery</literal>如何将部分规范转换为完全解析的目标很重要。下图显示了解析过程：</simpara>
+<figure>
+<title>目标解析流程</title>
+<mediaobject>
+<textobject><phrase>mermaid diagram</phrase></textobject>
+</mediaobject>
+</figure>
+<simpara>当你传递一个带有<literal>null</literal>CPU或OS字段的<literal>Target.Query</literal>时，解析器会检测你的原生平台并填入具体值。同样，如果你指定了一个没有ABI的OS，解析器会应用该OS的默认ABI（例如，Linux为<literal>.gnu</literal>，Windows为<literal>.msvc</literal>）。这种解析每个查询发生一次，并产生一个包含完全指定的<literal>Target</literal>以及关于值是否来自原生检测的元数据的<literal>ResolvedTarget</literal>。理解这种区别对于交叉编译至关重要：带有<literal>.cpu_arch = .x86_64</literal>和<literal>.os_tag = .linux</literal>的查询在每个主机平台上产生不同的解析目标，因为CPU模型和功能检测。</simpara>
+<figure>
+<title>多目标矩阵代码</title>
+<mediaobject>
+<textobject><phrase>multi target matrix code</phrase></textobject>
+</mediaobject>
+<simpara>关键技术：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>预声明一个<literal>{ name, query, optimize }</literal>组合的切片。查询匹配<literal>zig build -Dtarget</literal>语义，但保持类型检查。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>b.resolveTargetQuery</literal>将每个查询转换为<literal>ResolvedTarget</literal>，因此模块继承规范的CPU/OS默认值。</simpara>
+</listitem>
+<listitem>
+<simpara>在<literal>matrix</literal>步骤下聚合所有内容保持CI连线干净：调用<literal>zig build -Drelease-mode=fast matrix</literal>（或保留默认值），让依赖项确保构件存在。</simpara>
+</listitem>
+<listitem>
+<simpara>作为矩阵的一部分运行第一个（主机）目标可以捕获回归，而无需交叉运行器仿真。对于更深入的覆盖，在调用<literal>addRunArtifact</literal>之前启用<literal>b.enable_qemu</literal> / <literal>b.enable_wasmtime</literal>。</simpara>
+</listitem>
+</itemizedlist>
+<figure>
+<title>运行矩阵构建</title>
+<mediaobject>
+<textobject><phrase>run matrix build</phrase></textobject>
+</mediaobject>
+</figure>
+<section xml:id="running-cross-compiled-targets">
+<title>运行交叉编译目标</title>
+<simpara>当你的矩阵包括交叉编译目标时，你需要外部执行器来实际运行二进制文件。构建系统根据主机/目标兼容性自动选择适当的执行器：</simpara>
+<figure>
+<title>外部执行器选择</title>
+<mediaobject>
+<textobject><phrase>external executor flowchart</phrase></textobject>
+</mediaobject>
+</figure>
+<simpara>通过在调用<literal>addRunArtifact</literal>之前在你的构建脚本中设置<literal>b.enable_qemu = true</literal>或<literal>b.enable_wasmtime = true</literal>来在构建脚本中启用仿真器。在macOS ARM主机上，x86_64目标自动使用Rosetta 2。对于Linux跨架构测试，当OS匹配时，QEMU用户模式仿真透明地运行ARM/RISC-V/MIPS二进制文件。WASI目标需要Wasmtime，而Linux上的Windows二进制文件可以使用Wine。如果没有执行器可用，运行步骤将失败，并显示<literal>Executor.bad_os_or_cpu</literal>——通过在代表性CI主机上测试矩阵覆盖来尽早检测这一点。</simpara>
+<caution>
+<simpara>依赖原生系统库（例如glibc）的交叉目标需要适当的sysroot包。在将这些组合添加到生产管道之前，填充<literal>ZIG_LIBC</literal>或配置<literal>b.libc_file</literal>。</simpara>
+</caution>
+</section>
+</section>
+</chapter>
+<chapter xml:id="vendoring-vs-registry">
+<title>供应商与注册表依赖项</title>
+<itemizedlist>
+<listitem>
+<simpara><emphasis>注册表优先方法</emphasis>：保持<literal>build.zig.zon</literal>哈希权威，然后通过<literal>b.dependency()</literal>和<literal>module.addImport()</literal>注册每个依赖项模块。<xref linkend="24__zig-package-manager-deep.adoc" xrefstyle="short">24</xref></simpara>
+</listitem>
+<listitem>
+<simpara><emphasis>供应商优先方法</emphasis>：将源放入<literal>deps/&lt;name&gt;/</literal>，并用<literal>b.addAnonymousModule</literal>或<literal>b.createModule</literal>连线它们。在<literal>module-graph.txt</literal>中记录来源，以便协作者知道哪些代码在本地固定。</simpara>
+</listitem>
+<listitem>
+<simpara>无论你选择哪种策略，在CI中记录策略：如果<literal>zig out/workspace-graph/module-graph.txt</literal>意外更改，则失败的步骤，或检查供应商目录中是否有LICENSE文件的lint。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="ci-scenarios">
+<title>CI场景和自动化钩子</title>
+<section xml:id="step-dependencies-in-practice">
+<title>实践中的步骤依赖项</title>
+<simpara>CI管道受益于理解构建步骤如何组合。下图显示了Zig编译器自己的构建系统中真实世界的步骤依赖图：</simpara>
+<figure>
+<title>步骤依赖图</title>
+<mediaobject>
+<textobject><phrase>mermaid diagram</phrase></textobject>
+</mediaobject>
+</figure>
+<simpara>注意默认安装步骤（<literal>zig build</literal>）如何依赖于二进制安装、文档和库文件——但<strong>不</strong>依赖于测试。同时，测试步骤依赖于编译以及所有测试子步骤。这种分离让CI可以并行作业中运行<literal>zig build</literal>以获取发布构件，以及<literal>zig build test</literal>以进行验证。每个步骤仅在其依赖项更改时执行，这要归功于内容寻址缓存。你可以使用<literal>zig build --verbose</literal>或通过添加转储依赖项的自定义步骤在本地检查此图。</simpara>
+</section>
+<section xml:id="automation-patterns">
+<title>自动化模式</title>
+<itemizedlist>
+<listitem>
+<simpara><emphasis>构件验证</emphasis>：添加一个<literal>zig build graph</literal>作业，上传<literal>module-graph.txt</literal>以及编译的二进制文件。消费者可以区分版本之间的命名空间。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis>矩阵扩展</emphasis>：通过构建选项参数化组合数组（<literal>-Dinclude-windows=true</literal>）。使用<literal>b.option(bool, "include-windows", …)</literal>让CI切换额外目标，而无需编辑源。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis>安全态势</emphasis>：将<literal>zig build --fetch</literal>（第24章）输送到矩阵运行中，以便缓存填充，然后交叉作业离线运行。参见<xref linkend="24__zig-package-manager-deep.adoc" xrefstyle="short">24</xref>。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis>可重现性</emphasis>：教CI运行<literal>zig build install</literal>两次，并断言两次运行之间没有文件更改。因为<literal>std.Build</literal>尊重内容哈希，所以第二次调用应该不操作，除非输入更改。</simpara>
+</listitem>
+</itemizedlist>
+<section xml:id="advanced-test-organization">
+<title>高级测试组织</title>
+<simpara>对于综合项目，将测试组织成具有矩阵应用的类别需要仔细的步骤组合。下图显示了一个生产级测试层次结构：</simpara>
+<figure>
+<title>测试层次结构</title>
+<mediaobject>
+<textobject><phrase>mermaid diagram</phrase></textobject>
+</mediaobject>
+</figure>
+<simpara>伞形测试步骤聚合所有测试类别，让你可以用<literal>zig build test</literal>运行完整套件。可以单独调用各个类别（<literal>zig build test-fmt</literal>、<literal>zig build test-modules</literal>）以加快迭代。注意只有模块测试接收矩阵配置——格式检查和CLI测试不随目标变化。使用<literal>b.option([]const u8, "test-filter", …)</literal>让CI运行子集，并根据测试类型选择性地应用优化模式。这种模式扩展到数百个测试文件，同时通过并行执行和缓存保持构建时间可管理。</simpara>
+</section>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>b.addModule</literal>为当前构建图全局注册一个名称；<literal>b.createModule</literal>保持模块私有。混淆它们会导致令人惊讶的导入或缺失符号。<xref linkend="25__module-resolution-and-discovery-deep.adoc" xrefstyle="short">25</xref></simpara>
+</listitem>
+<listitem>
+<simpara>命名写入文件尊重缓存。如果你需要从头开始重新生成它们，请删除<literal>.zig-cache</literal>；否则步骤可能会欺骗你，让你认为更改已落地，而实际上它命中了缓存。</simpara>
+</listitem>
+<listitem>
+<simpara>迭代矩阵时，始终使用<literal>zig build uninstall</literal>（或自定义<literal>Step.RemoveDir</literal>）修剪过时的二进制文件，以避免跨版本混淆。</simpara>
+</listitem>
+</itemizedlist>
+<section xml:id="under-the-hood-dependency-tracking">
+<title>底层：依赖项跟踪</title>
+<simpara>构建系统的缓存和增量行为依赖于编译器复杂的依赖项跟踪基础设施。理解这一点有助于解释为什么缓存构建如此之快，以及为什么某些更改会触发比预期更广泛的重建。</simpara>
+<figure>
+<title>依赖项跟踪架构</title>
+<mediaobject>
+<textobject><phrase>mermaid diagram</phrase></textobject>
+</mediaobject>
+</figure>
+<simpara>编译器以多种粒度跟踪依赖项：源文件哈希（<literal>src_hash_deps</literal>）、导航值（<literal>nav_val_deps</literal>）、类型（<literal>nav_ty_deps</literal>）、内部常量、ZON文件、嵌入文件和命名空间成员资格。所有这些映射都指向一个共享的<literal>dep_entries</literal>数组，该数组包含形成链表的<literal>DepEntry</literal>结构。每个条目参与两个列表：一个链接依赖于特定依赖项的所有分析单元（在失效期间遍历），一个链接特定分析单元的所有依赖项（在清理期间遍历）。当你修改源文件时，编译器会对其进行哈希处理，在<literal>src_hash_deps</literal>中查找依赖项，并仅将那些分析单元标记为过时。这种细粒度跟踪就是为什么更改一个文件中的私有函数不会重建不相关模块的原因——依赖图精确地捕获了什么实际依赖于什么。构建系统通过内容寻址利用这种基础设施：步骤输出通过其输入哈希缓存，并在输入未更改时重用。</simpara>
+</section>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展<literal>01_workspace_build.zig</literal>，使<literal>graph</literal>步骤发出人类可读的表格和JSON文档。提示：用<literal>std.json</literal>输出调用<literal>graph_files.add("module-graph.json", …)</literal>。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json.zig">json.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>向<literal>02_multi_target_matrix.zig</literal>添加一个<literal>-Dtarget-filter</literal>选项，将矩阵执行限制为逗号分隔的允许列表。使用<literal>std.mem.splitScalar</literal>解析值。<xref linkend="22__build-system-deep-dive.adoc" xrefstyle="short">22</xref></simpara>
+</listitem>
+<listitem>
+<simpara>通过<literal>b.dependency("logging", .{})</literal>引入注册表依赖项，并用<literal>module.addImport("logging", dep.module("logging"))</literal>将其暴露给工作区。在<literal>module-graph.txt</literal>中记录新命名空间。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>警告、替代方案、边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>大型工作区可能会超出默认安装目录限制。在添加构件之前使用<literal>b.setInstallPrefix</literal>或<literal>b.setLibDir</literal>将输出路由到每个目标的目录中。</simpara>
+</listitem>
+<listitem>
+<simpara>在Windows上，如果你期望MSVC兼容的构件，<literal>resolveTargetQuery</literal>需要<literal>abi = .msvc</literal>；默认的<literal>.gnu</literal>ABI产生MinGW二进制文件。</simpara>
+</listitem>
+<listitem>
+<simpara>如果你向依赖项提供匿名模块，请记住它们不会被去重。当多个构件需要相同的供应商代码时，重用相同的<literal>b.createModule</literal>实例。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="summary">
+<title>总结</title>
+<itemizedlist>
+<listitem>
+<simpara>当你显式注册每个模块并通过命名写入文件记录映射时，工作区保持可预测性。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>resolveTargetQuery</literal>和迭代友好的组合让你扩展到多个目标，而无需复制/粘贴构建逻辑。</simpara>
+</listitem>
+<listitem>
+<simpara>CI作业受益于<literal>std.Build</literal>原语：步骤表达依赖项，运行构件门控健全性检查，命名构件捕获可重现的元数据。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>与第22-25章一起，你现在拥有了跨包、目标和发布渠道构建确定性Zig构建图的工具。</simpara>
+</chapter>
+</book>

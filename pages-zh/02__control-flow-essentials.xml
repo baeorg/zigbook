@@ -1,0 +1,317 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>控制流基础</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>第1章建立了运行Zig程序和处理数据的基础；现在我们将这些值转化为决策，通过遍历语言的流程控制原语，如<link xl:href="https://ziglang.org/documentation/master/#if">#if</link>中所述。Zig中的控制流是面向表达式的，因此选择分支或循环通常会产生一个值，而不仅仅是指导执行。</simpara>
+<simpara>我们探索循环、标签流和<literal>switch</literal>背后的语义，强调<literal>break</literal>、<literal>continue</literal>和<literal>else</literal>子句如何在安全和发布构建中传达意图；参见<link xl:href="https://ziglang.org/documentation/master/#while">#While</link>、<link xl:href="https://ziglang.org/documentation/master/#for">#for</link>和<link xl:href="https://ziglang.org/documentation/master/#switch">#switch</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用<literal>if</literal>表达式（带可选的有效载荷捕获）在显式处理缺失数据路径的同时派生值。</simpara>
+</listitem>
+<listitem>
+<simpara>将<literal>while</literal>/<literal>for</literal>循环与带标签的<literal>break</literal>/<literal>continue</literal>结合，以清晰管理嵌套迭代和退出条件。</simpara>
+</listitem>
+<listitem>
+<simpara>应用<literal>switch</literal>来枚举详尽的决策表，包括范围、多个值和枚举。</simpara>
+</listitem>
+<listitem>
+<simpara>利用循环<literal>else</literal>子句和带标签的break直接从迭代构造返回值。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="pipeline-overview">
+<title>控制流代码的处理过程</title>
+<simpara>在深入控制流语法之前，了解编译器如何处理你的<literal>if</literal>、<literal>while</literal>和<literal>switch</literal>语句是有帮助的。Zig通过多个中间表示（IR）转换源代码，每个都有特定的目的：</simpara>
+<literallayout class="monospaced">graph LR
+    SOURCE["Source Code&lt;br/&gt;.zig files"]
+    TOKENS["Token Stream"]
+    AST["AST&lt;br/&gt;(Ast.zig)"]
+    ZIR["ZIR&lt;br/&gt;(Zir)"]
+    AIR["AIR&lt;br/&gt;(Air.zig)"]
+    MIR["MIR&lt;br/&gt;(codegen.AnyMir)"]
+    MACHINE["Machine Code"]
+
+    SOURCE --&gt;|"tokenizer.zig"| TOKENS
+    TOKENS --&gt;|"Parse.zig"| AST
+    AST --&gt;|"AstGen.zig"| ZIR
+    ZIR --&gt;|"Sema.zig"| AIR
+    AIR --&gt;|"codegen.generateFunction()"| MIR
+    MIR --&gt;|"codegen.emitFunction()"| MACHINE</literallayout>
+<informaltable frame="all" rowsep="1" colsep="1">
+<tgroup cols="4">
+<colspec colname="col_1" colwidth="25*"/>
+<colspec colname="col_2" colwidth="25*"/>
+<colspec colname="col_3" colwidth="25*"/>
+<colspec colname="col_4" colwidth="25*"/>
+<thead>
+<row>
+<entry align="left" valign="top">IR阶段</entry>
+<entry align="left" valign="top">表示形式</entry>
+<entry align="left" valign="top">关键特性</entry>
+<entry align="left" valign="top">控制流目的</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry align="left" valign="top"><simpara><emphasis role="strong">Tokens</emphasis></simpara></entry>
+<entry align="left" valign="top"><simpara>扁平令牌流</simpara></entry>
+<entry align="left" valign="top"><simpara>原始词法分析</simpara></entry>
+<entry align="left" valign="top"><simpara>识别<literal>if</literal>、<literal>while</literal>、<literal>switch</literal>关键字</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><emphasis role="strong">AST</emphasis></simpara></entry>
+<entry align="left" valign="top"><simpara>树状结构</simpara></entry>
+<entry align="left" valign="top"><simpara>语法正确，无类型</simpara></entry>
+<entry align="left" valign="top"><simpara>保留嵌套控制流的结构</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><emphasis role="strong">ZIR</emphasis></simpara></entry>
+<entry align="left" valign="top"><simpara>基于指令的IR</simpara></entry>
+<entry align="left" valign="top"><simpara>无类型，每个声明单一SSA形式</simpara></entry>
+<entry align="left" valign="top"><simpara>将控制流降低为块和分支</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><emphasis role="strong">AIR</emphasis></simpara></entry>
+<entry align="left" valign="top"><simpara>基于指令的IR</simpara></entry>
+<entry align="left" valign="top"><simpara>完全类型化，每个函数单一SSA形式</simpara></entry>
+<entry align="left" valign="top"><simpara>具有已知结果类型的类型检查分支</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><emphasis role="strong">MIR</emphasis></simpara></entry>
+<entry align="left" valign="top"><simpara>后端特定IR</simpara></entry>
+<entry align="left" valign="top"><simpara>接近机器代码，寄存器分配</simpara></entry>
+<entry align="left" valign="top"><simpara>转换为跳转和条件指令</simpara></entry>
+</row>
+</tbody>
+</tgroup>
+</informaltable>
+<simpara>你编写的控制流构造——<literal>if</literal>表达式、<literal>switch</literal>语句、带标签的循环——通过这些阶段系统地降低。当你的代码到达机器代码时，<literal>switch</literal>已变成跳转表，而<literal>while</literal>循环是条件分支指令。本章中的图表展示了这种降低如何在ZIR阶段发生，其中控制流变成显式的块和分支。</simpara>
+</chapter>
+<chapter xml:id="section-1">
+<title>核心控制结构</title>
+<simpara>Zig中的控制流将块和循环视为表达式，这意味着每个构造都可以产生一个值并直接参与赋值或返回语句。本节逐步介绍条件语句、循环和<literal>switch</literal>，展示每个如何适应表达式模型同时保持高可读性，如<link xl:href="https://ziglang.org/documentation/master/#Blocks">#块</link>中所述。</simpara>
+<section xml:id="section-1-sub-a">
+<title>条件语句作为表达式</title>
+<simpara><literal>if</literal>求值为运行的任何分支的值，可选捕获形式（<literal>if (opt) |value|</literal>）是一种简洁的解包可选值的方式，不会遮蔽先前的名称。嵌套的带标签块（<literal>blk: { &#8230;&#8203; }</literal>）让你可以在多个结果中进行选择，同时仍然返回单个值。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 02__control-flow-essentials.adoc - include::example$chapters-data/code/02__control-flow-essentials/branching.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run branching.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">sample 0: positive
+sample 1: zero
+sample 2: missing
+sample 3: negative</programlisting>
+</para>
+</formalpara>
+<simpara>该函数返回<literal>[]const u8</literal>，因为<literal>if</literal>表达式本身产生字符串，强调了面向表达式的分支如何保持调用点紧凑。<literal>samples</literal>循环显示<literal>for</literal>可以使用索引元组<literal>(item, index)</literal>进行迭代，但仍然依赖上游表达式来格式化输出。</simpara>
+<section xml:id="_how_if_else_expressions_lower_to_zir">
+<title>if-else表达式如何降低到ZIR</title>
+<simpara>当编译器遇到<literal>if</literal>表达式时，它将其转换为ZIR（Zig中间表示）中的块和条件分支。确切的降低取决于是否需要结果位置；参见<link xl:href="60__advanced-result-location-semantics.xml#patterns">结果位置</link>：</simpara>
+<literallayout class="monospaced">graph TB
+    IfNode["if (cond) then_expr else else_expr"] --&gt; EvalCond["Evaluate condition"]
+
+    EvalCond --&gt; CheckRL["Result location needed?"]
+
+    CheckRL --&gt;|No RL| SimpleIf["Generate condbr&lt;br/&gt;Two blocks with breaks"]
+    CheckRL --&gt;|With RL| BlockIf["Generate block_inline&lt;br/&gt;Shared result pointer"]
+
+    SimpleIf --&gt; ThenBlock["then_block:&lt;br/&gt;eval then_expr&lt;br/&gt;break value"]
+    SimpleIf --&gt; ElseBlock["else_block:&lt;br/&gt;eval else_expr&lt;br/&gt;break value"]
+
+    BlockIf --&gt; AllocResult["alloc_inferred"]
+    BlockIf --&gt; ThenBlockRL["then_block:&lt;br/&gt;write to result ptr"]
+    BlockIf --&gt; ElseBlockRL["else_block:&lt;br/&gt;write to result ptr"]</literallayout>
+<simpara>当你编写<literal>const result = if (x &gt; 0) "positive" else "negative"</literal>时，编译器创建两个块（每个分支一个）并使用<literal>break</literal>语句返回选择的值。这就是为什么<literal>if</literal>表达式可以参与赋值——它们编译成通过break语句产生值的块。</simpara>
+</section>
+</section>
+<section xml:id="section-1-sub-b">
+<title>带标签的While和For循环</title>
+<simpara>Zig中的循环可以通过将<literal>break</literal>结果与循环的<literal>else</literal>子句配对来直接传递值，该子句在没有break的情况下执行完成时触发。带标签的循环（<literal>outer: while (&#8230;&#8203;)</literal>）协调嵌套迭代，因此你可以提前退出或跳过工作，而无需临时布尔值。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 02__control-flow-essentials.adoc - include::example$chapters-data/code/02__control-flow-essentials/loop_labels.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run loop_labels.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">first all-even row: 1
+found target value at row 1, column 1</programlisting>
+</para>
+</formalpara>
+<simpara><literal>while</literal>循环的<literal>else null</literal>捕获"无匹配"情况而无需额外状态，带标签的<literal>break :outer</literal>一旦找到目标就立即退出两个循环。这种模式保持状态处理紧凑，同时保持控制转移的显式性。</simpara>
+<section xml:id="_how_loops_lower_to_zir">
+<title>循环如何降低到ZIR</title>
+<simpara>循环被转换为具有显式break和continue目标的带标签块。这就是使带标签的break和循环<literal>else</literal>子句成为可能的原因：</simpara>
+<literallayout class="monospaced">graph TB
+    Loop["while/for"] --&gt; LoopLabel["Create labeled block"]
+
+    LoopLabel --&gt; Condition["Generate loop condition"]
+    Condition --&gt; Body["Generate loop body"]
+    Body --&gt; Continue["Generate continue expression"]
+
+    LoopLabel --&gt; BreakTarget["break_block target"]
+    Body --&gt; ContinueTarget["continue_block target"]
+
+    Continue --&gt; CondCheck["Jump back to condition"]</literallayout>
+<simpara>当你编写<literal>outer: while (x &lt; 10)</literal>时，编译器创建：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">break_block</emphasis>：<literal>break :outer</literal>语句的目标——退出循环</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">continue_block</emphasis>：<literal>continue :outer</literal>语句的目标——跳转到下一次迭代</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">循环体</emphasis>：包含你的代码，可以访问两个目标</simpara>
+</listitem>
+</itemizedlist>
+<simpara>这就是为什么你可以嵌套循环并使用带标签的break退出到特定级别——每个循环标签在ZIR中创建自己的break_block。循环<literal>else</literal>子句附加到break_block，并且仅在循环完成而没有break时执行。</simpara>
+</section>
+</section>
+<section xml:id="section-1-sub-c">
+<title><literal>switch</literal>用于详尽决策</title>
+<simpara><literal>switch</literal>详尽地检查值——覆盖字面量、范围和枚举——编译器强制执行完整性，除非你提供<literal>else</literal>分支。将<literal>switch</literal>与辅助函数结合是集中分类逻辑的简洁方式。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 02__control-flow-essentials.adoc - include::example$chapters-data/code/02__control-flow-essentials/switch_examples.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run switch_examples.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">0: no progress
+2: warming up
+5: halfway there
+8: almost done
+10: perfect run
+12: out of range
+mode safe -&gt; factor 16</programlisting>
+</para>
+</formalpara>
+<simpara>每个<literal>switch</literal>必须考虑所有可能性——一旦每个标签都被覆盖，编译器验证没有缺失的情况。枚举消除了魔法数字，同时仍然让你可以在编译时已知的变体上进行分支。</simpara>
+<section xml:id="_how_switch_expressions_lower_to_zir">
+<title><literal>switch</literal>表达式如何降低到ZIR</title>
+<simpara>编译器将<literal>switch</literal>语句转换为处理所有情况的详尽结构化块。范围情况、每个分支的多个值和有效载荷捕获都在ZIR表示中编码：</simpara>
+<literallayout class="monospaced">graph TB
+    Switch["switch (target) { ... }"] --&gt; EvalTarget["Evaluate target operand"]
+    EvalTarget --&gt; Prongs["Process switch prongs"]
+
+    Prongs --&gt; Multi["Multiple cases per prong"]
+    Prongs --&gt; Range["Range cases (a...b)"]
+    Prongs --&gt; Capture["Capture payload"]
+
+    Multi --&gt; SwitchBlock["Generate switch_block"]
+    Range --&gt; SwitchBlock
+    Capture --&gt; SwitchBlock
+
+    SwitchBlock --&gt; ExtraData["Store in extra:&lt;br/&gt;- prong count&lt;br/&gt;- case items&lt;br/&gt;- prong bodies"]</literallayout>
+<simpara>完整性检查在语义分析期间（ZIR生成之后）类型已知时发生。编译器验证：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>所有枚举标签都被覆盖（或存在<literal>else</literal>分支）</simpara>
+</listitem>
+<listitem>
+<simpara>整数范围不重叠</simpara>
+</listitem>
+<listitem>
+<simpara>不存在不可达的分支</simpara>
+</listitem>
+</itemizedlist>
+<simpara>这就是为什么你不能意外忘记枚举<literal>switch</literal>中的情况——类型系统在编译时确保完整性。像<literal>0&#8230;&#8203;5</literal>这样的范围语法在ZIR中编码为范围情况，而不是单个值。</simpara>
+</section>
+</section>
+</chapter>
+<chapter xml:id="section-2">
+<title>工作流模式</title>
+<simpara>结合这些构造解锁了更具表现力的管道：循环收集或过滤数据，<literal>switch</literal>路由操作，循环标签保持嵌套流精确而无需引入可变哨兵。本节将原语链接成可重用的模式，你可以适应解析、模拟或状态机。</simpara>
+<section xml:id="workflow-1">
+<title>使用<literal>break</literal>值的脚本处理</title>
+<simpara>此示例解释一个迷你指令流，使用带标签的<literal>for</literal>循环维护运行总数并在达到阈值时停止。<literal>switch</literal>处理命令分发，包括在开发期间出现未知标签时故意使用<literal>unreachable</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 02__control-flow-essentials.adoc - include::example$chapters-data/code/02__control-flow-essentials/script_runner.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run script_runner.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">stopped at step 3 with total 7</programlisting>
+</para>
+</formalpara>
+<simpara><literal>break :outer</literal>返回完整的<literal>Outcome</literal>结构体，使循环像搜索一样，要么找到目标，要么回退到循环的<literal>else</literal>。显式的<literal>unreachable</literal>为未来的贡献者记录假设，并在调试构建中激活安全检查。</simpara>
+</section>
+<section xml:id="workflow-2">
+<title>循环守卫和提前终止</title>
+<simpara>有时数据本身会发出何时停止的信号。此演练识别第一个负数，然后累积偶数值直到出现<literal>0</literal>哨兵，演示循环<literal>else</literal>子句、带标签的<literal>continue</literal>和常规<literal>break</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 02__control-flow-essentials.adoc - include::example$chapters-data/code/02__control-flow-essentials/range_scan.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run range_scan.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">first negative at index 3
+encountered zero, breaking out
+sum of even prefix values = 16</programlisting>
+</para>
+</formalpara>
+<simpara>这两个循环展示了互补的退出风格：带有<literal>else</literal>默认值的循环表达式，以及带标签的循环，其中<literal>continue</literal>和<literal>break</literal>明确说明哪些迭代对运行总数有贡献。</simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>任何时候有嵌套迭代时，为了清晰度优先使用带标签的循环；它保持<literal>break</literal>/<literal>continue</literal>的显式性并避免哨兵变量。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>switch</literal>必须保持详尽性——如果你依赖<literal>else</literal>，用注释或<literal>unreachable</literal>记录不变量，以便未来的情况不会被静默忽略。</simpara>
+</listitem>
+<listitem>
+<simpara>循环<literal>else</literal>子句仅在循环自然退出时求值；确保你的<literal>break</literal>路径返回值以避免回退到意外的默认值。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展<literal>branching.zig</literal>，添加第三个分支，以不同方式格式化大于100的值，确认<literal>if</literal>表达式仍然返回单个字符串。</simpara>
+</listitem>
+<listitem>
+<simpara>调整<literal>loop_labels.zig</literal>，通过<literal>break :outer</literal>返回精确坐标作为结构体，然后从<literal>main</literal>打印它们。</simpara>
+</listitem>
+<listitem>
+<simpara>修改<literal>script_runner.zig</literal>，在运行时解析字符（例如，从字节切片中）并添加一个重置总数的新命令，确保<literal>switch</literal>保持详尽性。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

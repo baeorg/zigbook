@@ -1,0 +1,357 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>文件系统与 I/O</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>工作区构建的价值取决于其处理的数据。在第 27 章接线了一个多包仪表盘之后，我们现在深入支持每一次包安装、日志采集与 CLI 工具的文件系统与 I/O 原语。参见<link xl:href="27__project-multi-package-workspace-and-vendor.xml">27</link>。Zig<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html-">v0.15.2</link>带来了统一的<literal>std.fs.File</literal>接口、带记忆的元数据，以及变更日志极力强调的缓冲写入故事——使用它、主动 flush，并保持句柄整洁。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/File.zig">File.zig</link>。</simpara>
+<section xml:id="_the_filesystem_architecture">
+<title>文件系统架构</title>
+<simpara>在进入具体操作之前，理解 Zig 的文件系统 API 如何分层结构化至关重要。下图展示了从高层<literal>std.fs</literal>操作到底层系统调用的分层架构：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "User Code"
+        APP[Application Code]
+    end
+
+    subgraph "High-Level APIs (lib/std)"
+        FS["std.fs&lt;br/&gt;(fs.zig)"]
+        NET["std.net&lt;br/&gt;(net.zig)"]
+        PROCESS["std.process&lt;br/&gt;(process.zig)"]
+        FMT["std.fmt&lt;br/&gt;(fmt.zig)"]
+        HEAP["std.heap&lt;br/&gt;(heap.zig)"]
+    end
+
+    subgraph "Mid-Level Abstractions"
+        POSIX["std.posix&lt;br/&gt;(posix.zig)&lt;br/&gt;Cross-platform POSIX API"]
+        OS["std.os&lt;br/&gt;(os.zig)&lt;br/&gt;OS-specific wrappers"]
+        MEM["std.mem&lt;br/&gt;(mem.zig)&lt;br/&gt;Memory utilities"]
+        DEBUG["std.debug&lt;br/&gt;(debug.zig)&lt;br/&gt;Stack traces, assertions"]
+    end
+
+    subgraph "Platform Layer"
+        LINUX["std.os.linux&lt;br/&gt;(os/linux.zig)&lt;br/&gt;Direct syscalls"]
+        WINDOWS["std.os.windows&lt;br/&gt;(os/windows.zig)&lt;br/&gt;Win32 APIs"]
+        WASI["std.os.wasi&lt;br/&gt;(os/wasi.zig)&lt;br/&gt;WASI APIs"]
+        LIBC["std.c&lt;br/&gt;(c.zig)&lt;br/&gt;C interop"]
+    end
+
+    subgraph "System Layer"
+        SYSCALL["System Calls"]
+        KERNEL["Operating System"]
+    end
+
+    APP --&gt; FS
+    APP --&gt; NET
+    APP --&gt; PROCESS
+    APP --&gt; FMT
+    APP --&gt; HEAP
+
+    FS --&gt; POSIX
+    NET --&gt; POSIX
+    PROCESS --&gt; POSIX
+    FMT --&gt; MEM
+    HEAP --&gt; MEM
+
+    POSIX --&gt; OS
+    OS --&gt; LIBC
+    OS --&gt; LINUX
+    OS --&gt; WINDOWS
+    OS --&gt; WASI
+
+    DEBUG --&gt; OS
+
+    LINUX --&gt; SYSCALL
+    WINDOWS --&gt; SYSCALL
+    WASI --&gt; SYSCALL
+    LIBC --&gt; SYSCALL
+
+    SYSCALL --&gt; KERNEL</literallayout>
+<simpara>该分层设计同时提供可移植性与可控性。调用<literal>std.fs.File.read()</literal>时，请求先经由<literal>std.posix</literal>以实现跨平台兼容，再经由<literal>std.os</literal>分派到平台特定实现——在 Linux 上为直接系统调用，或当<literal>builtin.link_libc</literal>为真时使用 libc 函数。理解该架构有助于你推理跨平台行为、明确应检查哪一层来调试问题，并就是否链接 libc 做出明智决策。关注点分离意味着你能为可移植性使用高层<literal>std.fs</literal> API，同时在需要平台特定特性时仍可访问底层。</simpara>
+</section>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>Compose platform-neutral paths, open files safely, and print via buffered writers without leaking handles. <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/path.zig">path.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>Stream data between files while inspecting metadata such as byte counts and stat output.</simpara>
+</listitem>
+<listitem>
+<simpara>Walk directory trees using <literal>Dir.walk</literal>, filtering on extensions to build discovery and housekeeping tools. <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/Dir.zig">Dir.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>Apply ergonomic error handling patterns (<literal>catch</literal>, cleanup defers) when juggling multiple file descriptors.</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="paths-and-writers">
+<title>路径、句柄与缓冲 stdout</title>
+<simpara>从基础开始：拼接平台无关路径、创建文件、依据 0.15 的缓冲 stdout 指引写出 CSV 表头，并将其读回内存。示例保持分配显式，以便你了解缓冲区的所在与释放时机。</simpara>
+<section xml:id="_understanding_std_fs_module_organization">
+<title>理解 std.fs 模块组织</title>
+<simpara><literal>std.fs</literal>命名空间围绕两类核心类型组织，各司其职：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "std.fs Module"
+        FS["fs.zig&lt;br/&gt;cwd, max_path_bytes"]
+        DIR["fs/Dir.zig&lt;br/&gt;openFile, makeDir"]
+        FILE["fs/File.zig&lt;br/&gt;read, write, stat"]
+    end
+
+    FS --&gt; DIR
+    FS --&gt; FILE</literallayout>
+<simpara>The <literal>fs.zig</literal> root module provides entry points like <literal>std.fs.cwd()</literal> which returns a <literal>Dir</literal> handle representing the current working directory, plus platform constants like <literal>max_path_bytes</literal>. The <literal>Dir</literal> type (<literal>fs/Dir.zig</literal>) handles directory-level operations—opening files, creating subdirectories, iterating entries, and managing directory handles. The <literal>File</literal> type (<literal>fs/File.zig</literal>) provides all file-specific operations: reading, writing, seeking, and querying metadata via <literal>stat()</literal>. This separation keeps the API clear: use <literal>Dir</literal> methods to navigate the filesystem tree and <literal>File</literal> methods to manipulate file contents. When you call <literal>dir.openFile()</literal>, you get back a <literal>File</literal> handle that&#8217;s independent of the directory—closing the directory doesn&#8217;t invalidate the file handle.</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 28__filesystem-and-io.adoc - include::example$chapters-data/code/28__filesystem-and-io/01_paths_and_Io.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 01_paths_and_io.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">file name: metrics.log
+directory: fs_walkthrough
+absolute path: /home/zkevm/Documents/github/zigbook-net/fs_walkthrough/metrics.log
+--- file contents ---
+timestamp,value
+2025-11-05T09:00Z,42
+2025-11-05T09:05Z,47</programlisting>
+</para>
+</formalpara>
+</section>
+<section xml:id="_platform_specific_path_encoding">
+<title>平台特定的路径编码</title>
+<simpara>Zig 中的路径字符串使用平台特定编码，这对跨平台代码至关重要：</simpara>
+<informaltable frame="all" rowsep="1" colsep="1">
+<tgroup cols="3">
+<colspec colname="col_1" colwidth="33.3333*"/>
+<colspec colname="col_2" colwidth="33.3333*"/>
+<colspec colname="col_3" colwidth="33.3334*"/>
+<thead>
+<row>
+<entry align="left" valign="top">平台</entry>
+<entry align="left" valign="top">编码</entry>
+<entry align="left" valign="top">说明</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry align="left" valign="top"><simpara>Windows</simpara></entry>
+<entry align="left" valign="top"><simpara>WTF-8</simpara></entry>
+<entry align="left" valign="top"><simpara>Encodes WTF-16LE in UTF-8 compatible format</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>WASI</simpara></entry>
+<entry align="left" valign="top"><simpara>UTF-8</simpara></entry>
+<entry align="left" valign="top"><simpara>Valid UTF-8 required</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>Other</simpara></entry>
+<entry align="left" valign="top"><simpara>Opaque bytes</simpara></entry>
+<entry align="left" valign="top"><simpara>No particular encoding assumed</simpara></entry>
+</row>
+</tbody>
+</tgroup>
+</informaltable>
+<simpara>在 Windows 上，Zig 使用 WTF-8（Wobbly Transformation Format-8）表示文件系统路径。它是 UTF-8 的超集，可编码未配对的 UTF-16 代理项，使 Zig 在仍使用<literal>[]const u8</literal>切片的同时处理任意 Windows 路径。WASI 目标对所有路径强制严格的 UTF-8 校验。在 Linux、macOS 及其他 POSIX 系统上，路径被视为不透明的字节序列，不做编码假设——除了空终止字节外可包含任何字节。这意味着<literal>std.fs.path.join</literal>通过操作字节切片在各平台上表现一致，而底层 OS 层透明地处理编码转换。编写跨平台路径操作代码时，坚持使用<literal>std.fs.path</literal>工具，除非明确面向 WASI，否则避免对 UTF-8 有效性的假设。</simpara>
+<tip>
+<simpara><literal>readToEndAlloc</literal>基于当前定位位置工作；如果计划在写入后重读同一句柄，请务必先用<literal>seekTo(0)</literal>回到开头（或重新打开）。</simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="streaming-copy">
+<title>使用定位写入器进行流式拷贝</title>
+<simpara>文件拷贝示范了<literal>std.fs.File.read</literal>与遵循变更日志“请缓冲”的缓冲写入器如何并存。该代码以固定大小片段进行流式传输、刷新目的地，并抓取元数据进行校验。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 28__filesystem-and-io.adoc - include::example$chapters-data/code/28__filesystem-and-io/02_stream_copy.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 02_stream_copy.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">copied 17 bytes
+destination size: 17
+--- copy.txt ---
+alpha
+beta
+gamma</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>File.stat()</literal>在 Linux、macOS 与 Windows 上缓存大小与类型信息，为后续查询节省额外系统调用。优先使用它，而非反复调用<literal>fs.path</literal>。</simpara>
+</note>
+</chapter>
+<chapter xml:id="dir-walk">
+<title>遍历目录树</title>
+<simpara><literal>Dir.walk</literal>提供带预打开目录的递归迭代器，这意味着你可以在包含句柄上调用<literal>statFile</literal>，并避免为拼接路径重新分配。下述演示构建一个玩具日志树，输出目录与文件条目，并汇总识别到多少<literal>.log</literal>文件。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 28__filesystem-and-io.adoc - include::example$chapters-data/code/28__filesystem-and-io/03_dir_walk.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 03_dir_walk.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">DIR  logs
+DIR  logs/jobs
+FILE logs/jobs/batch.log (8 bytes) [log]
+DIR  logs/app
+FILE logs/app/errors.log (9 bytes) [log]
+FILE logs/app/today.log (7 bytes) [log]
+DIR  notes
+FILE notes/todo.txt (12 bytes)
+--- summary ---
+directories: 4
+files: 4
+log files: 3</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>每个<literal>Walker.Entry</literal>同时暴露零终止的<literal>path</literal>与活动的<literal>dir</literal>句柄。优先在该句柄上使用<literal>statFile</literal>，以避免深层嵌套树中的<literal>NameTooLong</literal>。</simpara>
+</tip>
+</chapter>
+<chapter xml:id="error-patterns">
+<title>错误处理模式</title>
+<section xml:id="_how_filesystem_errors_work">
+<title>文件系统错误如何工作</title>
+<simpara>文件系统 API 返回丰富的错误集合——<literal>error.AccessDenied</literal>、<literal>error.PathAlreadyExists</literal>、<literal>error.NameTooLong</literal>等——但这些带类型的错误从何而来？下图展示了错误转换流程：</simpara>
+<literallayout class="monospaced">graph TB
+    SYSCALL["System Call"]
+
+    RESULT{"Return Value"}
+
+    subgraph "Error Path"
+        ERRNO["Get errno/Win32Error"]
+        ERRCONV["Convert to Zig error"]
+        RETURN_ERR["Return error"]
+    end
+
+    subgraph "Success Path"
+        RETURN_OK["Return result"]
+    end
+
+    SYSCALL --&gt; RESULT
+
+    RESULT --&gt;|"&lt; 0 or NULL"| ERRNO
+    RESULT --&gt;|"&gt;= 0 or valid"| RETURN_OK
+
+    ERRNO --&gt; ERRCONV
+    ERRCONV --&gt; RETURN_ERR</literallayout>
+<simpara>当文件系统操作失败时，底层系统调用会返回错误指示（POSIX 为负值，Windows 为<literal>NULL</literal>）。操作系统抽象层随后获取错误码——POSIX 系统上的<literal>errno</literal>或 Windows 上的<literal>GetLastError()</literal>——并通过诸如<literal>errnoFromSyscall</literal>（Linux）或<literal>unexpectedStatus</literal>（Windows）等转换函数，将其转换为带类型的 Zig 错误。这意味着<literal>error.AccessDenied</literal>不是字符串或枚举标签——它是编译器在你的调用栈中跟踪的独立错误类型。该转换具有确定性：<literal>EACCES</literal>（Linux 的 errno 13）总会变为<literal>error.AccessDenied</literal>，<literal>ERROR_ACCESS_DENIED</literal>（Win32 错误 5）也映射到同一 Zig 错误，从而提供跨平台一致的错误语义。</simpara>
+<simpara>谨慎使用<literal>catch |err|</literal>来标注预期失败（例如<literal>catch |err| if (err == error.PathAlreadyExists) {}</literal>），并与<literal>defer</literal>配合进行清理，以免部分成功导致目录或文件描述符泄漏。</simpara>
+</section>
+<section xml:id="_the_translation_mechanism">
+<title>转换机制</title>
+<simpara>错误转换通过平台特定函数实现，它们将错误码映射为 Zig 的错误类型：</simpara>
+<literallayout class="monospaced">graph LR
+    SYSCALL["System Call&lt;br/&gt;returns error code"]
+    ERRNO["errno or NTSTATUS"]
+    CONVERT["errnoFromSyscall&lt;br/&gt;or unexpectedStatus"]
+    ERROR["Zig Error Union&lt;br/&gt;e.g., error.AccessDenied"]
+
+    SYSCALL --&gt; ERRNO
+    ERRNO --&gt; CONVERT
+    CONVERT --&gt; ERROR</literallayout>
+<simpara>在 Linux 与 POSIX 系统上，<literal>lib/std/os/linux.zig</literal>中的<literal>errnoFromSyscall</literal>负责将 errno 映射为错误类型。在 Windows 上，<literal>unexpectedStatus</literal>处理从<literal>NTSTATUS</literal>或 Win32 错误码的转换。该抽象意味着你的错误处理代码是可移植的——无论在 Linux（捕获<literal>EACCES</literal>）、macOS（捕获<literal>EACCES</literal>）还是 Windows（捕获<literal>ERROR_ACCESS_DENIED</literal>）运行，<literal>catch error.AccessDenied</literal>的行为都一致。转换表由标准库维护，覆盖数百个错误码，并映射到约 80 种 Zig 错误，涵盖常见失败模式。出现意外错误时，转换函数会返回<literal>error.Unexpected</literal>，这通常表示严重缺陷或不受支持的平台状态。</simpara>
+</section>
+<section xml:id="_practical_error_handling_patterns">
+<title>实用的错误处理模式</title>
+<itemizedlist>
+<listitem>
+<simpara>创建一次性目录（<literal>makePath</literal> + <literal>deleteTree</literal>）时，将删除操作包裹在<literal>catch {}</literal>中，以在拆除期间忽略<literal>FileNotFound</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara>对用户可见的工具，将文件系统错误映射为可行动的消息（例如“检查 … 的权限”）。保留原始<literal>err</literal>用于日志。</simpara>
+</listitem>
+<listitem>
+<simpara>若必须从定位模式回退到流式模式，请切换至<literal>File.readerStreaming</literal>/<literal>writerStreaming</literal>，或以流式模式重新打开一次并复用该接口。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>Extend the copy program so the destination filename comes from <literal>std.process.argsAlloc</literal>, then use <literal>std.fs.path.extension</literal> to refuse overwriting <literal>.log</literal> files. <link xl:href="26__build-system-advanced-topics.xml">26</link></simpara>
+</listitem>
+<listitem>
+<simpara>Rewrite the directory walker to emit JSON using <literal>std.json.stringify</literal>, practicing how to stream structured data through buffered writers. See <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json.zig">json.zig</link>.</simpara>
+</listitem>
+<listitem>
+<simpara>Build a “tail” utility that follows a file by combining <literal>File.seekTo</literal> with periodic <literal>read</literal> calls; add <literal>--follow</literal> support by retrying on <literal>error.EndOfStream</literal>.</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>readToEndAlloc</literal>通过<literal>max_bytes</literal>参数防止读取失控文件——在解析用户控制的输入时请慎重设置。</simpara>
+</listitem>
+<listitem>
+<simpara>在 Windows 上，迭代目录需要<literal>OpenOptions{ .iterate = true }</literal>；示例代码通过带该标志的<literal>openDir</literal>隐式完成。</simpara>
+</listitem>
+<listitem>
+<simpara>示例中的 ANSI 转义序列假定终端支持颜色；在发布跨平台工具时，请用<literal>if (std.io.isTty())</literal>包裹打印。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/tty.zig">tty.zig</link>。</simpara>
+</listitem>
+</itemizedlist>
+<section xml:id="_under_the_hood_system_call_dispatch">
+<title>底层原理：系统调用分派</title>
+<simpara>若你关心文件系统操作如何抵达内核，Zig 的<literal>std.posix</literal>层通过编译期决策在 libc 与直接系统调用之间进行选择：</simpara>
+<literallayout class="monospaced">graph TB
+    APP["posix.open(path, flags, mode)"]
+
+    USELIBC{"use_libc?"}
+
+    subgraph "libc Path"
+        COPEN["std.c.open()"]
+        LIBCOPEN["libc open()"]
+    end
+
+    subgraph "Direct Syscall Path (Linux)"
+        LINUXOPEN["std.os.linux.open()"]
+        SYSCALL["syscall3(.open, ...)"]
+        KERNEL["Linux Kernel"]
+    end
+
+    ERRCONV["errno → Zig Error"]
+
+    APP --&gt; USELIBC
+
+    USELIBC --&gt;|"true"| COPEN
+    USELIBC --&gt;|"false (Linux)"| LINUXOPEN
+
+    COPEN --&gt; LIBCOPEN
+    LINUXOPEN --&gt; SYSCALL
+    SYSCALL --&gt; KERNEL
+
+    LIBCOPEN --&gt; ERRCONV
+    KERNEL --&gt; ERRCONV</literallayout>
+<simpara>When <literal>builtin.link_libc</literal> is true, Zig routes filesystem calls through the C standard library&#8217;s functions (<literal>open</literal>, <literal>read</literal>, <literal>write</literal>, etc.). This ensures compatibility with systems where direct syscalls aren&#8217;t available or well-defined. On Linux, when libc is not linked, Zig uses direct system calls via <literal>std.os.linux.syscall3</literal> and friends—this eliminates libc overhead and provides a smaller binary, at the cost of depending on the Linux syscall ABI stability. The decision happens at compile time based on your build configuration, meaning there&#8217;s zero runtime overhead for the dispatch. This architecture is why Zig can produce tiny, static binaries on Linux (no libc dependency) while still supporting traditional libc-based builds for maximum compatibility. When debugging filesystem issues, knowing which path your build uses helps you understand stack traces and performance characteristics.</simpara>
+</section>
+</chapter>
+<chapter xml:id="summary">
+<title>总结</title>
+<itemizedlist>
+<listitem>
+<simpara>缓冲写入、刻意刷新，并依赖<literal>readToEndAlloc</literal>与<literal>stat</literal>等<literal>std.fs.File</literal>助手以减少手工簿记。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>Dir.walk</literal>保持目录句柄打开，使你的工具在不重建绝对路径的情况下对基名进行操作。</simpara>
+</listitem>
+<listitem>
+<simpara>借助扎实的错误处理与清理 defer，这些原语构成了从日志传输器到工作区安装器的一切的基础。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

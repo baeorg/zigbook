@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目：并行字数统计</title>
+<subtitle>使用线程分片和原子操作进行快速文本分析</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>凭借上一章的并发原语，我们将构建一个小型但有用的工具：一个并行字数统计器，它读取文件，将其沿空白字符分片成连续段，启动工作线程进行标记化和计数，然后将线程本地映射合并到最终的频率表中。参见 <link xl:href="29__threads-and-atomics.adoc">第29章</link>、<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Thread.zig">Thread.zig</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/atomic.zig">atomic.zig</link>。</simpara>
+<simpara>为什么选择这个项目？它练习了常见的系统模式——工作分解、避免伪共享、字符串键的所有权和内存顺序约束——而不会淹没在样板代码中。结果是一个健壮的骨架，你可以适应日志处理、类grep索引或轻量级分析。</simpara>
+</chapter>
+ 
+
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>在尊重标记边界的同时将输入分成分片。</simpara>
+</listitem>
+<listitem>
+<simpara>安全地使用 <code>std.Thread.spawn</code> 并在单线程构建中回退到内联执行。</simpara>
+</listitem>
+<listitem>
+<simpara>维护每线程的 <code>std.StringHashMap</code> 实例并合并且没有悬垂指针。</simpara>
+</listitem>
+<listitem>
+<simpara>通过对键值对向量进行排序来呈现确定的"Top N"。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="project-setup">
+<title>项目布局和构建</title>
+<simpara>我们将此示例保持为带有本地构建的微型包。0.15.2构建API构造一个显式模块并将其传递给 <code>addExecutable</code>——注意 <code>root_module</code> 字段而不是旧的 <code>root_source_file</code>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 30__project-parallel-wordcount.adoc - include::example$chapters-data/code/30__project-parallel-wordcount/build.zig[]</programlisting>
+<simpara>参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build.zig">Build.zig</link>。</simpara>
+</chapter>
+
+<chapter xml:id="implementation">
+<title>实现</title>
+<simpara>程序将整个文件读入内存（受合理上限限制），在空白字符处创建分片边界，然后启动N个工作线程（N=CPU数量，除非在单线程模式下）。每个工作线程进行标记化和小写ASCII转换，去除标点符号，并插入到自己的映射中，该映射由内存池支持以避免每次标记释放。在合并时，我们将键复制到最终映射的分配器中，因此初始化内存池不会使键无效。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 30__project-parallel-wordcount.adoc - include::example$chapters-data/code/30__project-parallel-wordcount/src/main.zig[]</programlisting>
+<simpara>参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/hash_map.zig">hash_map.zig</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem/tokenize.zig">tokenize.zig</link>。</simpara>
+<sidebar>
+<title>运行</title>
+<screen>$ zig build --build-file chapters-data/code/30__project-parallel-wordcount/build.zig run -- chapters-data/code/30__project-parallel-wordcount/data/lines.txt</screen>
+</sidebar>
+<sidebar>
+<title>输出</title>
+<screen>top 10 words in 8 shards:
+and 2
+i 2
+little 2
+me 2
+the 2
+a 1
+about 1
+ago—never 1
+call 1
+how 1</screen>
+</sidebar>
+<simpara><code>StringHashMap</code> 通过引用存储字符串切片；它不复制字节。当合并指向短期内存池的映射时，将键字节复制到目标分配器中，然后在完成后释放它们。示例在退出前迭代并释放键。</simpara>
+</chapter>
+
+<chapter xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara>分片将分片结束位置向前推到下一个空白字符，以避免在单词中间分割标记。这意味着分片可能不均匀；对于I/O密集型工具来说，这没问题。</simpara>
+</listitem>
+<listitem>
+<simpara>示例小写ASCII并粗略地去除标点符号，以保持对线程的关注。如果你需要Unicode分段，请集成 <code>std.unicode</code> 和更忠实的规范化。</simpara>
+</listitem>
+<listitem>
+<simpara>在单线程构建中（<code>-Dsingle-threaded=true</code>），我们内联执行工作线程并完全跳过生成，镜像第29章中的模式。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>添加 <code>-n &lt;N&gt;</code> 以打印前N个单词，使用 <code>std.process.argsWithAllocator</code> 解析标志。</simpara>
+</listitem>
+<listitem>
+<simpara>将合并阶段切换到并行归约：每CPU成对合并，直到剩下一个映射；测量可扩展性。</simpara>
+</listitem>
+<listitem>
+<simpara>用通过 <code>file size / shards</code> 确定大小的bump分配器替换内存池，并推理碎片与峰值占用。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="summary">
+<title>总结</title>
+<simpara>这个项目将一条从磁盘上的字节到排序频率表的实用、快速路径进行了提炼，同时尊重Zig的所有权和线程模型。它整合了分片、每线程映射和安全合并——一个准备好用于更大管道的最小模板。</simpara>
+</chapter>
+</book>

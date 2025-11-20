@@ -1,0 +1,228 @@
+////
+changes: ["Converted introduction from Markdown to AsciiDoc","Aligned onboarding guidance with 0.15.2 tooling"]
+examples_compile: yes
+keywords: ["介绍","概述","入门指南"]
+last_updated: 2025-11-13
+last_verified: 2025-11-13
+next_chapter: "01__boot-basics"
+open_questions: []
+previous_chapter: null
+status: draft
+xref_complete: true
+////
+
+= 引言：旅程开始
+:chapter-number: 0
+:chapter-slug: zigbook-introduction
+:copyright: zigbook
+:doctype: book
+:embedded:
+:experimental:
+:icons: font
+:partnums:
+:partnums:
+:pygments-linenums-mode: inline
+:pygments-style: manni
+:safe-mode-level: 0
+:sectanchors:
+:sectids:
+:sectlinks:
+:source-highlighter: pygments
+:sourcedir: example$chapters-data/code
+:webfonts:
+:xrefstyle: short
+:zig-version: 0.15.2
+:linkcss:
+:stylesdir: styles
+:stylesheet: zigbook.css
+
+[quote, Edsger W. Dijkstra]
+____
+抽象的目的不是含糊其辞，而是创造一个新的语义层级，使人能够绝对精确。
+____
+
+[[welcome]]
+== 欢迎来到 Zig
+
+大多数编程语言会为你隐藏复杂性——它们抽象掉内存管理，用隐式操作掩盖控制流，并把你与底层机器隔离开来。起初这看起来很简单，但最终你会撞墙。你需要理解某件事*为什么*慢、崩溃发生在*哪里*，或者*如何*从硬件中榨取每一分性能。突然之间，曾经帮助你上手的抽象反而挡在了路上。
+
+Zig 选择了不同的道路。它揭示复杂性——然后给你掌控复杂性的工具。
+
+本书将带你从 `Hello, world!` 出发，构建能够跨平台交叉编译、以外科手术般精度管理内存、并在编译期生成代码的系统。你将不仅学习 Zig *如何*工作，更会理解它*为何*如此设计。每一次内存分配都是显式的。每一条控制路径都是可见的。每一个抽象都精确，而非含糊。
+
+在这六十一章结束时，你不仅会"懂 Zig"。你会以一种让其他语言看起来仿佛在对你隐瞒什么的程度理解系统编程——因为它们确实如此。
+
+这段旅程从你第一天遇到的"简单"开始。到最后，你会发现另一种"简单"：那种穿越复杂后在彼岸获得完全理解所赢得的简单。
+
+欢迎来到 Zigbook。你的改变，从现在开始。
+
+[[what-youll-become]]
+== 你将成为怎样的开发者
+
+学习 Zig 不只是给简历增加一门语言。这是一次从根本上改变你对软件思考方式的过程。
+
+当你读完本书，你将能够：
+
+* **完全理解你的程序。** 你会知道每一个字节在内存中的位置、什么时候由编译器执行你的代码、以及你的抽象会被编译成哪些机器指令。没有隐藏的分配。没有莫名其妙的开销。没有意外。
+
+* **掌控整个技术栈。** 从裸机嵌入式系统到浏览器中的 WebAssembly，从内核模块到网络服务——你将拥有统一的工具链与语言，并完全掌控你的代码在任何环境中的运行方式。
+
+* **自信地调试。** 当问题发生时，你不再猜测。你会阅读栈回溯、检查内存布局、验证分配器行为，并用构建 Zig 编译器本身所用的同一套工具精准定位问题。
+
+* **构建可靠的系统。** 通过显式的错误处理、资源清理保证、以及在开发阶段捕获错误但不牺牲发布性能的安全模式，你将交付值得信赖的代码。
+
+* **为未来做贡献。** Zig 年轻、不断演进、并渴求贡献者。你将具备提出特性、修复缺陷、编写库、并共同塑造一个重视清晰与正确性的语言的基础。
+
+你会成为这样一类开发者：看着垃圾回收器会想"我能做得更好"；毫不畏惧地阅读汇编；在不安装额外工具链的情况下交叉编译到一套全新的架构；理解不仅*什么*能工作，更明白*为什么*。
+
+这不是关于死记硬背语法。这是关于赢得掌控力。
+
+[[what-is-the-zigbook]]
+== 关于本书
+
+IMPORTANT: Zigbook 刻意不包含*任何* AI 生成的内容——它是手写的、精心策划的，并持续更新以反映最新的语言特性与最佳实践。
+
+*作者的简短说明：*
+
+> 你好，读者！  
+>
+> 感谢你选择 Zigbook 作为学习 Zig 的向导。我在此正式邀请 Zig 社区共同为本书做贡献。无论是你发现了一个拼写错误、希望改进某段解释、或是有更好的方式来展示一个概念，你的贡献都会帮助每一位本书的读者。
+>
+> 你可以通过在 link:https://github.com/zigbook/zigbook[这里] 提交 issue 或 pull request 来贡献。 
+>
+> *请注意：* 为了确保准确性与清晰度，我会亲自审阅每一份提交。让我们携手把这份资源为未来的 Zig 开发者打磨得更好。
+>
+> -- link:https://github.com/zigbook[@zigbook]
+
+Zigbook 最初由 link:https://github.com/zigbook[@zigbook] 撰写——一位经验丰富的系统程序员与 Zig 社区成员，旨在填补现有资料的空白，并与他人分享这些经验与知识。 
+
+自那以后，它发展为一本关于 Zig 编程语言的全面指南，以从基础到高级系统编程的旅程为结构。它为那些希望*理解*而非仅仅使用、重视透明胜过魔法、以及追求精确胜过便利的开发者而设计。  
+
+TIP: Zigbook 通过提供深入的解释、实践项目与精心策划的学习路径来补充官方文档。当语言参考告诉你一个特性*做了什么*时，本书会向你展示*何时*使用它、*为什么*它重要、以及它在真实代码中的*如何*落地。
+
+**结构：** Zigbook 被组织为七个部分，在概念章节（教学）与项目章节（应用）之间交替。早期章节有意推迟深入探讨，直到你具备足够的基础来理解它们。后期章节默认你已经内化了更早的内容。这是一条路径，而不是一本参考手册：第一次请按顺序阅读，之后可作为参考使用。
+
+**前置知识：** 你应该熟悉至少一种编程语言与基本命令行操作。有 C、C++ 或 Rust 的经验有助于你进行横向对比，但并非必需。如果你愿意深入理解这些概念，Zig 完全可以成为你的第一门系统语言。
+
+[[what-is-zig]]
+== 什么是 Zig？
+
+Zig 是一门为需要在不牺牲安全与性能的前提下获得完全控制、效率与简洁的开发者而设计的系统编程语言。它定位为"不制造惊喜"的工具链：每一条控制路径、每一次分配、每一个优化决策，都是你可以追踪、修改或选择退出的。
+
+Zig 继承了 C 的直接风格，同时引入了现代标准库、更好的编译期保证，以及一流的交叉编译支持。该语言刻意避免"魔法"特性——没有隐藏的控制流、没有垃圾回收器、没有强制性的运行时——因此你可以审计二进制并准确理解你的代码会被编译成什么。
+
+=== 核心哲学
+
+Zig 的使命围绕清晰与对机械的同理心。编译器相信你会做出正确的决策，同时在开发阶段提供安全网。调试构建会捕获溢出、use-after-free 等错误。发布构建会移除这些检查以获得最大性能。你通过构建模式显式选择权衡，而不是在语言层面妥协。
+
+标准库拥抱直接的构件：以文件为模块、显式的分配器、以及类型化的错误。新手无需记忆庞大的框架也能推理代码。这种简洁延伸至工具链——`zig build`、`zig test` 与 `zig run` 覆盖了大部分工作流，而 `build.zig` 脚本本身就是 Zig 代码，而非另一门配置语言。xref:22__build-system-deep-dive.adoc[22]
+
+=== 横向对比
+
+**Zig 与 C：** Zig 尊重 C 的"你来掌舵"理念，同时移除了未定义行为的地雷。带检查的算术、带标签的联合、可选类型、以及显式错误处理取代了 C 中的静默失败。你获得同等级的掌控力，同时拥有现代语法与更好的诊断。
+
+**Zig 与 Rust：** Rust 通过编译期借用检查来强制安全，而 Zig 提供手动控制并可选择运行时检查。何时关心生命周期、何时让性能优先于静态强制——由你来决定。Zig 的学习曲线更平缓——需要掌握的语言特性更少，但你也承担更多责任。xref:17__generic-apis-and-type-erasure.adoc[17]
+
+**Zig 与 Go/Python：** 相比垃圾回收语言，Zig 提供对内存与性能的精细掌控。它的简洁与显式分配器使其非常适合嵌入式系统、内核、以及性能关键路径。但 Zig 的触角远不止传统系统编程——开发者用它来构建 CLI 工具、游戏开发、WebAssembly 模块、以及高性能网络服务。xref:41__cross-compilation-and-wasm.adoc[41]
+
+Zig 并不试图成为人人适用的语言。它选择透明胜过便利、显式胜过推断、理解胜过抽象。如果你重视准确知道你的代码在做什么，Zig 就是你的语言。
+
+[[key-capabilities]]
+== Zig 赋予你的能力
+
+四项能力定义了 Zig 的体验，并贯穿本书始终：link:https://ziglang.org/download/0.15.1/release-notes.html[v0.15.2]
+
+. *没有隐藏的控制流。* 编译器不会注入分配器、协程或隐式析构。机器码与源代码严格对应。阅读 Zig 时，你就知道将会执行什么。 
+. *带护栏的手动内存管理。* 分配器 API 是一等公民的函数参数，而非隐藏的运行时机制。调试与 ReleaseSafe 模式在开发阶段捕获 double free、use-after-free、以及缓冲区溢出。ReleaseFast 在生产环境移除这些检查。权衡由你掌控。xref:10__allocators-and-memory-management.adoc[10]
+. *编译期执行。* 任何函数都可以在 `comptime` 运行，将编译器变成元编程引擎。在二进制发布前生成查找表、校验模式或定制泛型 API。零运行时成本、完整语言能力。xref:15__comptime-and-reflection.adoc[15]
+. *毫不费力的交叉编译。* 自带的工具链只需一个命令即可覆盖数十个 OS/架构组合。无需额外工具链、无需交叉编译 SDK、无需配置文件——只要加上 `-target` 即可。xref:41__cross-compilation-and-wasm.adoc[41]
+
+这些不是营销幻灯片上的卖点——它们是塑造你如何编写、调试与部署 Zig 代码的原则。你会在每一章遇到它们，从 `Hello, world!` 到构建你自己的分配器。
+
+[[getting-started]]
+== 快速上手
+
+从下载到执行 Zig 代码仅需几个步骤。本书的其余内容默认你已经把工具链加入了 `PATH`。官方的 link:https://ziglang.org/download/[下载页面] 为 Linux、macOS 与 Windows 提供发行版二进制。Homebrew 等包管理器与常见 Linux 发行版会跟进最新稳定版，但直接下载 tarball 或 zip 能确保与本书示例版本一致。解压后，确认你的安装：
+
+[source,shell]
+----
+$ zig version
+0.15.X
+----
+
+CAUTION: 如果 `zig version` 显示的是更早的版本，请回到下载步骤，以便与后续章节中在 link:https://ziglang.org/download/0.15.0/release-notes.html[v0.15.2+] 引入的安全模式行为保持一致。
+
+[[getting-started-first-program]]
+=== 你的第一个程序
+
+编译并运行你的第一个 `main` 函数，以验证工具链与标准库按预期工作。创建名为 `hello_world.zig` 的文件，写入如下内容：
+
+[source,zig]
+----
+include::{sourcedir}/00__zigbook-introduction/hello_world.zig[]
+----
+
+.运行
+[source,shell]
+----
+$ zig run hello_world.zig
+----
+
+.输出
+[source,shell]
+----
+Hello, world!
+----
+
+NOTE: `std.debug.print` 写入到 stderr。第 1 章会在你关心输出通道与系统调用时，介绍带缓冲的 stdout writer。xref:01__boot-basics.adoc[1]
+
+[[getting-started-runner]]
+=== 探索工具链表面
+
+即便是这个最小示例也展现了 Zig 统一的工具链故事：同一个 `zig run` 命令负责编译、链接与执行，而 `zig test` 与 `zig build` 在不改变语言的前提下扩展工作流。xref:22__build-system-deep-dive.adoc[22] 你可以把代码放在 `main.zig` 或任何传给 CLI 的文件名中；你调用的文件就是根模块。
+
+[[interactive-example]]
+== 一个交互式循环
+
+当 "Hello, world!" 能运行后，把程序扩展为一个简单循环，亲眼看看 Zig 的显式控制流与格式化语法，参见 link:https://ziglang.org/documentation/master/#while[#while]。
+
+[source,zig]
+----
+include::{sourcedir}/00__zigbook-introduction/squares_demo.zig[]
+----
+
+.运行
+[source,shell]
+----
+$ zig run squares_demo.zig
+----
+
+.输出
+[source,shell]
+----
+1 squared is 1
+2 squared is 4
+3 squared is 9
+4 squared is 16
+5 squared is 25
+6 squared is 36
+7 squared is 49
+8 squared is 64
+9 squared is 81
+10 squared is 100
+----
+
+TIP: Zig 的 `while` 循环允许内联自增子句 `while (cond) : (update)`，这让移植 C 风格的循环变得容易，同时不引入隐藏的迭代器。
+
+[[the-path-ahead]]
+== 前路
+
+你现在已经拥有一套可工作的 Zig 工具链，并写过两个小程序。这就是基础。接下来的一切都建立在这个时刻之上——第一次编译 Zig 代码并看到它运行。
+
+xref:01__boot-basics.adoc[下一章] 将介绍 Zig 如何把源文件视为模块、入口点如何传播错误、以及构建模式如何把同一段代码转换为不同的安全与性能侧写。你会明白 `main` 并不是什么魔法：它是由 `std.start` 发现的，你也可以在需要时绕过它。 
+
+到了 xref:61__the-simplicity-you-earned.adoc[第 61 章]，你不仅会"懂 Zig"；你会理解得足够深入，能够教别人、为生态贡献，并构建体现你完全掌控力的系统。
+
+这段旅程从"简单"开始。它以另一种"简单"结束：那种通过理解而赢得的简单。
+
+**你的改变从现在开始。翻页。**

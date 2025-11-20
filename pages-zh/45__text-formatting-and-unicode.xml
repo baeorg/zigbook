@@ -1,0 +1,371 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>文本、格式化与 Unicode</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>在掌握了结构化数据的集合之后（<link xl:href="44__collections-and-algorithms.xml">44</link>），现在转向文本——人机交互的基本媒介。本章探讨用于格式化与解析的<literal>std.fmt</literal>、用于 ASCII 字符操作的<literal>std.ascii</literal>、用于处理 UTF-8/UTF-16 的<literal>std.unicode</literal>，以及<literal>base64</literal>等编码工具。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/ascii.zig">ascii.zig</link></simpara>
+<simpara>不同于隐藏编码复杂性的高级语言，Zig 直陈其机制：你在<literal>[]const u8</literal>（字节切片）与正确的 Unicode 码点迭代之间做选择，控制数值格式化精度，并显式处理编码错误。</simpara>
+<simpara>在 Zig 中进行文本处理需意识到字节与字符边界、用于动态格式化的分配器使用，以及不同字符串操作的性能影响。到本章末，你将能以自定义精度格式化数字、安全解析整数与浮点数、高效处理 ASCII、遍历 UTF-8 序列，并为传输对二进制数据进行编码——全部符合 Zig 的显式特性且无隐藏成本。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/unicode.zig">unicode.zig</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用 <literal>Writer.print()</literal> 和格式说明符格式化整数、浮点数和自定义类型的值。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/Writer.zig">Writer.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>将字符串解析为整数（<literal>parseInt</literal>）和浮点数（<literal>parseFloat</literal>），并正确处理错误。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>std.ascii</literal> 进行字符分类（<literal>isDigit</literal>、<literal>isAlpha</literal>、<literal>toUpper</literal>、<literal>toLower</literal>）。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>std.unicode</literal> 遍历 UTF-8 序列，理解码点与字节的区别。</simpara>
+</listitem>
+<listitem>
+<simpara>对二进制数据进行 Base64 编码和解码，实现二进制到文本的转换。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/base64.zig">base64.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>在 Zig 0.15.2 中使用 <literal>{f}</literal> 说明符为用户定义的类型实现自定义格式化器。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="formatting-basics">
+<title>使用 std.fmt 进行格式化</title>
+<simpara>Zig 的格式化围绕 <literal>Writer.print(fmt, args)</literal>，它将格式化的输出写入任何 <literal>Writer</literal> 实现。格式字符串使用 <literal>{}</literal> 占位符和可选说明符：<literal>{d}</literal> 表示十进制，<literal>{x}</literal> 表示十六进制，<literal>{s}</literal> 表示字符串，<literal>{any}</literal> 表示调试表示，<literal>{f}</literal> 表示自定义格式化器。</simpara>
+<section xml:id="print-basic">
+<title>基础格式化</title>
+<simpara>最简单的模式：用<literal>std.io.fixedBufferStream</literal>获取一个缓冲，然后向其中<literal>print</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/format_basic.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe format_basic.zig &amp;&amp; ./format_basic</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Formatted: Answer=42, pi=3.14</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>std.io.fixedBufferStream</literal> 提供一个由固定缓冲区支持的 <literal>Writer</literal>。无需分配。对于动态输出，使用 <literal>std.ArrayList(u8).writer()</literal>。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/fixed_buffer_stream.zig">fixed_buffer_stream.zig</link></simpara>
+</tip>
+</section>
+<section xml:id="format-specifiers">
+<title>格式说明符</title>
+<simpara>Zig 的格式说明符可控制数值进制、精度、对齐与填充。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/format_specifiers.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe format_specifiers.zig &amp;&amp; ./format_specifiers</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Decimal: 255
+Hexadecimal (lowercase): ff
+Hexadecimal (uppercase): FF
+Binary: 11111111
+Octal: 377
+Float with 2 decimals: 3.14
+Scientific notation: 1.23e2
+Padded: 00042
+Right-aligned:    42</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>使用 <literal>{d}</literal> 表示十进制，<literal>{x}</literal> 表示十六进制，<literal>{b}</literal> 表示二进制，<literal>{o}</literal> 表示八进制。精度（<literal>.N</literal>）和宽度适用于浮点数和整数。使用 <literal>0</literal> 填充创建零填充字段。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="parsing">
+<title>解析字符串</title>
+<simpara>Zig 提供 <literal>parseInt</literal> 和 <literal>parseFloat</literal> 用于将文本转换为数字，对无效输入返回错误而不是崩溃或静默失败。</simpara>
+<section xml:id="parse-int">
+<title>解析整数</title>
+<simpara><literal>parseInt(T, buf, base)</literal> 将字符串转换为指定进制（2-36，或 0 表示自动检测）下类型为 <literal>T</literal> 的整数。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/parse_int.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe parse_int.zig &amp;&amp; ./parse_int</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Parsed decimal: 42
+Parsed hex: 255
+Parsed binary: 7
+Auto-detected (0x): 4660
+Parse error: InvalidCharacter</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara><literal>parseInt</literal> 返回 <literal>error{Overflow, InvalidCharacter}</literal>。始终显式处理这些错误或使用 <literal>try</literal> 传播。基数为 0 时自动检测 <literal>0x</literal>（十六进制）、<literal>0o</literal>（八进制）、<literal>0b</literal>（二进制）前缀。</simpara>
+</important>
+</section>
+<section xml:id="parse-float">
+<title>解析浮点数</title>
+<simpara><literal>parseFloat(T, buf)</literal> 将字符串转换为浮点数，处理科学计数法和特殊值（<literal>nan</literal>、<literal>inf</literal>）。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/parse_float.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe parse_float.zig &amp;&amp; ./parse_float</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Parsed: 3.14159
+Scientific: 123000
+Special (inf): inf</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>parseFloat</literal> 支持十进制记数法（<literal>3.14</literal>）、科学记数法（<literal>1.23e5</literal>）、十六进制浮点数（<literal>0x1.8p3</literal>）和特殊值（<literal>nan</literal>、<literal>inf</literal>、<literal>-inf</literal>）。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt/parse_float.zig">parse_float.zig</link></simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="ascii-operations">
+<title>ASCII 字符操作</title>
+<simpara><literal>std.ascii</literal> 为 7 位 ASCII 提供快速的字符分类和大小写转换。函数通过返回 <literal>false</literal> 或保持不变来优雅地处理 ASCII 范围之外的值。</simpara>
+<section xml:id="ascii-classification">
+<title>字符分类</title>
+<simpara>测试字符是否为数字、字母、空白字符等。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/ascii_classify.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe ascii_classify.zig &amp;&amp; ./ascii_classify</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">'A': alpha=true, digit=false, upper=true
+'5': alpha=false, digit=true, upper=false
+' ': alpha=false, digit=false, whitespace=true</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>ASCII 函数对字节（<literal>u8</literal>）进行操作。非 ASCII 字节（&gt;127）在分类检查中返回 <literal>false</literal>。</simpara>
+</note>
+</section>
+<section xml:id="ascii-case">
+<title>大小写转换</title>
+<simpara>在 ASCII 字符的大写和小写之间进行转换。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/ascii_case.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe ascii_case.zig &amp;&amp; ./ascii_case</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Original: Hello, World!
+Uppercase: HELLO, WORLD!
+Lowercase: hello, world!</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara><literal>std.ascii</literal> 函数逐字节操作，仅影响 ASCII 字符。对于完整的 Unicode 大小写映射，请使用专用的 Unicode 库或手动处理 UTF-8 序列。</simpara>
+</important>
+</section>
+</chapter>
+<chapter xml:id="unicode">
+<title>Unicode 与 UTF-8</title>
+<simpara>Zig 字符串是 <literal>[]const u8</literal> 字节切片，通常采用 UTF-8 编码。<literal>std.unicode</literal> 提供用于验证 UTF-8、解码码点以及在 UTF-8 和 UTF-16 之间转换的工具。</simpara>
+<section xml:id="utf8-validation">
+<title>UTF-8 校验</title>
+<simpara>检查字节序列是否为有效的 UTF-8。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/utf8_validate.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe utf8_validate.zig &amp;&amp; ./utf8_validate</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Valid UTF-8: Hello, 世界
+Invalid UTF-8 detected</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>使用 <literal>std.unicode.utf8ValidateSlice</literal> 验证整个字符串。无效的 UTF-8 可能在假设格式良好的序列的代码中导致未定义行为。</simpara>
+</tip>
+</section>
+<section xml:id="utf8-iteration">
+<title>遍历码点</title>
+<simpara>使用 <literal>std.unicode.Utf8View</literal> 将 UTF-8 字节序列解码为 Unicode 码点。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/utf8_iterate.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe utf8_iterate.zig &amp;&amp; ./utf8_iterate</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Code point: U+0048 (H)
+Code point: U+0065 (e)
+Code point: U+006C (l)
+Code point: U+006C (l)
+Code point: U+006F (o)
+Code point: U+002C (,)
+Code point: U+0020 ( )
+Code point: U+4E16 (世)
+Code point: U+754C (界)
+Byte count: 13, Code point count: 9</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>UTF-8 是可变宽度编码：ASCII 字符为 1 字节，但许多 Unicode 字符需要 2-4 字节。当字符语义重要时，始终遍历码点而不是字节。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="base64">
+<title>Base64 编码</title>
+<simpara>Base64 将二进制数据编码为可打印的 ASCII，用于在文本格式（JSON、XML、URL）中嵌入二进制数据。Zig 提供标准、URL 安全和自定义的 Base64 变体。</simpara>
+<section xml:id="base64-basic">
+<title>编码与解码</title>
+<simpara>将二进制数据编码为 Base64 并将其解码回原样。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/base64_basic.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe base64_basic.zig &amp;&amp; ./base64_basic</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Original: Hello, World!
+Encoded: SGVsbG8sIFdvcmxkIQ==
+Decoded: Hello, World!</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>std.base64.standard.Encoder</literal> 和 <literal>.Decoder</literal> 提供编码/解码方法。<literal>==</literal> 填充是可选的，可以通过编码器选项控制。</simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="custom-formatters">
+<title>自定义格式化器</title>
+<simpara>为您的类型实现 <literal>format</literal> 函数来控制它们如何使用 <literal>Writer.print()</literal> 打印。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/custom_formatter.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe custom_formatter.zig &amp;&amp; ./custom_formatter</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Point: (10, 20)</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>在 Zig 0.15.2 中，<literal>format</literal> 方法签名简化为：<literal>pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void</literal>。使用 <literal>{f}</literal> 格式说明符调用自定义格式化器（例如，<literal>"{f}"</literal>，而不是 <literal>"{}"</literal>）。</simpara>
+</note>
+</chapter>
+<chapter xml:id="bufprint">
+<title>格式化到缓冲区</title>
+<simpara>对于无分配的栈上分配格式化，使用 <literal>std.fmt.bufPrint</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/bufprint.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe bufprint.zig &amp;&amp; ./bufprint</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Formatted: x=42, y=3.14</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>如果缓冲区太小，<literal>bufPrint</literal> 返回 <literal>error.NoSpaceLeft</literal>。始终适当调整缓冲区大小或处理错误。</simpara>
+</important>
+</chapter>
+<chapter xml:id="allocprint">
+<title>带分配的动态格式化</title>
+<simpara>对于动态大小的输出，使用 <literal>std.fmt.allocPrint</literal> 分配并返回格式化的字符串。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 45__text-formatting-and-unicode.adoc - include::example$chapters-data/code/45__text-formatting-and-unicode/allocprint.zig[]</programlisting>
+<formalpara>
+<title>构建与运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe allocprint.zig &amp;&amp; ./allocprint</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Dynamic: The answer is 42</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>allocPrint</literal> 返回一个必须使用 <literal>allocator.free(result)</literal> 释放的切片。当输出大小不可预测时使用此函数。</simpara>
+</tip>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>使用 <literal>std.mem.split</literal> 和 <literal>parseInt</literal> 编写 CSV 解析器，从逗号分隔的文件中读取数字行。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>实现一个十六进制转储工具，将二进制数据格式化为十六进制并带有 ASCII 表示（类似于 <literal>hexdump -C</literal>）。</simpara>
+</listitem>
+<listitem>
+<simpara>创建一个字符串验证函数，检查字符串是否仅包含 ASCII 可打印字符，拒绝控制码和非 ASCII 字节。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 Base64 构建简单的 URL 编码器/解码器进行编码部分，并使用自定义逻辑对特殊字符进行百分比编码。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">UTF-8 vs. 字节</emphasis>：Zig 字符串是 <literal>[]const u8</literal>。始终澄清您是在处理字节（索引）还是码点（语义字符）。不匹配的假设会导致多字节字符的错误。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">区域设置敏感操作</emphasis>：<literal>std.ascii</literal> 和 <literal>std.unicode</literal> 不处理区域设置特定的大小写映射或排序。对于土耳其语的 <literal>i</literal> 与 <literal>I</literal> 或区域设置感知排序，您需要外部库。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">浮点数格式化精度</emphasis>：<literal>parseFloat</literal> 通过文本往返可能会损失非常大或非常小的数字的精度。对于精确的十进制表示，使用定点算法或专用十进制库。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">Base64 变体</emphasis>：标准 Base64 使用 <literal>+/</literal>，URL 安全使用 <literal>-_</literal>。为您的用例选择正确的编码器/解码器（<literal>std.base64.standard</literal> 与 <literal>std.base64.url_safe_no_pad</literal>）。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">格式字符串安全性</emphasis>：格式字符串在编译时检查，但运行时构造的格式字符串不会受益于编译时验证。尽可能避免动态构建格式字符串。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">Writer 接口</emphasis>：所有格式化函数都接受 <literal>anytype</literal> Writer，允许输出到文件、套接字、ArrayList 或自定义目标。确保您的 Writer 实现 <literal>write(self, bytes: []const u8) !usize</literal>。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

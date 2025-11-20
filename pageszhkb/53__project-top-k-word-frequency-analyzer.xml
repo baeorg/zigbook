@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<article xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目：Top-K词频分析器</title>
+<date>2025-11-13</date>
+<author>
+<personname>
+<firstname>Zig</firstname>
+<surname>文档</surname>
+</personname>
+</author>
+<copyright>
+<year>2025</year>
+<holder>zigbook</holder>
+</copyright>
+</info>
+
+<section xml:id="overview">
+<title>概述</title>
+<simpara>调试章节介绍了用于解释程序*为何*行为异常的工具。<xref linkend="52__debug-and-valgrind" xrefstyle="short">52</xref>此项目利用类似的规范来构建确定性文本分析实用程序：为其提供日志摘录，收集最频繁的标记，并发出每个阶段的时间数据。我们将结合<literal>std.mem</literal>中的标记化助手、<literal>std</literal>中的哈希集合、<literal>heap</literal>排序器和<literal>Timer</literal> API，以产生具有测量成本的可重现排名。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/hash_map.zig">hash_map.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/sort.zig">sort.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/time.zig">time.zig</link></simpara>
+</section>
+
+<section xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>构建端到端I/O管道，使用<literal>std.StringHashMap</literal>和<literal>std.ArrayList</literal>读取语料库、标准化文本并累积计数。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/array_list.zig">array_list.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用显式比较器确定性排名频率，该比较器在不依赖哈希映射迭代顺序的情况下解决平局。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>std.time.Timer</literal>捕获每个阶段的时间，以验证回归并传达性能预期。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="pipeline-design">
+<title>设计管道</title>
+<simpara>我们的分析器接受可选的文件路径和可选的<literal>k</literal>参数（<literal>top k</literal>标记）；两者分别默认为捆绑的语料库和<literal>5</literal>。我们将整个文件读入内存以简化，但标准化和计数循环的编写是线性操作的，因此可以稍后适应流式传输块。<literal>GeneralPurposeAllocator</literal>支持所有动态结构，而arena友好的工作流（仅在首次出现时复制字符串）使分配与词汇表大小成比例。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/heap.zig">heap.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/process.zig">process.zig</link></simpara>
+<simpara>标记化使用<literal>std.mem.tokenizeAny</literal>发生，配置了一个保守的分隔符集，可修剪空白、标点符号和标记字符。每个标记在可重用的<literal>std.ArrayList(u8)</literal>中转换为小写，然后再尝试插入到映射中；如果标记已存在，则仅递增计数，保持临时分配有界。</simpara>
+</section>
+
+<section xml:id="count-and-rank">
+<title>计数和排名</title>
+<simpara>完整的实用程序演示了StringHashMap、ArrayList、排序和时间安排。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 53__project-top-k-word-frequency-analyzer.adoc - include::example$chapters-data/code/53__project-top-k-word-frequency-analyzer/topk_word_frequency.zig[]</programlisting>
+<simpara>运行</simpara>
+<screen>$ zig run chapters-data/code/53__project-top-k-word-frequency-analyzer/topk_word_frequency.zig</screen>
+<simpara>输出</simpara>
+<screen>source -> chapters-data/code/53__project-top-k-word-frequency-analyzer/sample_corpus.txt
+tokens -> 102, unique -> 86
+top 5 words:
+   1. the -> 6
+   2. a -> 3
+   3. and -> 3
+   4. are -> 2
+   5. latency -> 2
+timings (ns): read=284745, tokenize=3390822, sort=236725</screen>
+<simpara><literal>std.StringHashMap</literal>存储规范的小写拼写，而单独的<literal>std.ArrayList</literal>收集最终的<literal>(word, count)</literal>对进行排序。我们选择<literal>std.sort.heap</literal>，因为它是确定性的，没有分配器依赖关系，并且在小型数据集上表现良好；比较器主要按降序计数排序，其次按字典顺序排序，以保持平局稳定。这在跨运行或机器重新运行分析时很重要——现场团队可以在没有意外的情况下对生成的CSV进行差异比较。</simpara>
+</section>
+
+<section xml:id="timing-and-reproducibility">
+<title>时间安排和可重现性</title>
+<simpara>单个<literal>Timer</literal>实例测量三个阶段：文件摄取、标记化和排序。我们在每个阶段后调用<literal>lap()</literal>以重置零点，同时记录经过的纳秒数，从而可以轻松发现哪个步骤占主导地位。因为分析器标准化大小写并使用确定性排序，所以给定语料库的结果在运行之间保持相同，从而允许将时间增量归因于硬件或工具链更改，而不是非确定性排序。</simpara>
+<simpara>对于回归，请使用更大的<literal>k</literal>或不同的语料库重新运行：</simpara>
+<screen>$ zig run chapters-data/code/53__project-top-k-word-frequency-analyzer/topk_word_frequency.zig -- chapters-data/code/53__project-top-k-word-frequency-analyzer/sample_corpus.txt 10</screen>
+<simpara>可选参数让您可以保持二进制脚本化——将其放入CI中，比较输出工件，并在时间预算变化超过阈值时发出警报。当集成到更大的系统中时，映射构建循环可以交换为从<literal>stdin</literal>或TCP套接字流式传输，同时保留相同的确定性排名规则。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/File.zig">File.zig</link></simpara>
+</section>
+
+<section xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>StringHashMap</literal>不会自动释放存储的键；此示例在删除映射之前显式释放它们，以使通用分配器泄漏检查器满意。</simpara>
+</listitem>
+<listitem>
+<simpara>标记化器专注于ASCII。对于完整的Unicode分段，请将管道与<literal>std.unicode.ScalarIterator</literal>配对或集成ICU绑定。<xref linkend="45__text-formatting-and-unicode" xrefstyle="short">45</xref></simpara>
+</listitem>
+<listitem>
+<simpara>将整个语料库读入内存简化了教程，但可能不适合多GB日志。在扩展时，将<literal>readFileAlloc</literal>交换为分块<literal>readAll</literal>循环或内存映射文件。<xref linkend="28__filesystem-and-io" xrefstyle="short">28</xref></simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>通过序列化排序后的切片将报告作为JSON发出，然后与文本版本比较差异友好性。<xref linkend="32__project-http-json-client" xrefstyle="short">32</xref> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json.zig">json.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>用两阶段管道替换单线程分析器：跨线程分片标记，然后在排序之前合并哈希映射。使用<literal>Timer</literal>测量收益并总结缩放。<xref linkend="29__threads-and-atomics" xrefstyle="short">29</xref></simpara>
+</listitem>
+<listitem>
+<simpara>添加一个<literal>--stopwords</literal>选项，加载换行符分隔的忽略列表，在计数之前删除这些标记，并报告过滤了多少候选者。<xref linkend="36__style-and-best-practices" xrefstyle="short">36</xref></simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="caveats-alternatives">
+<title>注意事项、替代方案、边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>对于流式环境，请考虑<literal>std.PriorityQueue</literal>以增量方式维护顶部<literal>k</literal>，而不是在排序之前记录整个直方图。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/priority_queue.zig">priority_queue.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>如果性能要求超出堆排序，请尝试<literal>std.sort.pdq</literal>或基于存储桶的方法，同时保持确定性比较器合同不变。</simpara>
+</listitem>
+<listitem>
+<simpara>为了支持多语言文本，请分层规范化（NFC/NFKC）并使用Unicode感知的套管助手；比较器可能需要特定于语言环境的排序，以使结果直观。<xref linkend="45__text-formatting-and-unicode" xrefstyle="short">45</xref></simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+</article>
+</book>

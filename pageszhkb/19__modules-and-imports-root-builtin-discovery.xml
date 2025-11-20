@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>模块和导入</title>
+<subtitle>根/内置/发现</subtitle>
+<date>2025-11-15</date>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>第18章将泛型优先队列包装在可重用模块中；现在我们将视野扩大到编译器的完整模块图。我们将明确划分根模块、标准库和特殊的<literal>builtin</literal>命名空间之间的界限，该命名空间提供编译元数据。在此过程中，我们将拥抱Zig 0.15.2的I/O改革，实践可选助手的发现，并预览自定义入口点如何挂接到<literal>std.start</literal>以供需要绕过默认运行时前奏的程序使用。更多详细信息，请参见<link xl:href="18__project-generic-priority-queue.xml">18</link>、<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/start.zig">start.zig</link>和<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>映射根、<literal>std</literal>和<literal>builtin</literal>如何交互以形成编译时模块图并安全共享声明。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/std.zig">std.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>从<literal>builtin</literal>获取目标、优化和构建模式元数据，以指导配置和诊断。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>@import</literal>和<literal>@hasDecl</literal>门控可选助手，保持发现显式，同时支持策略驱动的模块。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="module-graph">
+<title>遍历模块图</title>
+<simpara>编译器将每个源文件视为命名空间结构。当你<literal>@import</literal>路径时，返回的结构暴露任何<literal>pub</literal>声明供下游使用。根模块简单地对应你的顶级文件；它导出的任何东西都可以通过<literal>@import("root")</literal>立即访问，无论调用者是另一个模块还是测试块。我们将用一小群文件检查这种关系，以展示跨模块的值共享，同时捕获构建元数据。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/File.zig">File.zig</link>。</simpara>
+<section xml:id="module-graph-example">
+<title>跨助手模块共享根导出</title>
+<simpara><literal>module_graph_report.zig</literal>在三个文件中实例化队列式报告：根导出<literal>Features</literal>数组，<literal>build_config.zig</literal>助手格式化元数据，<literal>service/metrics.zig</literal>模块使用根导出构建目录。该示例还演示了0.15.2中引入的新写入器API，我们借用堆栈缓冲区并通过<literal>std.fs.File.stdout().writer</literal>接口刷新。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io.zig">Io.zig</link>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 19__modules-and-imports-root-builtin-discovery.adoc - include::example$chapters-data/code/19__modules-and-imports-root-builtin-discovery/module_graph_report.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run module_graph_report.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">== 模块图演练 ==
+root.Version -&gt; 1.4.0
+mode=Debug target=x86_64-linux
+features: 根模块导出 内置自省 模块目录
+根导出的特性 (3):
+   1. 根模块导出
+   2. 内置自省
+   3. 模块目录</programlisting>
+</para>
+</formalpara>
+<simpara>关键点：<literal>@import("root")</literal>允许任何模块访问顶级声明，因此根成为跨模块共享配置或常量的自然场所。只要文件路径正确，模块可以嵌套任意深度。</simpara>
+</section>
+</chapter>
+<chapter xml:id="builtin-namespace">
+<title>内置命名空间：编译时元数据</title>
+<simpara><literal>@import("builtin")</literal>是一个特殊的命名空间，由编译器合成，包含有关目标架构、优化级别和构建模式的信息。与<literal>std</literal>不同，<literal>builtin</literal>的内容完全由编译时上下文确定，因此你可以使用它来条件化代码，而不会产生运行时开销。</simpara>
+<section xml:id="builtin-metadata-example">
+<title>内省目标和构建模式</title>
+<simpara>在<literal>builtin_probe.zig</literal>中，我们查询<literal>builtin.cpu</literal>、<literal>builtin.mode</literal>和<literal>builtin.target</literal>以在运行时打印诊断。相同的字段驱动<literal>comptime</literal>分支，因此我们可以为调试与发布版本或x86_64与aarch64选择算法。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Target.zig">Target.zig</link>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 19__modules-and-imports-root-builtin-discovery.adoc - include::example$chapters-data/code/19__modules-and-imports-root-builtin-discovery/builtin_probe.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run builtin_probe.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">=== 内置探测器 ===
+目标: x86_64-linux-gnu
+CPU: x86_64
+模式: Debug
+操作系统: linux
+指针宽度: 64位
+字节顺序: Little
+</programlisting>
+</para>
+</formalpara>
+<simpara>提示：因为<literal>builtin</literal>字段是<literal>comptime</literal>已知的，你可以在算法选择中使用它们——例如，在big-endian目标上选择字节交换代码路径，或在单线程构建中省略原子操作。</simpara>
+</section>
+</chapter>
+<chapter xml:id="discovery-patterns">
+<title>可选助手的发现模式</title>
+<simpara>大型代码库通常包含可选的诊断或开发钩子。Zig提供了<literal>@hasDecl</literal>来测试模块是否公开了符号，允许你优雅地降级或启用扩展。我们将使用此技术使分析或日志记录助手成为可选依赖项，保持核心模块精简，同时支持丰富的开发体验。</simpara>
+<section xml:id="discovery-example">
+<title>使用@hasDecl进行策略化可选扩展</title>
+<simpara><literal>optional_dev_hooks.zig</literal>定义了一个最小的主模块，该模块检查可选的<literal>dev_utils.zig</literal>助手。如果助手存在，我们调用它的分析设置；否则，我们静默继续。这种模式允许你通过简单地添加或删除文件来切换开发工具，而无需更改调用代码。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 19__modules-and-imports-root-builtin-discovery.adoc - include::example$chapters-data/code/19__modules-and-imports-root-builtin-discovery/optional_dev_hooks.zig[]</programlisting>
+<formalpara>
+<title>运行（无dev_utils）</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run optional_dev_hooks.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">=== 主应用 ===
+Dev助手: 未找到
+启动核心服务...</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>运行（有dev_utils）</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run optional_dev_hooks.zig dev_utils.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">=== 主应用 ===
+Dev助手: 可用
+启动核心服务...
+[Dev] 分析已启用: true, 日志级别: debug</programlisting>
+</para>
+</formalpara>
+<simpara>重要：<literal>@hasDecl</literal>在编译时解析，因此未使用的可选助手不会增加运行时成本。这使得发现模式非常适合插件架构或条件开发工具。</simpara>
+</section>
+</chapter>
+<chapter xml:id="custom-entry-points">
+<title>自定义入口点和运行时前奏</title>
+<simpara>默认的Zig运行时通过<literal>std.start</literal>处理参数解析、堆栈跟踪设置和退出处理。对于嵌入式系统或专业主机，你可以通过提供自己的<literal>main</literal>或覆盖启动逻辑来绕过这个前奏。我们将演示一个最小的自定义入口点，该入口点跳过标准设置，直接跳转到用户代码。</simpara>
+<section xml:id="custom-entry-example">
+<title>绕过std.start的极简入口点</title>
+<simpara><literal>custom_entry.zig</literal>定义了一个裸<literal>main</literal>，它直接写入stdout而不初始化完整的运行时。这在资源受限的环境或需要完全控制启动序列时非常有用。请注意，你放弃了标准错误处理和堆栈跟踪，因此请谨慎使用此技术。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 19__modules-and-imports-root-builtin-discovery.adoc - include::example$chapters-data/code/19__modules-and-imports-root-builtin-discovery/custom_entry.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run custom_entry.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">自定义入口: 直接启动
+</programlisting>
+</para>
+</formalpara>
+<simpara>警告：自定义入口点跳过运行时初始化，因此你必须手动处理参数解析、错误处理和退出代码。仅在标准前奏不适合你的用例时使用此技术。</simpara>
+</section>
+</chapter>
+<chapter xml:id="closing-notes">
+<title>结束语</title>
+<simpara>我们现在了解了模块如何形成图，如何通过<literal>builtin</literal>内省编译时上下文，以及如何优雅地处理可选依赖项。下一章将通过对比模块、程序、包和库，澄清经常混淆的术语，巩固我们对Zig构建系统的理解。<link xl:href="20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.xml">20</link></simpara>
+</chapter>
+<chapter xml:id="best-practices">
+<title>最佳实践</title>
+<itemizedlist>
+<listitem>
+<simpara>使用<literal>@import("root")</literal>在模块间共享配置常量，但避免过度填充根命名空间。</simpara>
+</listitem>
+<listitem>
+<simpara>利用<literal>builtin</literal>字段进行<literal>comptime</literal>条件化，但避免在运行时路径中过度使用它们。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>@hasDecl</literal>实现可选的开发工具，保持核心模块精简。</simpara>
+</listitem>
+<listitem>
+<simpara>记录自定义入口点权衡：跳过运行时初始化意味着手动处理错误和参数。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展模块图报告以枚举所有导入的模块及其版本，创建一个完整的依赖清单。</simpara>
+</listitem>
+<listitem>
+<simpara>创建一个<literal>comptime</literal>函数，该函数根据<literal>builtin.target</literal>选择最优算法，在x86_64与ARM上显示不同行为。</simpara>
+</listitem>
+<listitem>
+<simpara>构建一个插件系统，使用<literal>@hasDecl</literal>在运行时发现扩展，允许动态加载功能模块。</simpara>
+</listitem>
+<listitem>
+<simpara>实现一个自定义入口点，该入口点处理基本参数解析，但跳过完整的运行时初始化，平衡控制和便利性。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

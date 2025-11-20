@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<article xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>调试和Valgrind</title>
+<date>2025-11-13</date>
+<author>
+<personname>
+<firstname>Zig</firstname>
+<surname>文档</surname>
+</personname>
+</author>
+<copyright>
+<year>2025</year>
+<holder>zigbook</holder>
+</copyright>
+</info>
+
+<section xml:id="overview">
+<title>概述</title>
+<simpara>在<xref linkend="51__mem-and-meta-utilities" xrefstyle="short">上一章</xref>构建了切片工具和轻量级反射之后，我们现在转向当事情出错时会发生什么。Zig的诊断管道位于<literal>std.debug</literal>中，它控制恐慌策略，提供堆栈展开，并公开用于打印结构化数据的助手。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/debug.zig">debug.zig</link>对于内存检测，您有<literal>std.valgrind</literal>，它是Valgrind客户端请求协议的薄包装，使您的自定义分配器对Memcheck可见，而不会破坏可移植性。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/valgrind.zig">valgrind.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/valgrind/memcheck.zig">memcheck.zig</link></simpara>
+</section>
+
+<section xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用<literal>std.debug</literal>配置恐慌行为并收集堆栈信息。</simpara>
+</listitem>
+<listitem>
+<simpara>使用感知stderr的写入器和堆栈捕获API，而不会将不稳定地址泄漏到日志中。</simpara>
+</listitem>
+<listitem>
+<simpara>为Valgrind Memcheck注释自定义分配，并在运行时安全地查询泄漏计数器。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="std-debug-overview">
+<title>使用<literal>std.debug</literal>进行诊断</title>
+<simpara><literal>std.debug</literal>是标准库的断言、恐慌钩子和堆栈展开的集结地。该模块将默认恐慌桥（<literal>std.debug.simple_panic</literal>）与可配置的<literal>FullPanic</literal>助手一起保存，该助手将每个安全检查都导入到您自己的处理程序中。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/debug/simple_panic.zig">simple_panic.zig</link>无论您是在检测测试还是收紧发布版本，这都是决定<literal>unreachable</literal>执行时会发生什么的层。</simpara>
+
+<section xml:id="std-debug-panic-strategies">
+<title>恐慌策略和安全模式</title>
+<simpara>默认情况下，失败的<literal>std.debug.assert</literal>或<literal>unreachable</literal>会导致对<literal>@panic</literal>的调用，该调用会委托给活动恐慌处理程序。您可以通过定义根级<literal>pub fn panic(message: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn</literal>来全局覆盖它，或通过<literal>std.debug.FullPanic(custom)</literal>组合一个定制处理程序，以在交换终止语义的同时保留Zig的丰富错误消息。这在嵌入式或服务模式二进制文件中特别有用，在这些二进制文件中，您更喜欢记录和干净关闭，而不是中止进程。请记住，安全功能是模式相关的——<literal>std.debug.runtime_safety</literal>在ReleaseFast和ReleaseSmall中评估为<literal>false</literal>，因此检测应在假设强制执行不变量之前检查该标志。</simpara>
+</section>
+
+<section xml:id="std-debug-stack-output">
+<title>捕获堆栈帧和管理stderr</title>
+<simpara>以下程序演示了几个<literal>std.debug</literal>原语：打印到stderr，锁定stderr以进行多行输出，捕获堆栈跟踪而不会暴露原始地址，以及报告构建参数。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 52__debug-and-valgrind.adoc - include::example$chapters-data/code/52__debug-and-valgrind/debug_diagnostics_station.zig[]</programlisting>
+<simpara>运行</simpara>
+<screen>$ zig run debug_diagnostics_station.zig</screen>
+<simpara>输出</simpara>
+<screen>[stderr] staged diagnostics
+[stderr] stack capture incoming
+frames captured -> 4
+runtime_safety -> enabled
+optimize_mode -> Debug
+captured slice -> panic probe</screen>
+<simpara>一些注意事项：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>std.debug.print</literal>始终以stderr为目标，因此它与任何结构化stdout报告保持分离。</simpara>
+</listitem>
+<listitem>
+<simpara>当您需要原子多行诊断时，请使用<literal>std.debug.lockStderrWriter</literal>；该助手会临时清除<literal>std.Progress</literal>覆盖。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.debug.captureStackTrace</literal>写入<literal>std.builtin.StackTrace</literal>缓冲区。仅发出帧计数可避免泄漏ASLR敏感地址，并使日志输出具有确定性。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>格式化程序访问来自<literal>std.fs.File.stdout().writer()</literal>返回的写入器接口，它镜像了前面章节中的方法。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="std-debug-introspection">
+<title>内省符号和二进制文件</title>
+<simpara><literal>std.debug.getSelfDebugInfo()</literal>按需打开当前二进制文件的DWARF或PDB表，并缓存它们以供后续查找。使用该句柄，您可以将指令地址解析为包含函数名称、编译单元和可选源位置的<literal>std.debug.Symbol</literal>记录。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/debug/SelfInfo.zig">SelfInfo.zig</link>您无需在热路径中支付该成本：首先存储地址（或堆栈快照），然后在遥测工具中或生成错误报告时延迟解析它们。在剥离调试信息或不可用的平台上，API返回<literal>error.MissingDebugInfo</literal>，因此请将其包装在仅打印模块名称的回退中。</simpara>
+</section>
+</section>
+
+<section xml:id="std-valgrind-overview">
+<title>使用<literal>std.valgrind</literal>进行检测</title>
+<simpara><literal>std.valgrind</literal>镜像Valgrind的客户端请求，同时在<literal>builtin.valgrind_support</literal>为false时编译为无操作，保持您的二进制文件可移植。您可以通过<literal>std.valgrind.runningOnValgrind()</literal>在运行时检测Valgrind（可用于抑制生成大量工作负载的自测试），并使用<literal>std.valgrind.countErrors()</literal>查询累积的错误计数。</simpara>
+
+<section xml:id="std-valgrind-memcheck">
+<title>为Memcheck标记自定义分配</title>
+<simpara>当您推出自己的分配器时，Memcheck无法推断哪些缓冲区处于活动状态，除非您对它们进行注释。以下示例显示了规范模式：宣布一个块，调整其定义，运行快速泄漏检查，并在完成后释放该块。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 52__debug-and-valgrind.adoc - include::example$chapters-data/code/52__debug-and-valgrind/valgrind_integration_probe.zig[]</programlisting>
+<simpara>运行</simpara>
+<screen>$ zig run valgrind_integration_probe.zig</screen>
+<simpara>输出</simpara>
+<screen>running_on_valgrind -> no
+leaks_bytes -> 0
+errors_seen -> 0</screen>
+<simpara>即使在Valgrind之外，调用也会成功——当客户端支持不存在时，每个请求都会降级为存根——因此您可以将检测留在发布二进制文件中，而无需在构建标志上进行门控。值得记住的顺序是：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>std.valgrind.mallocLikeBlock</literal>在您从自定义分配器获取内存后立即执行。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.valgrind.memcheck.createBlock</literal>使用零终止标签，以便Memcheck报告使用您期望的名称。</simpara>
+</listitem>
+<listitem>
+<simpara>可选的范围调整，例如<literal>makeMemNoAccess</literal>和<literal>makeMemDefinedIfAddressable</literal>，当您故意毒化或取消毒化保护字节时。</simpara>
+</listitem>
+<listitem>
+<simpara>在底层分配器释放内存之前，匹配<literal>std.valgrind.freeLikeBlock</literal>（和<literal>memcheck.discard</literal>）。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+</section>
+
+<section xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara>堆栈捕获依赖于调试信息；在剥离的构建或不受支持的目标中，<literal>std.debug.captureStackTrace</literal>回退到空结果，因此请使用优雅降级包装诊断。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.debug.FullPanic</literal>在每个安全违规上执行。确保处理程序仅执行异步信号安全操作，如果您计划从多个执行器线程记录。</simpara>
+</listitem>
+<listitem>
+<simpara>Valgrind注释在本机运行中很便宜，但不涵盖基于清理程序的工具——当您需要确定性CI覆盖时，请优先选择编译器清理程序（ASan/TSan）。<xref linkend="37__illegal-behavior-and-safety-modes" xrefstyle="short">37</xref></simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>实现一个自定义恐慌处理程序，使用<literal>std.debug.FullPanic</literal>记录到环形缓冲区，然后在调试模式下转发到默认处理程序。</simpara>
+</listitem>
+<listitem>
+<simpara>扩展<literal>debug_diagnostics_station.zig</literal>，以便通过<literal>std.debug.getSelfDebugInfo()</literal>将堆栈捕获解析为符号名称，缓存结果以避免重复查找。</simpara>
+</listitem>
+<listitem>
+<simpara>修改<literal>valgrind_integration_probe.zig</literal>以包装一个块分配器：在表中记录每个活动跨度，并仅在进程关闭时调用<literal>std.valgrind.memcheck.doQuickLeakCheck()</literal>。<xref linkend="10__allocators-and-memory-management" xrefstyle="short">10</xref></simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案、边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>std.debug.dumpCurrentStackTrace</literal>打印由于ASLR而每次运行都会变化的绝对地址和源路径；捕获到内存缓冲区并在发送遥测之前编辑易变字段。</simpara>
+</listitem>
+<listitem>
+<simpara>Valgrind的客户端请求依赖于基于<literal>xchg</literal>的握手，在Valgrind不支持的架构上是无操作的——<literal>runningOnValgrind()</literal>将始终在那里返回零。</simpara>
+</listitem>
+<listitem>
+<simpara>Memcheck注释不会取代结构化测试；将它们与Zig的泄漏检测（<literal>zig test --detect-leaks</literal>）结合使用，以获得确定性回归覆盖。<xref linkend="13__testing-and-leak-detection" xrefstyle="short">13</xref></simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+</article>
+</book>

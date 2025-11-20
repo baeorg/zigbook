@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>动态字符串构建器</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>本项目将前一章中的原始分配器模式转化为一个专注的工具：一个动态字符串构建器，可以拼接报告、日志和模板，而无需在你的代码中到处散布<literal>[]u8</literal>簿记。通过包装<literal>std.ArrayList(u8)</literal>，我们保持摊销O(1)的追加操作，暴露增长指标用于调试，并在缓冲区准备就绪时轻松地将所有权交给调用者；参见<link xl:href="10__allocators-and-memory-management.xml">10</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/array_list.zig">array_list.zig</link>。</simpara>
+<simpara>真实的程序运行在多个分配器上，因此我们还对构建器进行压力测试，针对堆栈缓冲区、竞技场和通用分配器。结果是一个你可以放入CLI、模板任务或日志子系统的模式，无论何时你需要灵活但显式的字符串组装；参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/heap.zig">heap.zig</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>制作一个可重用的<literal>StringBuilder</literal>包装器，在依赖<literal>std.ArrayList(u8)</literal>进行存储的同时跟踪增长事件；参见<link xl:href="chapters-data/code/11__project-dynamic-string-builder/string_builder.zig">string_builder.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>通过<literal>std.io.GenericWriter</literal>驱动构建器，使格式化打印与普通追加操作组合；参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/io/writer.zig">writer.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>std.heap.stackFallback</literal>在堆栈缓冲区、竞技场和堆分配器之间为动态文本工作流进行选择。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="builder-blueprint">
+<title>构建器蓝图</title>
+<simpara>核心实用程序位于<literal>string_builder.zig</literal>中：一个薄结构体，存储调用者的分配器、一个<literal>std.ArrayList(u8)</literal>缓冲区，以及一些用于追加、格式化和增长遥测的辅助函数。每个操作都通过你选择的分配器进行，因此将构建器交给不同的分配器会立即改变其行为。</simpara>
+<section xml:id="builder-blueprint-core">
+<title>渲染结构化摘要</title>
+<simpara>要查看构建器的实际运行情况，以下程序组合了一个简短的报告，捕获长度/容量/增长的快照，并将拥有的切片返回给调用者。构建器将清理推迟到<literal>defer builder.deinit()</literal>，因此即使<literal>toOwnedSlice</literal>移动了缓冲区，周围的作用域也保持无泄漏。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 11__project-dynamic-string-builder.adoc - include::example$chapters-data/code/11__project-dynamic-string-builder/builder_core.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run builder_core.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Report
+======
+source: dynamic builder
+
+* 1. widgets: 7
+* 2. gadgets: 13
+* 3. doodads: 2
+
+summary: appended 3 entries
+
+---
+.{ .length = 88, .capacity = 224, .growth_events = 1 }</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>snapshot()</literal>足够廉价，可以在你需要确认给定工作负载保持在特定容量范围内时随意散布在你的代码中。</simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="allocators-in-action">
+<title>分配器实战</title>
+<simpara>分配器定义了构建器在压力下的行为方式：<literal>stackFallback</literal>提供极快的堆栈写入，直到缓冲区溢出；竞技场允许你批量释放整个代；GPA保持泄漏检测有效。本节演示相同的构建器代码如何适应不同的分配策略。</simpara>
+<section xml:id="allocators-fallback">
+<title>带有竞技场安全网的堆栈缓冲区</title>
+<simpara>这里我们将构建器包装在一个堆栈支持的分配器中，一旦256字节的暂存空间填满，就会回退到竞技场。输出显示小报告如何保持在堆栈缓冲区内，而较大的报告如何溢出到竞技场并增长四次；参见<link xl:href="10__allocators-and-memory-management.xml">10</link>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 11__project-dynamic-string-builder.adoc - include::example$chapters-data/code/11__project-dynamic-string-builder/allocator_fallback.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run allocator_fallback.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">small buffer -&gt;
+label: stack-only
+0: +40 KiB
+1: +16 KiB
+2: +13 KiB
+3: +31 KiB
+4: +44 KiB
+5: +9 KiB
+total: 153 KiB across 6 samples
+stats: .{ .length = 115, .capacity = 128, .growth_events = 1 }
+
+large buffer -&gt;
+label: needs-arena
+0: +35 KiB
+1: +29 KiB
+2: +33 KiB
+3: +14 KiB
+4: +33 KiB
+5: +20 KiB
+6: +36 KiB
+7: +21 KiB
+8: +11 KiB
+9: +58 KiB
+10: +22 KiB
+11: +53 KiB
+12: +21 KiB
+13: +41 KiB
+14: +30 KiB
+15: +20 KiB
+16: +10 KiB
+17: +39 KiB
+18: +46 KiB
+19: +59 KiB
+20: +33 KiB
+21: +8 KiB
+22: +30 KiB
+23: +22 KiB
+24: +28 KiB
+25: +32 KiB
+26: +48 KiB
+27: +50 KiB
+28: +61 KiB
+29: +53 KiB
+30: +30 KiB
+31: +27 KiB
+32: +42 KiB
+33: +24 KiB
+34: +32 KiB
+35: +58 KiB
+36: +60 KiB
+37: +27 KiB
+38: +40 KiB
+39: +17 KiB
+40: +50 KiB
+41: +50 KiB
+42: +42 KiB
+43: +54 KiB
+44: +61 KiB
+45: +10 KiB
+46: +25 KiB
+47: +50 KiB
+total: 1695 KiB across 48 samples
+stats: .{ .length = 618, .capacity = 1040, .growth_events = 4 }</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>stackFallback(N, allocator)</literal>每个实例只允许一次<literal>.get()</literal>调用；当你需要多个并发构建器时，启动一个新的回退包装器。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="growth-planning">
+<title>增长规划</title>
+<simpara>构建器记录容量改变的次数，这对于分析"盲目追加"和"预先调整大小一次"之间的差异非常理想。下一个示例显示两种路径产生相同的文本，而计划版本将增长保持在单次重新分配。</simpara>
+<section xml:id="growth-planning-compare">
+<title>预先调整大小 vs 朴素追加</title>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 11__project-dynamic-string-builder.adoc - include::example$chapters-data/code/11__project-dynamic-string-builder/growth_comparison.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run growth_comparison.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">naive -&gt; .{ .length = 186, .capacity = 320, .growth_events = 2 }
+alpha beta gamma delta epsilon zeta eta theta
+iota kappa lambda mu nu xi omicron pi
+rho sigma tau upsilon phi chi psi omega
+aurora borealis cosmos nebula quasar pulsar singularity zenith
+
+planned -&gt; .{ .length = 186, .capacity = 320, .growth_events = 1 }
+alpha beta gamma delta epsilon zeta eta theta
+iota kappa lambda mu nu xi omicron pi
+rho sigma tau upsilon phi chi psi omega
+aurora borealis cosmos nebula quasar pulsar singularity zenith</programlisting>
+</para>
+</formalpara>
+<warning>
+<simpara>增长计数取决于分配器策略——切换到固定缓冲区或竞技场会改变容量扩展的时间。在比较配置文件时，跟踪统计数据和选择的分配器。</simpara>
+</warning>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>toOwnedSlice</literal>将所有权交给调用者；记得使用你传递给<literal>StringBuilder</literal>的相同分配器进行释放。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>stackFallback</literal>每次调用<literal>.get()</literal>时都会清零暂存缓冲区；如果你需要持久重用，请保留返回的分配器，而不是重复调用<literal>.get()</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>reset()</literal>清除内容但保留容量，因此在紧密循环中重建字符串的热路径中优先使用它。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>使用由<literal>std.io.Writer.Allocating</literal>驱动的<literal>appendFormat(comptime fmt, args)</literal>辅助函数扩展<literal>StringBuilder</literal>，然后比较其分配与重复<literal>writer.print</literal>调用的差异。</simpara>
+</listitem>
+<listitem>
+<simpara>构建一个CLI，将JSON记录流式传输到构建器中，通过命令行标志在GPA和竞技场分配器之间切换；参见<link xl:href="05__project-tempconv-cli.xml">05</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>通过将构建器管道传输到<literal>std.fs.File.writer()</literal>并将Markdown报告输出到磁盘，并验证最终切片与写入的字节匹配；参见<link xl:href="06__project-grep-lite.xml">06</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs.zig">fs.zig</link>。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>非常大的字符串可能分配千兆字节——一旦<literal>length</literal>超过安全阈值，请保护输入或流式传输到磁盘。</simpara>
+</listitem>
+<listitem>
+<simpara>当组合多个构建器时，共享单个竞技场或GPA，以便所有权链保持简单且泄漏检测保持准确。</simpara>
+</listitem>
+<listitem>
+<simpara>如果延迟比分配更重要，直接发送到缓冲写入器，并仅对真正需要随机访问编辑的部分使用构建器；参见<link xl:href="09__project-hexdump.xml">09</link>。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

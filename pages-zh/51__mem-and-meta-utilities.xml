@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>内存与元编程工具</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>在上一章处理随机性与数值助手之后，我们转向将许多 Zig 子系统粘合在一起的切片管线与反射原语（<link xl:href="50__random-and-math.xml">50</link>）。<literal>std.mem</literal>为任意形状数据的分词、修剪、搜索与复制建立可预测规则；<literal>std.meta</literal>则暴露足够的类型信息，以在不放弃静态保证的前提下构建轻量泛型助手。它们共同使你能解析配置文件、内省用户自定义结构，并以标准库贯穿的零成本抽象拼接数据管线。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig">meta.zig</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用 <literal>std.mem.tokenize*</literal>、<literal>std.mem.split*</literal> 和搜索例程跨切片迭代，而不分配。</simpara>
+</listitem>
+<listitem>
+<simpara>就地规范化或重写切片内容，并使用 <literal>std.mem.join</literal> 及其同类聚合结果，即使从堆栈缓冲区工作也是如此。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/heap.zig">heap.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>std.meta.FieldEnum</literal>、<literal>std.meta.fields</literal> 和 <literal>std.meta.stringToEnum</literal> 反射结构字段，以构建小型架构感知实用程序。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="mem-slice-plumbing">
+<title>使用<literal>std.mem</literal>进行切片管线</title>
+<simpara>分词、分割和重写都围绕相同的想法：使用借用的切片而不是分配新字符串。因此大多数 <literal>std.mem</literal> 助手接受借用的缓冲区并返回对原始数据的切片，让您控制生命周期和复制。</simpara>
+<section xml:id="mem-tokenization-vs-splitting">
+<title>分词与分割的区别</title>
+<simpara>下一个示例处理一个模拟的配置数据块：对行进行分词、修剪空白、查找<literal>key=value</literal>键值对，并就地规范化模式名称，然后通过固定缓冲分配器连接剩余路径列表。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 51__mem-and-meta-utilities.adoc - include::example$chapters-data/code/51__mem-and-meta-utilities/mem_token_workbench.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run mem_token_workbench.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">normalized mode -&gt; fast_render
+log level -&gt; warn
+roots (2)
+  [0] /srv/www
+  [1] /srv/cache
+extra segments -&gt; /opt/tools, /opt/tools/bin</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>当你希望完全跳过分隔符时，优先使用<literal>std.mem.tokenize*</literal>系列；当空片段有意义（例如需要检测重复分隔符）时，使用<literal>std.mem.split*</literal>系列。</simpara>
+</tip>
+</section>
+<section xml:id="mem-copy-rewrite">
+<title>复制、重写与聚合切片</title>
+<simpara><literal>std.mem.copyForwards</literal> 在向前复制时保证安全的重叠，而 <literal>std.mem.replaceScalar</literal> 让您就地规范化字符而无需触及分配。一旦您有了关心的切片，请将 <literal>std.mem.join</literal> 与 <literal>std.heap.FixedBufferAllocator</literal> 一起使用，以将它们合并到单个视图中，而无需回退到通用堆。密切关注缓冲区长度（如示例中对 <literal>mode_buffer</literal> 所做的那样），以确保重写步骤保持边界安全。</simpara>
+</section>
+</chapter>
+<chapter xml:id="meta-reflection">
+<title>使用<literal>std.meta</literal>的反射助手</title>
+<simpara>当 <literal>std.mem</literal> 保持数据流动时，<literal>std.meta</literal> 帮助描述它。该库公开字段元数据、对齐和枚举标签，以便您可以构建模式感知工具而无需宏系统或运行时类型信息。</simpara>
+<section xml:id="meta-field-overrides">
+<title>用<literal>FieldEnum</literal>驱动字段覆盖</title>
+<simpara>该示例定义了<literal>Settings</literal>结构体、打印模式摘要，并通过<literal>std.meta.FieldEnum</literal>分派应用从字符串解析得到的覆盖。每次赋值都以静态类型代码完成，同时借助<literal>std.meta.stringToEnum</literal>与结构体的默认值支持动态键查找。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 51__mem-and-meta-utilities.adoc - include::example$chapters-data/code/51__mem-and-meta-utilities/meta_struct_report.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run meta_struct_report.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">settings schema:
+  - render: bool (align 1) default=false
+  - retries: u8 (align 1) default=1
+  - mode: []const u8 (align 1) default=slow
+  - log_level: []const u8 (align 1) default=info
+  - extra_paths: []const u8 (align 1) default=
+resolved values:
+  render =&gt; true
+  retries =&gt; 4
+  mode =&gt; fast-render
+  log_level =&gt; info
+  extra_paths =&gt; /srv/www:/srv/cache
+field tags visited: { .render, .retries, .mode, .log_level, .extra_paths }
+parsing failures: 0</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>std.meta.tags(FieldEnum(T))</literal> materialises an array of field tags at comptime, making it cheap to track which fields a routine has touched without runtime reflection.</simpara>
+</note>
+</section>
+<section xml:id="meta-schema-patterns">
+<title>模式：检查结构化模式</title>
+<simpara>通过将 <literal>std.meta.fields</literal> 与 <literal>@field</literal> 结合，您可以发出文档表或为编辑器集成准备轻量级 LSP 模式。<literal>std.meta.alignment</literal> 报告每个字段类型的自然对齐，而字段迭代器公开默认值，以便您可以在用户提供的覆盖旁边显示合理的回退。因为一切都在编译时发生，生成的代码编译为少数常量和直接加载。</simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>进行分词时请注意返回的切片与原始缓冲别名；在源数据失效前，请先修改或复制这些切片。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.mem.join</literal> 通过提供的分配器进行分配——栈缓冲区分配器对于短连接效果很好，但一旦您预期无界数据，就切换到通用分配器。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.meta.stringToEnum</literal> 对大型枚举执行线性扫描；当大规模解析不受信任的输入时，缓存结果或构建查找表。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展 <literal>mem_token_workbench.zig</literal> 以在连接之前通过 <literal>std.mem.sort</literal> 和 <literal>std.mem.indexOf</literal> 排序或去重切片列表来检测重复根。</simpara>
+</listitem>
+<listitem>
+<simpara>通过将 <literal>std.meta.fields</literal> 与 <literal>std.json.StringifyStream</literal> 配对，扩充 <literal>meta_struct_report.zig</literal> 以发出 JSON，保持编译时模式但提供机器可读输出。<link xl:href="32__project-http-json-client.xml">32</link></simpara>
+</listitem>
+<listitem>
+<simpara>向覆盖解析器添加 <literal>strict</literal> 标志，要求 <literal>FieldEnum(Settings)</literal> 中的每个键至少出现一次，使用 <literal>std.meta.tags</literal> 跟踪覆盖。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>如果您需要保留分隔符的分隔符感知迭代，请回退到 <literal>std.mem.SplitIterator</literal>——分词器总是丢弃分隔符切片。</simpara>
+</listitem>
+<listitem>
+<simpara>对于非常大的配置块，考虑 <literal>std.mem.terminated</literal> 和哨兵切片，以便您可以流式传输部分而不将整个文件复制到内存中。<link xl:href="28__filesystem-and-io.xml">28</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.meta</literal> 有意仅公开编译时数据；如果您需要运行时反射，您必须自己生成它（例如，通过发出查找表的构建步骤）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

@@ -1,0 +1,457 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>Zig包管理器深入</title>
+<subtitle>Zig包管理器和build.zig.zon（深入）</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>第22章介绍了构建系统用于创建工件和配置构建的API；第23章演示了使用库和可执行文件的工作区组织。本章通过检查<strong>依赖管理</strong>来完成构建系统基础——Zig项目如何通过<code class="monospace">build.zig.zon</code>清单和Zig工具链内置的包管理器声明、获取、验证、缓存和集成外部包。 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build.zig">Build.zig</link>
+</simpara>
+<simpara>与传统的作为具有自己元数据格式和解析算法的独立工具运行的包管理器不同，Zig的包管理器是构建系统本身的组成部分，利用与编译工件相同的确定性缓存基础设施（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build/Cache.zig">Cache.zig</link>）。<code class="monospace">build.zig.zon</code>文件——一个Zig对象表示（ZON）文档——作为包元数据、依赖声明和包含规则的单一事实来源，而<code class="monospace">build.zig</code>编排这些依赖如何集成到项目的模块图中。 <xref xl:href="20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.adoc">20</xref>
+</simpara>
+<simpara>到本章结束时，你将理解依赖的完整生命周期：从<code class="monospace">build.zig.zon</code>中的声明，通过加密验证和缓存，到模块注册和在Zig源代码中的导入。你还将学习可重现构建的模式、延迟依赖加载，以及平衡便利性和安全性的本地开发工作流。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>理解<code class="monospace">build.zig.zon</code>清单文件的结构和语义（参见<link xl:href="https://github.com/ziglang/zig/blob/master/lib/init/build.zig.zon">build.zig.zon模板</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>使用基于URL的获取和基于路径的本地引用来声明依赖。</simpara>
+</listitem>
+<listitem>
+<simpara>解释加密哈希在依赖验证和内容寻址中的作用。</simpara>
+</listitem>
+<listitem>
+<simpara>导航从获取到缓存到可用性的依赖解析管道。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<code class="monospace">b.dependency()</code>和<code class="monospace">b.lazyDependency()</code>将获取的依赖集成到<code class="monospace">build.zig</code>中。</simpara>
+</listitem>
+<listitem>
+<simpara>区分急切和延迟依赖加载策略。</simpara>
+</listitem>
+<listitem>
+<simpara>理解可重现性保证：锁文件、哈希验证和确定性清单。</simpara>
+</listitem>
+<listitem>
+<simpara>使用全局包缓存并理解离线构建工作流。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<code class="monospace">zig fetch</code>命令进行依赖管理。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="build-zig-zon-schema">
+<title><code class="monospace">build.zig.zon</code>模式</title>
+<simpara><code class="monospace">build.zig.zon</code>文件是一种Zig原生数据格式——本质上是一个匿名结构体字面量——用于描述包元数据。它在构建时由Zig编译器解析，提供强类型化和熟悉的语法，同时保持人类可读性和简单的编写。与JSON或TOML不同，ZON受益于Zig的编译时评估，允许在构建过程中验证和转换结构化数据。</simpara>
+<section xml:id="minimal-manifest">
+<title>最小清单</title>
+<simpara>每个<code class="monospace">build.zig.zon</code>文件必须至少声明包名、版本和支持的最低Zig版本：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 24__zig-package-manager-deep.adoc - include::example$chapters-data/code/24__zig-package-manager-deep/01_minimal_manifest.zig.zon[]</programlisting>
+<simpara><code class="monospace">.paths</code>字段指定当此包被另一个项目获取时包含哪些文件和目录。此包含列表直接影响计算的包哈希——只有列出的文件才对哈希有贡献，确保确定性的内容寻址。</simpara>
+<tip>
+<simpara><code class="monospace">.paths</code>字段既充当包含过滤器，又充当文档辅助工具。始终列出<code class="monospace">build.zig</code>、<code class="monospace">build.zig.zon</code>和源目录。排除生成文件、测试工件和不应成为包规范内容一部分的编辑器特定文件。</simpara>
+</tip>
+</section>
+<section xml:id="package-identity-fields">
+<title>包标识和版本控制</title>
+<simpara><code class="monospace">.name</code>和<code class="monospace">.version</code>字段共同建立包标识。从Zig 0.15.2开始，包管理器尚未执行自动版本解析或去重，但这些字段为未来的增强功能做准备，并帮助人类维护者理解包关系。</simpara>
+<simpara><code class="monospace">.minimum_zig_version</code>字段传达兼容性期望。当包声明最低版本时，如果当前Zig工具链较旧，构建系统将拒绝继续，防止由于缺少功能或更改的语义而导致的模糊编译失败。</simpara>
+<simpara><code class="monospace">.fingerprint</code>字段（在最小示例中省略但在模板中显示）是在包创建时生成且此后永不更改的唯一标识符。此指纹可以明确地检测包分支和更新，防止试图冒充上游项目的敌对分支。</simpara>
+<warning>
+<simpara>更改<code class="monospace">.fingerprint</code>具有安全性和信任影响。它表示此包与其来源不同，这可能会破坏信任链并在未来的Zig版本中混淆依赖解析。</simpara>
+</warning>
+</section>
+<section xml:id="declaring-dependencies">
+<title>声明依赖</title>
+<simpara>依赖在<code class="monospace">.dependencies</code>结构中声明。每个依赖必须提供<code class="monospace">.url</code>和<code class="monospace">.hash</code>对（用于远程包）或<code class="monospace">.path</code>（用于本地包）：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 24__zig-package-manager-deep.adoc - include::example$chapters-data/code/24__zig-package-manager-deep/02_with_dependency.zig.zon[]</programlisting>
+<simpara>基于URL的依赖从网络获取，根据提供的哈希进行验证，并全局缓存。基于路径的依赖引用构建根目录相对目录，在本地开发期间或供应商依赖时很有用。</simpara>
+<simpara>哈希使用多哈希格式，其中前缀<code class="monospace">1220</code>表示SHA-256。这种内容寻址方法确保包通过其内容而不是URL来标识，使包管理器能够抵御URL更改和镜像可用性。</simpara>
+<important>
+<simpara><code class="monospace">.hash</code>字段是事实来源——包不是来自URL；它们来自哈希。URL只是获取与哈希匹配内容的一个可能镜像。这种设计将包标识（内容）与包位置（URL）分开。</simpara>
+</important>
+</section>
+<section xml:id="lazy-dependencies">
+<title>延迟与急切依赖</title>
+<simpara>默认情况下，所有声明的依赖都是<strong>急切</strong>的：它们在构建脚本运行之前获取和验证。对于仅在特定条件下需要的可选依赖（例如，调试工具、基准测试工具或平台特定扩展），你可以使用<code class="monospace">.lazy = true</code>将它们标记为<strong>延迟</strong>：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 24__zig-package-manager-deep.adoc - include::example$chapters-data/code/24__zig-package-manager-deep/03_lazy_dependency.zig.zon[]</programlisting>
+<simpara>延迟依赖直到<code class="monospace">build.zig</code>通过<code class="monospace">b.lazyDependency()</code>显式请求它们时才会获取。如果构建脚本从未对给定包调用<code class="monospace">lazyDependency()</code>，则该包保持未获取状态，节省下载时间和磁盘空间。</simpara>
+<simpara>这种两阶段方法允许构建脚本声明可选依赖，而无需强制所有用户下载它们。当请求延迟依赖但尚不可用时，构建运行器将获取它，然后重新运行构建脚本——一个平衡灵活性与确定性的透明过程。</simpara>
+</section>
+</chapter>
+<chapter xml:id="resolution-pipeline">
+<title>依赖解析管道</title>
+<simpara>理解Zig如何将<code class="monospace">.dependencies</code>声明转换为可用模块，阐明了包管理器的设计，并有助于调试获取失败或集成问题。</simpara>
+<section xml:id="parse-and-validate">
+<title>1. 解析和验证</title>
+<simpara>当你运行<code class="monospace">zig build</code>时，编译器首先将<code class="monospace">build.zig.zon</code>解析为ZON字面量（参见<link xl:href="https://github.com/ziglang/zig/blob/master/lib/compiler/build_runner.zig">build_runner.zig</link>）。此解析步骤验证语法并确保所有必需字段都存在。编译器检查：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>每个依赖都有<code class="monospace">.url</code>+<code class="monospace">.hash</code>或<code class="monospace">.path</code>（但不能同时有）</simpara>
+</listitem>
+<listitem>
+<simpara>哈希字符串使用有效的多哈希编码</simpara>
+</listitem>
+<listitem>
+<simpara><code class="monospace">.minimum_zig_version</code>不比运行中的工具链新</simpara>
+</listitem>
+</itemizedlist>
+</section>
+<section xml:id="fetch-and-verify">
+<title>2. 获取和验证</title>
+<simpara>对于每个具有<code class="monospace">.url</code>的<strong>急切</strong>依赖，构建运行器：</simpara>
+<orderedlist>
+<listitem>
+<simpara>从哈希计算唯一缓存键</simpara>
+</listitem>
+<listitem>
+<simpara>检查包是否存在于全局缓存中（在类Unix系统上为<code class="monospace">~/.cache/zig/p/&lt;hash&gt;/</code>）</simpara>
+</listitem>
+<listitem>
+<simpara>如果尚未缓存，下载URL内容</simpara>
+</listitem>
+<listitem>
+<simpara>如果需要，提取存档（支持<code class="monospace">.tar.gz</code>、<code class="monospace">.tar.xz</code>、<code class="monospace">.zip</code>）</simpara>
+</listitem>
+<listitem>
+<simpara>应用依赖自己<code class="monospace">build.zig.zon</code>中的<code class="monospace">.paths</code>过滤器</simpara>
+</listitem>
+<listitem>
+<simpara>计算过滤内容的哈希</simpara>
+</listitem>
+<listitem>
+<simpara>验证它与声明的<code class="monospace">.hash</code>字段匹配</simpara>
+</listitem>
+<listitem>
+<simpara>将验证的内容存储在全局缓存中</simpara>
+</listitem>
+</orderedlist>
+<simpara>如果哈希验证失败，构建将中止，并显示明确的错误消息，指示哈希不匹配。这防止了供应链攻击，其中受损的镜像提供不同的内容。</simpara>
+<simpara>基于路径的依赖跳过获取步骤——它们始终相对于构建根目录可用。</simpara>
+</section>
+<section xml:id="cache-lookup">
+<title>3. 缓存查找和重用</title>
+<simpara>一旦包被缓存，后续构建就会重用缓存版本，无需重新下载或重新验证。全局缓存在系统上的所有Zig项目之间共享，因此一次获取流行依赖会使所有项目受益。</simpara>
+<simpara>缓存目录结构是内容寻址的：每个包的哈希直接映射到缓存子目录。这使得缓存管理透明且可预测——你可以检查缓存的包或清除缓存，而不会破坏构建状态的风险。</simpara>
+</section>
+<section xml:id="dependency-graph-construction">
+<title>4. 依赖图构建</title>
+<simpara>在所有急切依赖都可用后，构建运行器构建依赖图。每个包的<code class="monospace">build.zig</code>都作为Zig模块加载，并调用<code class="monospace">build()</code>函数来注册工件和步骤。</simpara>
+<simpara>延迟依赖<strong>不会</strong>在此阶段加载。相反，构建运行器将它们标记为"可能需要的"并继续。如果<code class="monospace">build.zig</code>为尚未获取的延迟包调用<code class="monospace">b.lazyDependency()</code>，则构建运行器记录请求，完成当前构建传递，获取延迟依赖，然后重新运行构建脚本。</simpara>
+<simpara>这种延迟获取机制允许构建脚本根据用户选项或目标特征有条件地加载依赖，而无需强制所有用户下载每个可选包。</simpara>
+<simpara>在内部，Zig在<code class="monospace">InternPool</code>中记录对ZON清单和其他依赖者的依赖，以便对<code class="monospace">build.zig.zon</code>或嵌入文件的更改只能使依赖于它们的分析单元失效：</simpara>
+<informalfigure>
+<mediaobject>
+<imageobject>
+<imagedata fileref="mermaid-1.png"/>
+</imageobject>
+</mediaobject>
+</informalfigure>
+<simpara>ZON文件参与与此基础设施相同的增量编译图：<code class="monospace">.dependencies</code>条目在<code class="monospace">build.zig.zon</code>中最终转换为ZON文件依赖者和参与相同依赖系统的缓存内容。</simpara>
+<simpara>更广泛地说，ZON清单只是编译器跟踪的几个<emphasis>依赖者</emphasis>类别之一；在高级别上，这些组如下所示：</simpara>
+<informalfigure>
+<mediaobject>
+<imageobject>
+<imagedata fileref="mermaid-2.png"/>
+</imageobject>
+</mediaobject>
+</informalfigure>
+<simpara>包管理器位于此基础设施之上：<code class="monospace">.dependencies</code>条目在<code class="monospace">build.zig.zon</code>中最终转换为ZON文件依赖者和参与相同依赖系统的缓存内容。</simpara>
+</section>
+<section xml:id="conceptual-example">
+<title>概念示例：解析管道</title>
+<simpara>以下示例演示了依赖解析的逻辑流程：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 24__zig-package-manager-deep.adoc - include::example$chapters-data/code/24__zig-package-manager-deep/07_resolution_pipeline_demo.zig[]</programlisting>
+<simpara>运行</simpara>
+<screen>$ zig run 07_resolution_pipeline_demo.zig</screen>
+<simpara>输出</simpara>
+<screen>=== Zig包管理器解析管道 ===
+
+1. 解析build.zig.zon依赖
+
+2. 解析急切依赖
+   - core: 本地路径 '../core' → 可用
+   - utils: 获取 → 验证 → 缓存 → 可用
+
+3. 延迟依赖（直到使用时才延迟）
+   - optional_viz: 等待lazyDependency()调用
+
+4. 构建脚本请求延迟依赖
+   - optional_viz 请求 → 现在获取
+
+5. 缓存位置
+   - 全局: ~/.cache/zig/p/&lt;hash&gt;/
+   - 项目: .zig-cache/
+
+=== 解析完成 ===</screen>
+<simpara>此概念模型与构建运行器和标准库中的实际实现相匹配。</simpara>
+</section>
+</chapter>
+<chapter xml:id="integrating-dependencies">
+<title>在<code class="monospace">build.zig</code>中集成依赖</title>
+<simpara>在<code class="monospace">build.zig.zon</code>中声明依赖使其可用于获取；将其集成到构建中需要在<code class="monospace">build.zig</code>中调用<code class="monospace">b.dependency()</code>或<code class="monospace">b.lazyDependency()</code>以获取<code class="monospace">*std.Build.Dependency</code>句柄，然后从该依赖中提取模块或工件。</simpara>
+<section xml:id="basic-dependency-usage">
+<title>使用<code class="monospace">b.dependency()</code></title>
+<simpara>对于急切依赖，使用<code class="monospace">b.dependency(name, args)</code>，其中<code class="monospace">name</code>匹配<code class="monospace">.dependencies</code>中的键，<code class="monospace">args</code>是包含要传递给依赖构建脚本的构建选项的结构体：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 24__zig-package-manager-deep.adoc - include::example$chapters-data/code/24__zig-package-manager-deep/04_build_with_dependency.zig[]</programlisting>
+<simpara><code class="monospace">b.dependency()</code>调用返回一个<code class="monospace">*Dependency</code>，它提供访问依赖工件（<code class="monospace">.artifact()</code>）、模块（<code class="monospace">.module()</code>）、延迟路径（<code class="monospace">.path()</code>）和命名写入文件（<code class="monospace">.namedWriteFiles()</code>）的方法。</simpara>
+<simpara><code class="monospace">args</code>参数将构建选项转发给依赖，允许你配置依赖的目标、优化级别或自定义功能。这确保依赖使用兼容的设置构建。</simpara>
+<tip>
+<simpara>始终将<code class="monospace">.target</code>和<code class="monospace">.optimize</code>传递给依赖，除非你有特定的不传递理由。不匹配的target设置可能导致链接错误或微妙的ABI不兼容性。</simpara>
+</tip>
+</section>
+<section xml:id="lazy-dependency-usage">
+<title>使用<code class="monospace">b.lazyDependency()</code></title>
+<simpara>对于延迟依赖，请改用<code class="monospace">b.lazyDependency(name, args)</code>。此函数返回<code class="monospace">?*Dependency</code>——如果依赖尚未获取，则为<code class="monospace">null</code>：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 24__zig-package-manager-deep.adoc - include::example$chapters-data/code/24__zig-package-manager-deep/05_lazy_dependency_usage.zig[]</programlisting>
+<simpara>当<code class="monospace">lazyDependency()</code>返回<code class="monospace">null</code>时，构建运行器记录请求并在获取缺失依赖后重新运行构建脚本。在第二次传递中，<code class="monospace">lazyDependency()</code>将成功，构建正常进行。</simpara>
+<simpara>此模式允许构建脚本有条件地包含可选功能，而无需强制所有用户获取这些依赖：</simpara>
+<screen>$ zig build                          # 仅核心功能
+$ zig build -Dbenchmarks=true        # 如果需要，获取benchmark_utils
+$ zig build -Ddebug-viz=true         # 如果需要，获取debug_visualizer</screen>
+<caution>
+<simpara>在同一包中混合使用<code class="monospace">b.dependency()</code>和<code class="monospace">b.lazyDependency()</code>是错误的。如果依赖在<code class="monospace">build.zig.zon</code>中标记为<code class="monospace">.lazy = true</code>，你<strong>必须</strong>使用<code class="monospace">b.lazyDependency()</code>。如果它是急切（默认），你<strong>必须</strong>使用<code class="monospace">b.dependency()</code>。构建系统强制执行此操作以防止不一致的获取行为。</simpara>
+</caution>
+</section>
+</chapter>
+<chapter xml:id="hash-verification-and-multihash">
+<title>哈希验证和多哈希</title>
+<simpara>加密哈希是Zig包管理器的核心，确保获取的内容与预期匹配，并防止篡改或损坏。</simpara>
+<section xml:id="multihash-format">
+<title>多哈希格式</title>
+<simpara>Zig使用多哈希格式来编码哈希摘要。多哈希字符串包括：</simpara>
+<orderedlist>
+<listitem>
+<simpara>指示哈希算法的前缀（例如，SHA-256为<code class="monospace">1220</code>）</simpara>
+</listitem>
+<listitem>
+<simpara>十六进制编码的哈希摘要</simpara>
+</listitem>
+</orderedlist>
+<simpara>对于SHA-256，前缀<code class="monospace">1220</code>分解为：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><code class="monospace">12</code>（十六进制）= SHA-256算法标识符</simpara>
+</listitem>
+<listitem>
+<simpara><code class="monospace">20</code>（十六进制）= 32字节= SHA-256摘要长度</simpara>
+</listitem>
+</itemizedlist>
+<simpara>以下示例演示了概念哈希计算（实际实现位于构建运行器和缓存系统中）：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 24__zig-package-manager-deep.adoc - include::example$chapters-data/code/24__zig-package-manager-deep/06_hash_verification_example.zig[]</programlisting>
+<simpara>运行</simpara>
+<screen>$ zig run 06_hash_verification_example.zig</screen>
+<simpara>输出</simpara>
+<screen>包哈希: 69b2de89d968f316b3679f2e68ecacb50fd3064e0e0ee7922df4e1ced43744d2
+build.zig.zon中的预期哈希: 122069b2de89d968f316b3679f2e68ecacb50fd3064e0e0ee7922df4e1ced43744d2
+
+注意: <code class="monospace">1220</code>前缀在多哈希格式中表示SHA-256。</screen>
+<simpara>编译器在决定是否为声明重用缓存的IR时，使用类似的"哈希 → 比较 → 重用"模式：</simpara>
+<informalfigure>
+<mediaobject>
+<imageobject>
+<imagedata fileref="mermaid-3.png"/>
+</imageobject>
+</mediaobject>
+</informalfigure>
+<simpara>这与包哈希在概念上是相同的：对于源代码和依赖，Zig计算内容哈希，将其与缓存值进行比较，要么重用缓存的工件，要么重新计算它们。</simpara>
+<simpara>在实践中，你很少需要手动计算哈希。<code class="monospace">zig fetch</code>命令自动化了此操作：</simpara>
+<screen>$ zig fetch https://example.com/package.tar.gz</screen>
+<simpara>Zig下载包，计算哈希，并打印你可以复制到<code class="monospace">build.zig.zon</code>中的完整多哈希字符串。</simpara>
+<note>
+<simpara>多哈希格式与未来的哈希算法向前兼容。如果Zig采用SHA-3或BLAKE3，新的前缀代码将标识这些算法，而不会破坏现有清单。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="reproducibility-guarantees">
+<title>可重现性和确定性构建</title>
+<simpara>可重现性——在给定相同输入的情况下重新创建相同构建输出的能力——是可靠软件分发的基石。Zig的包管理器通过内容寻址、哈希验证和显式版本控制为可重现性做出贡献。</simpara>
+<section xml:id="content-addressing">
+<title>内容寻址</title>
+<simpara>因为包通过哈希而不是URL来标识，所以包管理器本质上能够抵御URL更改、镜像故障和上游迁移。只要某些镜像提供与哈希匹配的内容，包就是可用的。</simpara>
+<simpara>这种内容寻址设计还防止了某些类别的供应链攻击：除非攻击者还破坏哈希函数（SHA-256），否则破坏单个镜像的攻击者无法注入恶意代码，这在计算上是不可行的。</simpara>
+<simpara>相同的内容寻址原则出现在Zig实现的其他地方：<code class="monospace">InternPool</code>存储每个不同的类型或值一次，并通过索引标识它，依赖跟踪建立在这些内容派生键而不是文件路径或文本名称之上。</simpara>
+</section>
+<section xml:id="lockfile-semantics">
+<title>锁文件语义和传递依赖</title>
+<simpara>从Zig 0.15.2开始，包管理器不生成单独的锁文件——<code class="monospace">build.zig.zon</code>本身充当锁文件。每个依赖的哈希锁定其内容，传递依赖通过直接依赖的哈希锁定（因为直接依赖的<code class="monospace">build.zig.zon</code>指定其自己的依赖）。</simpara>
+<simpara>这种方法简化了心理模型：有一个事实来源（<code class="monospace">build.zig.zon</code>），哈希链确保了传递性，无需额外的元数据文件。</simpara>
+<simpara>未来的Zig版本可能会为高级用例引入显式锁文件（例如，跟踪解析的URL或去重传递依赖），但核心内容寻址原则将保持不变。 <link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>
+</simpara>
+</section>
+<section xml:id="offline-builds">
+<title>离线构建和缓存可移植性</title>
+<simpara>一旦所有依赖都被缓存，你就可以无限期地离线构建。全局缓存在项目之间持续存在，因此一次获取依赖会使所有未来使用它的项目受益。</simpara>
+<simpara>为离线构建做准备：</simpara>
+<orderedlist>
+<listitem>
+<simpara>运行<code class="monospace">zig build --fetch</code>以获取所有声明的依赖项而不构建</simpara>
+</listitem>
+<listitem>
+<simpara>验证缓存是否已填充：<code class="monospace">ls ~/.cache/zig/p/</code></simpara>
+</listitem>
+<listitem>
+<simpara>断开网络连接并正常运行<code class="monospace">zig build</code></simpara>
+</listitem>
+</orderedlist>
+<simpara>如果你需要将带有依赖项的项目传输到隔离环境，你可以：</simpara>
+<orderedlist>
+<listitem>
+<simpara>在网络连接的机器上获取所有依赖项</simpara>
+</listitem>
+<listitem>
+<simpara>存档<code class="monospace">~/.cache/zig/p/</code>目录</simpara>
+</listitem>
+<listitem>
+<simpara>将存档提取到隔离机器上的相同缓存位置</simpara>
+</listitem>
+<listitem>
+<simpara>正常运行<code class="monospace">zig build</code></simpara>
+</listitem>
+</orderedlist>
+<note>
+<simpara>基于路径的依赖项（<code class="monospace">.path = "..."</code>）不需要网络访问，可以立即离线工作。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="zig-fetch-commands">
+<title>使用<code class="monospace">zig fetch</code>进行依赖管理</title>
+<simpara><code class="monospace">zig fetch</code>命令提供了一个CLI，用于在不手动编辑<code class="monospace">build.zig.zon</code>的情况下管理依赖项。</simpara>
+<section xml:id="fetching-and-saving">
+<title>获取和保存依赖项</title>
+<simpara>要添加新依赖项：</simpara>
+<screen>$ zig fetch --save https://github.com/example/package/archive/v1.0.0.tar.gz</screen>
+<simpara>此命令：</simpara>
+<orderedlist>
+<listitem>
+<simpara>下载URL</simpara>
+</listitem>
+<listitem>
+<simpara>计算哈希</simpara>
+</listitem>
+<listitem>
+<simpara>在<code class="monospace">build.zig.zon</code>中的<code class="monospace">.dependencies</code>中添加条目</simpara>
+</listitem>
+<listitem>
+<simpara>保存包名和哈希</simpara>
+</listitem>
+</orderedlist>
+<simpara>然后你可以在<code class="monospace">build.zig</code>中按名称引用依赖项。</simpara>
+</section>
+<section xml:id="fetching-without-saving">
+<title>获取而不保存</title>
+<simpara>要获取URL并打印其哈希而不修改<code class="monospace">build.zig.zon</code>：</simpara>
+<screen>$ zig fetch https://example.com/package.tar.gz</screen>
+<simpara>这对于验证包完整性或准备供应商依赖项很有用。</simpara>
+</section>
+<section xml:id="recursive-fetch">
+<title>递归获取</title>
+<simpara>要传递地获取所有依赖项（包括依赖项的依赖项）：</simpara>
+<screen>$ zig build --fetch</screen>
+<simpara>这将用构建所需的所有内容填充缓存，确保离线构建将成功。</simpara>
+</section>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<orderedlist numeration="arabic">
+<listitem>
+<simpara><emphasis role="strong">最小包</emphasis>：使用<code class="monospace">zig init-lib</code>创建一个新的Zig库，检查生成的<code class="monospace">build.zig.zon</code>，并解释每个顶级字段的目的。 <xref xl:href="21__zig-init-and-package-metadata.adoc">21</xref>
+</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">基于路径的依赖</emphasis>：设置两个兄弟目录（<code class="monospace">mylib/</code>和<code class="monospace">myapp/</code>）。使用<code class="monospace">.path</code>使<code class="monospace">myapp</code>依赖于<code class="monospace">mylib</code>，在<code class="monospace">mylib</code>中实现一个简单的函数，从<code class="monospace">myapp</code>调用它，并成功构建。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">哈希验证失败</emphasis>：故意破坏<code class="monospace">build.zig.zon</code>中依赖项的哈希（更改一个字符）并运行<code class="monospace">zig build</code>。观察并解释错误消息。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">延迟依赖工作流</emphasis>：创建一个具有基准测试模块延迟依赖的项目。验证<code class="monospace">zig build</code>（无选项）不获取依赖项，但<code class="monospace">zig build -Dbenchmarks=true</code>获取。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">缓存检查</emphasis>：在具有远程依赖项的项目上运行<code class="monospace">zig build --fetch</code>，然后探索全局缓存目录（在Unix上为<code class="monospace">~/.cache/zig/p/</code>）。通过哈希前缀标识包目录。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">离线构建测试</emphasis>：获取项目的所有依赖项，断开网络连接（或阻止DNS解析），并确认<code class="monospace">zig build</code>成功。重新连接并添加新依赖项以验证获取再次工作。</simpara>
+</listitem>
+</orderedlist>
+</chapter>
+<chapter xml:id="notes-and-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">URL稳定性</emphasis>：虽然内容寻址使包管理器能够抵御URL更改，但始终偏好稳定的发布URL（标记的发布，而不是<code class="monospace">main</code>分支存档）以最小化维护负担。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">分布式包中的路径依赖</emphasis>：如果你的包使用<code class="monospace">.path</code>依赖项，则当消费者获取时，这些路径必须相对于包根目录存在。对于分布式包，偏好基于URL的依赖项以避免路径解析问题。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">传递依赖去重</emphasis>：Zig 0.15.2不会使用不同的哈希字符串去重传递依赖项，即使它们引用相同的内容。未来版本可能实现更智能的去重。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">安全性和信任</emphasis>：哈希验证可防止传输损坏和大多数篡改，但不验证包<strong>来源</strong>。信任哈希的来源（例如，项目的官方存储库或发布页面），而不仅仅是任何镜像。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">构建选项转发</emphasis>：在调用<code class="monospace">b.dependency()</code>时，仔细选择要转发的构建选项。转发太多可能会导致构建失败，如果依赖项无法识别选项；转发太少可能会导致配置不匹配。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>警告、替代方案和边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">延迟依赖重新获取</emphasis>：如果你从缓存中删除延迟依赖项并在未触发它的选项的情况下重新运行<code class="monospace">zig build</code>，则依赖项保持未获取状态。仅当构建脚本再次调用<code class="monospace">lazyDependency()</code>时，获取才会发生。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">上游更改后的哈希不匹配</emphasis>：如果上游包在不更改其版本标签的情况下更改其内容，并且你重新获取URL，则会遇到哈希不匹配。在更新URL时，始终在<code class="monospace">build.zig.zon</code>中删除旧的<code class="monospace">.hash</code>，以表示你期望新内容。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">供应商依赖</emphasis>：对于具有严格供应链要求的项目，考虑通过将它们提交到你的存储库（使用<code class="monospace">.path</code>引用）而不是依赖基于URL的获取来供应商依赖。这以存储库大小换取控制。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">镜像配置</emphasis>：Zig 0.15.2尚不支持每个依赖项的镜像列表或回退URL。如果你的主URL变得不可用，你必须手动更新<code class="monospace">build.zig.zon</code>到新的URL（哈希保持不变，确保内容完整性）。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">指纹冲突</emphasis>：<code class="monospace">.fingerprint</code>字段是一个随机选择的64位值。冲突在统计上不太可能但并非不可能。未来的Zig版本可能在依赖解析期间检测和处理指纹冲突。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="summary">
+<title>总结</title>
+<simpara>本章探讨了Zig包管理的完整生命周期：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><strong><code class="monospace">build.zig.zon</code>模式</strong>：包元数据、依赖声明、包含规则和指纹标识。</simpara>
+</listitem>
+<listitem>
+<simpara><strong>依赖类型</strong>：基于URL与基于路径；急切与延迟加载策略。</simpara>
+</listitem>
+<listitem>
+<simpara><strong>解析管道</strong>：解析 → 获取 → 验证 → 缓存 → 构建依赖图。</simpara>
+</listitem>
+<listitem>
+<simpara><strong>在<code class="monospace">build.zig</code>中集成</strong>：使用<code class="monospace">b.dependency()</code>和<code class="monospace">b.lazyDependency()</code>访问模块和工件。</simpara>
+</listitem>
+<listitem>
+<simpara><strong>哈希验证</strong>：多哈希格式、SHA-256内容寻址、供应链保护。</simpara>
+</listitem>
+<listitem>
+<simpara><strong>可重现性</strong>：内容寻址、锁文件语义、离线构建、缓存可移植性。</simpara>
+</listitem>
+<listitem>
+<simpara><strong><code class="monospace">zig fetch</code>命令</strong>：从CLI添加、获取和验证依赖项。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>你现在对Zig的构建系统有了完整的心智模型：工件创建、工作区组织和依赖管理（本章）。下一章将通过深入研究模块解析机制和发现模式来扩展此基础。</simpara>
+<simpara>理解包管理器的设计——内容寻址、延迟加载、加密验证——使你能够构建可重现、安全和可维护的Zig项目，无论是单独工作还是将第三方库集成到生产系统中。</simpara>
+</chapter>
+</book>

@@ -1,0 +1,473 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<article xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>用户类型：结构体、枚举、联合体</title>
+<date>2025-11-02</date>
+<author>
+<personname>
+<firstname>Zig</firstname>
+<surname>文档团队</surname>
+</personname>
+<email>zig@example.com</email>
+</author>
+<authorinitials>ZT</authorinitials>
+<revhistory>
+<revision>
+<revnumber>1</revnumber>
+<date>2025-11-02</date>
+<authorinitials>ZT</authorinitials>
+</revision>
+</revhistory>
+<keywordset>
+<keyword>structs</keyword>
+<keyword>enums</keyword>
+<keyword>unions</keyword>
+<keyword>layout</keyword>
+<keyword>namespaces</keyword>
+</keywordset>
+</info>
+
+<section xml:id="overview">
+<title>概览</title>
+<simpara>Zig的用户定义类型是故意小而精的工具。结构体在干净的命名空间下组合数据和行为，枚举用显式的整数表示编码封闭的状态集合，联合体为变体数据建模——标记的用于安全，未标记的用于底层控制。这些共同构成了符合人体工程学API和内存感知系统代码的支柱；参见 <link xl:href="https://ziglang.org/documentation/master/#Structs">#结构体</link>、<link xl:href="https://ziglang.org/documentation/master/#Enums">#枚举</link> 和 <link xl:href="https://ziglang.org/documentation/master/#Unions">#联合体</link> 以供参考。</simpara>
+<simpara>本章建立实用的流利度：结构体上的方法和默认值，用 <literal>@intFromEnum</literal>/<literal>@enumFromInt</literal> 进行枚举往返，以及标记和未标记的联合体。我们还将窥视布局修饰符（<literal>packed</literal>、<literal>extern</literal>）和匿名结构体/元组，它们对于轻量级返回值和FFI变得得心应手。参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/math.zig">math.zig</link> 了解相关助手。</simpara>
+</section>
+
+<section xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>定义和使用具有方法、默认值和清晰命名空间的结构体。</simpara>
+</listitem>
+<listitem>
+<simpara>安全地在枚举和整数之间转换，并对它们进行穷举匹配。</simpara>
+</listitem>
+<listitem>
+<simpara>在标记和未标记联合体之间进行选择；了解何时 <literal>packed</literal>/<literal>extern</literal> 布局很重要（参见 <link xl:href="https://ziglang.org/documentation/master/#packed-struct">#packed结构体</link> 和 <link xl:href="https://ziglang.org/documentation/master/#extern-struct">#extern结构体</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="structs">
+<title>结构体：数据 + 命名空间</title>
+<simpara>结构体收集字段和相关的辅助函数。方法只是具有显式接收者参数的函数——没有魔法，这使得调用点明显且可单元测试。默认值减少了常见情况的样板代码。</simpara>
+
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 08__user-types-structs-enums-unions.adoc - include::example$chapters-data/code/08__user-types-structs-enums-unions/struct_basics.zig[]</programlisting>
+
+<para>运行</para>
+<screen><prompt>$</prompt> <userinput>zig run struct_basics.zig</userinput></screen>
+
+<para>输出</para>
+<screen>p=(3,0) len=3.000
+p=(0,4) len=4.000</screen>
+
+<tip><simpara>方法是命名空间函数；你可以根据可测试性和API清晰度自由地混合自由函数和方法。</simpara></tip>
+</section>
+
+<section xml:id="enums">
+<title>枚举：具有位精确表示的状态</title>
+<simpara>枚举可以设置它们的整数表示（例如，<literal>enum(u8)</literal>）并用内置函数与整数转换。<literal>switch</literal> 对枚举必须是穷举的，除非你包含 <literal>else</literal>，这对于在编译时捕获新状态是完美的。</simpara>
+
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 08__user-types-structs-enums-unions.adoc - include::example$chapters-data/code/08__user-types-structs-enums-unions/enum_roundtrip.zig[]</programlisting>
+
+<para>运行</para>
+<screen><prompt>$</prompt> <userinput>zig run enum_roundtrip.zig</userinput></screen>
+
+<para>输出</para>
+<screen>m=busy int=1
+m2=paused int=2</screen>
+
+<note><simpara><literal>@enumFromInt</literal> 要求整数映射到声明的标签。如果你期望未知值（例如，文件格式），考虑哨兵标签、验证路径或具有显式错误处理的单独整数解析。</simpara></note>
+</section>
+
+<section xml:id="unions">
+<title>联合体：变体数据</title>
+<simpara>标记联合体同时携带标签和有效负载；模式匹配简单且类型安全。未标记联合体要求你手动管理活动字段，适用于底层位重新解释或FFI垫片。</simpara>
+
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 08__user-types-structs-enums-unions.adoc - include::example$chapters-data/code/08__user-types-structs-enums-unions/union_demo.zig[]</programlisting>
+
+<para>运行</para>
+<screen><prompt>$</prompt> <userinput>zig run union_demo.zig</userinput></screen>
+
+<para>输出</para>
+<screen>start: number=42
+update: hi
+raw u=0xFFFFFFFE i=-2</screen>
+
+<warning><simpara>从没有通过位重新解释（例如，通过 <literal>@bitCast</literal>）位来读取未标记联合体的不同字段是非法的；Zig在编译时阻止这一点。为了安全，更喜欢标记联合体和模式匹配，除非你真正需要控制。</simpara></warning>
+
+<section xml:id="tagged-union-memory-representation">
+<title>标记联合体内存表示</title>
+<simpara>了解标记联合体在内存中如何布局阐明了安全与空间的权衡，并解释了何时选择标记与未标记联合体：</simpara>
+
+<informalfigure>
+<mediaobject>
+<textobject role="mermaid">
+<![CDATA[
+graph TB
+    subgraph "标记联合体定义"
+        TAGGED["const Value = union(enum) {<br/>  number: i32,    // 4字节<br/>  text: []const u8, // 16字节 (ptr+len)<br/>}"]
+    end
+    
+    subgraph "标记联合体内存 (64位上24字节)"
+        TAG_MEM["内存布局:<br/><br/>| 标签 (u8) | 填充 | 有效负载 (16字节) |<br/><br/>标签标识活动字段<br/>有效负载空间保存最大的变体"]
+    end
+    
+    subgraph "未标记联合体定义"
+        UNTAGGED["const Raw = union {<br/>  number: i32,<br/>  text: []const u8,<br/>}"]
+    end
+    
+    subgraph "未标记联合体内存 (16字节)"
+        UNTAG_MEM["内存布局:<br/><br/>| 有效负载 (16字节) |<br/><br/>无标签 - 你跟踪活动字段<br/>大小 = 仅最大变体"]
+    end
+    
+    TAGGED --> TAG_MEM
+    UNTAGGED --> UNTAG_MEM
+    
+    subgraph "访问模式"
+        SAFE["标记: 安全模式匹配<br/>switch (value) {<br/>  .number => |n| use(n),<br/>  .text => |t| use(t),<br/>}"]
+        UNSAFE["未标记: 手动跟踪<br/>// 你必须知道哪个字段是活动的<br/>const n = raw.number; // 不安全!"]
+    end
+    
+    TAG_MEM --> SAFE
+    UNTAG_MEM --> UNSAFE
+]]>
+</textobject>
+</mediaobject>
+</informalfigure>
+
+<para><emphasis role="strong">内存布局细节：</emphasis></para>
+
+<para><emphasis role="strong">标记联合体：</emphasis></para>
+<itemizedlist>
+<listitem>
+<simpara>大小 = 标签大小 + 填充 + 最大变体大小</simpara>
+</listitem>
+<listitem>
+<simpara>标签字段（通常是u8或适合标签计数的最小整数）</simpara>
+</listitem>
+<listitem>
+<simpara>用于有效负载对齐的填充</simpara>
+</listitem>
+<listitem>
+<simpara>有效负载空间大小以容纳最大的变体</simpara>
+</listitem>
+<listitem>
+<simpara>示例：<literal>union(enum) { i32, []const u8 }</literal> = 1字节标签 + 7字节填充 + 16字节有效负载 = 24字节</simpara>
+</listitem>
+</itemizedlist>
+
+<para><emphasis role="strong">未标记联合体：</emphasis></para>
+<itemizedlist>
+<listitem>
+<simpara>大小 = 最大变体大小（无标签开销）</simpara>
+</listitem>
+<listitem>
+<simpara>没有要检查的运行时标签</simpara>
+</listitem>
+<listitem>
+<simpara>你负责跟踪哪个字段是活动的</simpara>
+</listitem>
+<listitem>
+<simpara>示例：<literal>union { i32, []const u8 }</literal> = 16字节（仅有效负载）</simpara>
+</listitem>
+</itemizedlist>
+
+<para><emphasis role="strong">何时使用每个：</emphasis></para>
+
+<itemizedlist>
+<listitem>
+<para><emphasis role="strong">使用标记联合体</emphasis>（默认选择）：</para>
+<itemizedlist>
+<listitem>
+<simpara>具有变体数据类型的应用程序逻辑</simpara>
+</listitem>
+<listitem>
+<simpara>当你需要穷举模式匹配时</simpara>
+</listitem>
+<listitem>
+<simpara>安全比1-8字节的标签开销更重要</simpara>
+</listitem>
+<listitem>
+<simpara>错误联合体、选项类型、状态机</simpara>
+</listitem>
+</itemizedlist>
+</listitem>
+<listitem>
+<para><emphasis role="strong">使用未标记联合体</emphasis>（罕见，专家使用）：</para>
+<itemizedlist>
+<listitem>
+<simpara>与没有标签的C联合体的FFI</simpara>
+</listitem>
+<listitem>
+<simpara>用 <literal>@bitCast</literal> 进行位重新解释</simpara>
+</listitem>
+<listitem>
+<simpara>性能关键代码，其中标签开销很重要且你能证明安全性</simpara>
+</listitem>
+<listitem>
+<simpara>底层操作的类型双关</simpara>
+</listitem>
+</itemizedlist>
+</listitem>
+</itemizedlist>
+
+<para><emphasis role="strong">安全保证：</emphasis></para>
+
+<simpara>标记联合体提供编译时穷举检查和运行时标签验证：</simpara>
+
+<programlisting language="zig" linenumbering="unnumbered">const val = Value{ .number = 42 };
+switch (val) {
+    .number => |n| print("{}", .{n}),  // OK - 匹配标签
+    .text => |t| print("{s}", .{t}),  // 编译器确保两个案例都被覆盖
+}</programlisting>
+
+<simpara>未标记联合体要求你手动维护安全不变量——编译器无法帮助你。</simpara>
+</section>
+
+<section xml:id="layout-anon">
+<title>布局和匿名结构体/元组</title>
+<simpara>当你必须精确地适应位（线格式）或匹配C ABI布局时，Zig提供 <literal>packed</literal> 和 <literal>extern</literal>。匿名结构体（通常称为"元组"）对于快速多值返回值很方便。</simpara>
+
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 08__user-types-structs-enums-unions.adoc - include::example$chapters-data/code/08__user-types-structs-enums-unions/layout_and_anonymous.zig[]</programlisting>
+
+<para>运行</para>
+<screen><prompt>$</prompt> <userinput>zig run layout_and_anonymous.zig</userinput></screen>
+
+<para>输出</para>
+<screen>packed.size=1
+extern.size=8 align=4
+pair[0]=x pair[1]=42 via names: x/42</screen>
+
+<note><simpara>元组字段访问使用 <literal>@field(val, "0")</literal> 和 <literal>@field(val, "1")</literal>。它们是具有数字字段名的匿名结构体，这使它们简单且无分配。</simpara></note>
+
+<section xml:id="memory-layout-default-vs-packed-vs-extern">
+<title>内存布局：默认 vs 打包 vs 外部</title>
+<simpara>Zig提供三种结构体布局策略，每种策略在内存效率、性能和兼容性方面有不同的权衡：</simpara>
+
+<informalfigure>
+<mediaobject>
+<textobject role="mermaid">
+<![CDATA[
+graph TB
+    subgraph "默认布局 (优化)"
+        DEF_CODE["const Point = struct {<br/>  x: u8,  // 1字节<br/>  y: u32, // 4字节<br/>  z: u8,  // 1字节<br/>};"]
+        DEF_MEM["内存: 12字节<br/><br/>| x | 填充(3) | y(4) | z | 填充(3) |<br/><br/>编译器重新排序和填充以提高效率"]
+    end
+    
+    subgraph "打包布局 (无填充)"
+        PACK_CODE["const Flags = packed struct {<br/>  a: bool,  // 1位<br/>  b: u3,    // 3位<br/>  c: bool,  // 1位<br/>  d: u3,    // 3位<br/>};"]
+        PACK_MEM["内存: 1字节<br/><br/>| abcd(8位) |<br/><br/>无填充，位精确打包"]
+    end
+    
+    subgraph "外部布局 (C ABI)"
+        EXT_CODE["const Data = extern struct {<br/>  x: u8,<br/>  y: u32,<br/>  z: u8,<br/>};"]
+        EXT_MEM["内存: 12字节<br/><br/>| x | 填充(3) | y(4) | z | 填充(3) |<br/><br/>C ABI规则，字段顺序保留"]
+    end
+    
+    DEF_CODE --> DEF_MEM
+    PACK_CODE --> PACK_MEM
+    EXT_CODE --> EXT_MEM
+    
+    subgraph "关键差异"
+        DIFF1["默认: 编译器可以重新排序字段<br/>外部: 字段顺序固定<br/>打包: 位级打包"]
+        DIFF2["默认: 优化对齐<br/>外部: 平台ABI对齐<br/>打包: 无对齐 (位字段)"]
+    end
+]]>
+</textobject>
+</mediaobject>
+</informalfigure>
+
+<para><emphasis role="strong">布局模式比较：</emphasis></para>
+
+<table frame="all" rowsep="1" colsep="1">
+<title>布局模式比较</title>
+<tgroup cols="4">
+<colspec colname="col_1" colwidth="15*"/>
+<colspec colname="col_2" colwidth="25*"/>
+<colspec colname="col_3" colwidth="25*"/>
+<colspec colname="col_4" colwidth="35*"/>
+<thead>
+<tr>
+<td align="left" valign="top"><emphasis role="strong">布局</emphasis></td>
+<td align="left" valign="top"><emphasis role="strong">大小/对齐</emphasis></td>
+<td align="left" valign="top"><emphasis role="strong">字段顺序</emphasis></td>
+<td align="left" valign="top"><emphasis role="strong">用例</emphasis></td>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td align="left" valign="top"><emphasis role="strong">默认</emphasis></td>
+<td align="left" valign="top">由编译器优化</td>
+<td align="left" valign="top">可以被重新排序</td>
+<td align="left" valign="top">普通Zig代码</td>
+</tr>
+<tr>
+<td align="left" valign="top"><emphasis role="strong">打包</emphasis></td>
+<td align="left" valign="top">位精确，无填充</td>
+<td align="left" valign="top">固定，位级</td>
+<td align="left" valign="top">线格式，位标志</td>
+</tr>
+<tr>
+<td align="left" valign="top"><emphasis role="strong">外部</emphasis></td>
+<td align="left" valign="top">C ABI规则</td>
+<td align="left" valign="top">固定（声明顺序）</td>
+<td align="left" valign="top">FFI，C互操作</td>
+</tr>
+</tbody>
+</tgroup>
+</table>
+
+<para><emphasis role="strong">详细行为：</emphasis></para>
+
+<para><emphasis role="strong">默认布局：</emphasis></para>
+<programlisting language="zig" linenumbering="unnumbered">const Point = struct {
+    x: u8,   // 编译器可能会重新排序这个
+    y: u32,  // 以最小化填充
+    z: u8,
+};
+// 编译器选择最佳顺序，通常：
+// y (4字节，对齐) + x (1字节) + z (1字节) + 填充</programlisting>
+
+<para><emphasis role="strong">打包布局：</emphasis></para>
+<programlisting language="zig" linenumbering="unnumbered">const Flags = packed struct {
+    enabled: bool,    // 位 0
+    mode: u3,         // 位 1-3  
+    priority: u4,     // 位 4-7
+};
+// 总计: 8位 = 1字节，无填充
+// 完美适用于硬件寄存器和线协议</programlisting>
+
+<para><emphasis role="strong">外部布局：</emphasis></para>
+<programlisting language="zig" linenumbering="unnumbered">const CHeader = extern struct {
+    version: u32,  // 精确匹配C结构体布局
+    flags: u16,    // 字段顺序保留
+    padding: u16,  // 如果需要，显式填充
+};
+// 用于调用C函数或读取C写入的二进制数据</programlisting>
+
+<para><emphasis role="strong">何时使用每种布局：</emphasis></para>
+
+<itemizedlist>
+<listitem>
+<para><emphasis role="strong">默认</emphasis>（无修饰符）：</para>
+<itemizedlist>
+<listitem>
+<simpara>所有普通Zig代码</simpara>
+</listitem>
+<listitem>
+<simpara>当你不需要特定内存布局时</simpara>
+</listitem>
+<listitem>
+<simpara>让编译器为你优化</simpara>
+</listitem>
+</itemizedlist>
+</listitem>
+<listitem>
+<para><emphasis role="strong">打包</emphasis>：</para>
+<itemizedlist>
+<listitem>
+<simpara>具有位级字段的线协议</simpara>
+</listitem>
+<listitem>
+<simpara>硬件寄存器定义</simpara>
+</listitem>
+<listitem>
+<simpara>当你需要精确的位位置时</simpara>
+</listitem>
+<listitem>
+<simpara>空间关键的标志和选项</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">警告</emphasis>：由于位操作可能会更慢</simpara>
+</listitem>
+</itemizedlist>
+</listitem>
+<listitem>
+<para><emphasis role="strong">外部</emphasis>：</para>
+<itemizedlist>
+<listitem>
+<simpara>与C/C++结构体的FFI</simpara>
+</listitem>
+<listitem>
+<simpara>读取由其他语言定义的二进制文件格式</simpara>
+</listitem>
+<listitem>
+<simpara>当字段顺序必须匹配外部规范时</simpara>
+</listitem>
+<listitem>
+<simpara>ABI兼容性要求</simpara>
+</listitem>
+</itemizedlist>
+</listitem>
+</itemizedlist>
+
+<para><emphasis role="strong">重要说明：</emphasis></para>
+
+<itemizedlist>
+<listitem>
+<simpara>使用 <literal>@sizeOf(T)</literal> 和 <literal>@alignOf(T)</literal> 验证布局</simpara>
+</listitem>
+<listitem>
+<simpara>打包结构体可能更慢——在优化前测量</simpara>
+</listitem>
+<listitem>
+<simpara>外部结构体必须精确匹配C定义（包括填充）</simpara>
+</listitem>
+<listitem>
+<simpara>默认布局可能会在编译器版本之间更改（总是安全的，但字段顺序不保证）</simpara>
+</listitem>
+</itemizedlist>
+</section>
+</section>
+
+<section xml:id="notes-caveats">
+<title>说明与注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>方法是无糖的；考虑将助手设为结构体内的 <literal>pub</literal> 以提高可发现性和测试范围。</simpara>
+</listitem>
+<listitem>
+<simpara>枚举表示（<literal>enum(uN)</literal>）定义大小并影响ABI/FFI——选择适合协议的最小值。</simpara>
+</listitem>
+<listitem>
+<simpara>未标记联合体是锋利的工具。在大多数应用程序代码中，更喜欢标记联合体和模式匹配。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+</section>
+
+<section xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>向 <literal>Point</literal> 添加一个 <literal>scale</literal> 方法，该方法将两个坐标都乘以 <literal>f64</literal>，然后重新工作 <literal>len</literal> 以避免大整数的精度损失。</simpara>
+</listitem>
+<listitem>
+<simpara>用新的 <literal>Error</literal> 状态扩展 <literal>Mode</literal> 并观察编译器如何强制执行更新的 <literal>switch</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara>创建一个表示JSON标量（<literal>null</literal>、<literal>bool</literal>、<literal>number</literal>、<literal>string</literal>）的标记联合体，并编写一个为每种情况格式化的 <literal>print</literal> 函数。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="caveats-alternatives-edge-cases">
+<title>替代方案和边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>ABI布局：<literal>extern</literal> 尊重平台ABI。在用 <literal>@sizeOf</literal>/<literal>@alignOf</literal> 验证大小并交叉编译时发货库。</simpara>
+</listitem>
+<listitem>
+<simpara>位打包：<literal>packed struct</literal> 压缩字段但可能增加指令数量；在热路径中提交前测量。</simpara>
+</listitem>
+<listitem>
+<simpara>元组与命名结构体：为稳定API更喜欢命名结构体；元组在本地、短命的胶水中发光。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+</article>
+</book>

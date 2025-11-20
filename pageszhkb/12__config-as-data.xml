@@ -1,0 +1,522 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh-CN">
+<info>
+<title>配置即数据：基于结构体的配置</title>
+<date>2025-11-03</date>
+<authorinitials>zigbook</authorinitials>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<para>配置文件最终会成为内存中的普通数据。通过给这些数据一个丰富的类型——包含默认值、枚举和可选值——你可以在编译时推理配置错误，用确定性验证不变式，并将精心调整的设置传递给下游代码，而无需字符串类型的胶水（参见 <link xl:href="11__project-dynamic-string-builder.adoc">第11章</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig">meta.zig</link>）。</para>
+<para>本章建立了一个基于结构体配置的手册：从默认值丰富的结构体开始，叠加分层覆盖如环境或命令行标志，然后使用显式错误集强制执行防护栏，以便下一个项目中的 CLI 可以信任其输入（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/log.zig">log.zig</link>）。</para>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<para>使用枚举、可选值和合理的默认值对嵌套配置结构体进行建模，以捕获应用程序意图。</para>
+</listitem>
+<listitem>
+<para>使用反射辅助函数如 <literal>std.meta.fields</literal> 叠加配置文件、环境和运行时覆盖，同时保持合并的类型安全。</para>
+</listitem>
+<listitem>
+<para>使用专用错误集、结构化报告和廉价的诊断验证配置，以便下游系统可以快速失败。<link xl:href="04__errors-resource-cleanup.adoc">第4章</link></para>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="config-structs">
+<title>结构体作为配置契约</title>
+<para>类型化配置反映了你在生产中期望的不变式。Zig 结构体让你可以内联声明默认值，用枚举编码模式，并分组相关旋钮，这样调用者就不会意外传递格式错误的元组。依赖标准库枚举、日志级别和写入器保持 API 符合人体工程学，同时尊重 <link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link> 中的 I/O 接口改革。</para>
+<section xml:id="config-structs-defaults">
+<title>默认值丰富的结构体定义</title>
+<para>基线配置为每个字段提供默认值，包括嵌套结构体。消费者可以使用指定初始化器选择性地覆盖值，而不会丢失其余默认值。</para>
+<screen><code language="zig">const std = @import("std");
+
+const LogLevel = enum { off, error, warn, info, debug };
+const Theme = enum { system, light, dark };
+
+const Timeouts = struct {
+    connect_ms: u32 = 200,
+    read_ms: u32 = 1200,
+};
+
+const AppConfig = struct {
+    host: []const u8 = "127.0.0.1",
+    port: u16 = 8080,
+    log_level: LogLevel = .info,
+    instrumentation: bool = false,
+    theme: Theme = .system,
+    timeouts: Timeouts = .{},
+
+    pub fn format(
+        self: AppConfig,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("  host = {s}\n", .{self.host});
+        try writer.print("  port = {d}\n", .{self.port});
+        try writer.print("  log_level = {s}\n", .{@tagName(self.log_level)});
+        try writer.print("  instrumentation = {}\n", .{self.instrumentation});
+        try writer.print("  theme = {s}\n", .{@tagName(self.theme)});
+        try writer.print("  timeouts = .{{ connect_ms = {d}, read_ms = {d} }}\n", .{
+            self.timeouts.connect_ms,
+            self.timeouts.read_ms,
+        });
+    }
+};
+
+pub fn main() !void {
+    const stdout = std.io.getStdOut().writer();
+
+    const defaults = AppConfig{};
+    try stdout.print("defaults ->\n{}", .{defaults});
+
+    const overrides = AppConfig{
+        .host = "0.0.0.0",
+        .port = 9090,
+        .log_level = .debug,
+        .instrumentation = true,
+        .theme = .dark,
+        .timeouts = .{ .connect_ms = 75, .read_ms = 1500 },
+    };
+    try stdout.print("overrides ->\n{}", .{overrides});
+}</code></screen>
+<screen><prompt>运行</prompt>
+<code language="shell">$ zig run default_config.zig</code></screen>
+<screen><prompt>输出</prompt>
+<code language="shell">defaults ->
+  host = 127.0.0.1
+  port = 8080
+  log_level = info
+  instrumentation = false
+  theme = system
+  timeouts = .{ connect_ms = 200, read_ms = 1200 }
+
+overrides ->
+  host = 0.0.0.0
+  port = 9090
+  log_level = debug
+  instrumentation = true
+  theme = dark
+  timeouts = .{ connect_ms = 75, read_ms = 1500 }</code></screen>
+</section>
+<section xml:id="config-structs-optionals">
+<title>可选值与哨兵默认值</title>
+<note>
+<para>只有真正需要三态语义的字段才成为可选值（<literal>?[]const u8</literal> 用于本章后面的 TLS 文件路径）；其他所有内容都坚持使用具体的默认值。将嵌套结构体（这里，<literal>Timeouts</literal>）与 <literal>[]const u8</literal> 字符串结合提供了不可变引用，这些引用在配置的生命周期内保持有效（参见 <link xl:href="03__data-fundamentals.adoc">第3章</link>）。</para>
+</note>
+</section>
+<section xml:id="config-structs-initializers">
+<title>指定覆盖保持可读性</title>
+<para>由于指定初始化器允许你只覆盖你关心的字段，你可以在不牺牲可发现性的情况下将配置声明保持在调用点附近。将结构体字面量视为文档：将相关覆盖组合在一起，并依赖枚举（如 <literal>Theme</literal>）将魔术字符串排除在你的构建之外。<link xl:href="02__control-flow-essentials.adoc">第2章</link>，<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/enums.zig">enums.zig</link></para>
+<section xml:id="parsing-enum-values">
+<title>从字符串解析枚举值</title>
+<para>从 JSON、YAML 或环境变量加载配置时，你通常需要将字符串转换为枚举值。Zig 的 <literal>std.meta.stringToEnum</literal> 基于枚举大小通过编译时优化处理这个问题。</para>
+<informalfigure>
+<mediaobject>
+<imageobject>
+<imagedata fileref="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNDAwIj4KICA8ZGVmcz4KICAgIDxzdHlsZT4KICAgICAgLm5vZGUgeyBmaWxsOiAjZjBmMGYwOyBzdHJva2U6ICMzMzM7IHN0cm9rZS13aWR0aDogMnB4OyB9CiAgICAgIC5lZGdlIHsgc3Ryb2tlOiAjMzMzOyBzdHJva2Utd2lkdGg6IDJweDsgfQogICAgICAubGFiZWwgeyBmb250LWZhbWlseTogQXJpYWwsIHNhbnMtc2VyaWY7IGZvbnQtc2l6ZTogMTRweDsgfQogICAgPC9zdHlsZT4KICA8L2RlZnM+CiAgPGcgY2xhc3M9ImxhYmVsIj4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIyMDAiIHk9IjUwIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iMzAwIiB5PSI4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgc3R5bGU9ImZvbnQtd2VpZ2h0OiBib2xkOyI+c3RyaW5nVG9FbnVtKFRzdHIpPC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMTAwIiB5PSIxNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjE4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+ZmllbGRzLmxlbiA8PSAxMDA8L3RleHQ+CiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMTAwIiB5PSIyNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjI4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+U3RhdGljU3RyaW5nTWFwPC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iNDAwIiB5PSIxNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI0NzUiIHk9IjE4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+ZmllbGRzLmxlbiA+IDEwMDwvdGV4dD4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSI0MDAiIHk9IjI1MCIgd2lkdGg9IjE1MCIgaGVpZ2h0PSI2MCIgcng9IjUiLz4KICAgIDx0ZXh0IHg9IjQ3NSIgeT0iMjg1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5pbmxpbmUgZm9yIGxvb3A8L3RleHQ+CiAgICAKICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIzMDAiIHk9IjM1MCIgd2lkdGg9IjE1MCIgaGVpZ2h0PSI2MCIgcng9IjUiLz4KICAgIDx0ZXh0IHg9IjM3NSIgeT0iMzg1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj4/VCB8IG51bGw8L3RleHQ+CiAgICAKICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iMzAwIiB5MT0iMTEwIiB4Mj0iMTc1IiB5Mj0iMTUwIi8+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjMwMCIgeTE9IjExMCIgeDI9IjQ3NSIgeTI9IjE1MCIvPgogICAgCiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjE3NSIgeTE9IjIxMCIgeDI9IjE3NSIgeTI9IjI1MCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSI0NzUiIHkxPSIyMTAiIHgyPSI0NzUiIHkyPSIyNTAiLz4KICAgIAogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSIxNzUiIHkxPSIzMTAiIHgyPSIzNzUiIHkyPSIzNTAiLz4KICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iNDc1IiB5MT0iMzEwIiB4Mj0iMzc1IiB5Mj0iMzUwIi8+CiAgPC9nPgo8L3N2Zz4K" width="800" height="400"/>
+</imagedata>
+</imageobject>
+</mediaobject>
+</informalfigure>
+<para>对于小枚举（≤100 个字段），<literal>stringToEnum</literal> 构建一个编译时 <literal>StaticStringMap</literal> 用于 O(1) 查找。较大的枚举使用内联循环以避免大量 switch 语句导致的编译速度减慢。该函数返回 <literal>?T</literal>（可选枚举值），允许你优雅地处理无效字符串：</para>
+<screen><code language="zig">const theme_str = "dark";
+const theme = std.meta.stringToEnum(Theme, theme_str) orelse .system;</code></screen>
+<para><strong>这个模式对配置加载器至关重要：</strong>解析字符串，如果无效则退回到合理的默认值。可选返回值迫使你显式处理错误情况，防止配置文件中的拼写错误导致静默失败（参见 <link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/meta.zig">meta.zig</link>）。</para>
+</section>
+</section>
+<chapter xml:id="config-layering">
+<title>分层和覆盖</title>
+<para>真实部署从多个源提取配置。通过将每一层表示为可选结构体，你可以确定性地合并它们：反射桥梁使得无需为每个旋钮手写样板即可轻松迭代字段。<link xl:href="05__project-tempconv-cli.adoc">第5章</link></para>
+<section xml:id="config-layering-example">
+<title>合并分层覆盖</title>
+<para>这个程序应用配置文件、环境和命令行覆盖（在它们存在的地方），否则退回到默认值。合并顺序在 <literal>apply</literal> 中变得明确，结果结构体保持完全类型化。</para>
+<screen><code language="zig">const std = @import("std");
+
+const LogLevel = enum { off, error, warn, info, debug };
+const Theme = enum { system, light, dark };
+
+const Timeouts = struct {
+    connect_ms: u32 = 200,
+    read_ms: u32 = 1200,
+};
+
+const AppConfig = struct {
+    host: []const u8 = "127.0.0.1",
+    port: u16 = 8080,
+    log_level: LogLevel = .info,
+    instrumentation: bool = false,
+    theme: Theme = .system,
+    timeouts: Timeouts = .{},
+};
+
+const ConfigOverride = struct {
+    host: ?[]const u8 = null,
+    port: ?u16 = null,
+    log_level: ?LogLevel = null,
+    instrumentation: ?bool = null,
+    theme: ?Theme = null,
+    timeouts: ?Timeouts = null,
+};
+
+fn apply(base: anytype, override: anytype) @TypeOf(base) {
+    var result = base;
+    inline for (std.meta.fields(@TypeOf(override))) |field| {
+        const override_value = @field(override, field.name);
+        if (override_value) |value| {
+            @field(result, field.name) = value;
+        }
+    }
+    return result;
+}
+
+fn printConfig(name: []const u8, config: anytype) !void {
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print("{s}:\n", .{name});
+    inline for (std.meta.fields(@TypeOf(config))) |field| {
+        const value = @field(config, field.name);
+        if (@TypeOf(value) == []const u8) {
+            try stdout.print("  {s} = {s}\n", .{ field.name, value });
+        } else if (@TypeOf(value) == bool) {
+            try stdout.print("  {s} = {}\n", .{ field.name, value });
+        } else if (@TypeOf(value) == Timeouts) {
+            try stdout.print("  {s} = .{{ connect_ms = {d}, read_ms = {d} }}\n", .{
+                field.name, value.connect_ms, value.read_ms,
+            });
+        } else {
+            try stdout.print("  {s} = {s}\n", .{ field.name, @tagName(value) });
+        }
+    }
+}
+
+pub fn main() !void {
+    const defaults = AppConfig{};
+    const profile = ConfigOverride{
+        .host = "0.0.0.0",
+        .port = 9000,
+        .log_level = .debug,
+        .instrumentation = true,
+        .theme = .dark,
+        .timeouts = .{ .connect_ms = 100, .read_ms = 1500 },
+    };
+    const env = ConfigOverride{
+        .host = "config.internal",
+        .port = 9443,
+        .log_level = .warn,
+        .instrumentation = false,
+        .theme = .system,
+        .timeouts = .{ .connect_ms = 60, .read_ms = 1100 },
+    };
+    const command_line = ConfigOverride{
+        .host = "127.0.0.1",
+        .port = 8080,
+        .log_level = .info,
+        .instrumentation = false,
+        .theme = .light,
+        .timeouts = .{ .connect_ms = 200, .read_ms = 1200 },
+    };
+
+    try printConfig("defaults", defaults);
+    try printConfig("profile", profile);
+    try printConfig("env", env);
+    try printConfig("command_line", command_line);
+
+    const resolved = apply(apply(apply(defaults, profile), env), command_line);
+    try printConfig("resolved", resolved);
+}</code></screen>
+<screen><prompt>运行</prompt>
+<code language="shell">$ zig run chapters-data/code/12__config-as-data/merge_overrides.zig</code></screen>
+<screen><prompt>输出</prompt>
+<code language="shell">defaults:
+  host = 127.0.0.1
+  port = 8080
+  log = info
+  instrumentation = false
+  theme = system
+  timeouts = .{ connect_ms = 200, read_ms = 1200 }
+profile:
+  host = 0.0.0.0
+  port = 9000
+  log = debug
+  instrumentation = true
+  theme = dark
+  timeouts = .{ connect_ms = 100, read_ms = 1500 }
+env:
+  host = config.internal
+  port = 9443
+  log = warn
+  instrumentation = false
+  theme = system
+  timeouts = .{ connect_ms = 60, read_ms = 1100 }
+command_line:
+  host = 127.0.0.1
+  port = 8080
+  log = info
+  instrumentation = false
+  theme = light
+  timeouts = .{ connect_ms = 200, read_ms = 1200 }
+
+resolved:
+  host = config.internal
+  port = 9443
+  log = warn
+  instrumentation = false
+  theme = light
+  timeouts = .{ connect_ms = 60, read_ms = 1100 }</code></screen>
+<para>参见 <link xl:href="10__allocators-and-memory-management.adoc">第10章</link> 了解与分层配置相关的分配器背景。</para>
+</chapter>
+<section xml:id="field-introspection">
+<title>字段迭代在底层的工作原理</title>
+<para><literal>apply</literal> 函数使用 <literal>std.meta.fields</literal> 在编译时迭代结构体字段。Zig 的反射 API 提供了一组丰富的内省功能，使得无需为每个字段手写样板即可实现通用配置合并成为可能。</para>
+<informalfigure>
+<mediaobject>
+<imageobject>
+<imagedata fileref="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNjAwIj4KICA8ZGVmcz4KICAgIDxzdHlsZT4KICAgICAgLm5vZGUgeyBmaWxsOiAjZjBmMGYwOyBzdHJva2U6ICMzMzM7IHN0cm9rZS13aWR0aDogMnB4OyB9CiAgICAgIC5lZGdlIHsgc3Ryb2tlOiAjMzMzOyBzdHJva2Utd2lkdGg6IDJweDsgfQogICAgICAubGFiZWwgeyBmb250LWZhbWlseTogQXJpYWwsIHNhbnMtc2VyaWY7IGZvbnQtc2l6ZTogMTRweDsgfQogICAgPC9zdHlsZT4KICA8L2RlZnM+CiAgPGcgY2xhc3M9ImxhYmVsIj4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIyMDAiIHk9IjUwIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iMzAwIiB5PSI4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgc3R5bGU9ImZvbnQtd2VpZ2h0OiBib2xkOyI+5omL5bel5py66IO95L2T5L2cPC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMTAwIiB5PSIxNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjE4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+ZmllbGRzKFQpPC90ZXh0PgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjEwMCIgeT0iMjUwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iMTc1IiB5PSIyODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPmZpZWxkSW5mbyhULCBmaWVsZCk8L3RleHQ+CiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMTAwIiB5PSIzNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjM4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+ZmllbGROYW1lcyhUKSk8L3RleHQ+CiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMTAwIiB5PSI0NTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjQ4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+VEFHUyhUKSk8L3RleHQ+CiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMTAwIiB5PSI1NTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjU4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+RkllbGRFbnVtKFQpPC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iNDAwIiB5PSIxNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI0NzUiIHk9IjE4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+ZGVjbGFyYXRpb25zKFQpPC90ZXh0PgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjQwMCIgeT0iMjUwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iNDc1IiB5PSIyODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPmRlY2xJbmZvKFQsIG5hbWUpPC90ZXh0PgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjQwMCIgeT0iMzUwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iNDc1IiB5PSIzODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPkRlY2xFbnVtKFQpPC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMzAwIiB5PSI0NTAiIHdpZHRoPSIyMDAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI0MDAiIHk9IjQ4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgc3R5bGU9ImZvbnQtd2VpZ2h0OiBib2xkOyI+5bqU55So5LqU5L6LPC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMTAwIiB5PSI2NTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjY4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+5pWw5o2u5YiG5p6QPC90ZXh0PgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjMwMCIgeT0iNjUwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iMzc1IiB5PSI2ODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPuWfuuacrOihqDwvdGV4dD4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSI1MDAiIHk9IjY1MCIgd2lkdGg9IjE1MCIgaGVpZ2h0PSI2MCIgcng9IjUiLz4KICAgIDx0ZXh0IHg9IjU3NSIgeT0iNjg1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj7ln7rmnKzooajmn6U8L3RleHQ+CiAgICAKICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iMzAwIiB5MT0iMTEwIiB4Mj0iMTc1IiB5Mj0iMTUwIi8+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjMwMCIgeTE9IjExMCIgeDI9IjQ3NSIgeTI9IjE1MCIvPgogICAgCiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjE3NSIgeTE9IjIxMCIgeDI9IjE3NSIgeTI9IjI1MCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSIxNzUiIHkxPSIyMTAiIHgyPSIxNzUiIHkyPSIzNTAiLz4KICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iMTc1IiB5MT0iMjEwIiB4Mj0iMTc1IiB5Mj0iNDUwIi8+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjE3NSIgeTE9IjIxMCIgeDI9IjE3NSIgeTI9IjU1MCIvPgogICAgCiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjQ3NSIgeTE9IjIxMCIgeDI9IjQ3NSIgeTI9IjI1MCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSI0NzUiIHkxPSIyMTAiIHgyPSI0NzUiIHkyPSIzNTAiLz4KICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iNDc1IiB5MT0iMjEwIiB4Mj0iNDc1IiB5Mj0iNDUwIi8+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjQ3NSIgeTE9IjIxMCIgeDI9IjQwMCIgeTI9IjQ1MCIvPgogICAgCiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjMwMCIgeTE9IjUxMCIgeDI9IjE3NSIgeTI9IjY1MCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSI0MDAiIHkxPSI1MTAiIHgyPSIzNzUiIHkyPSI2NTAiLz4KICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iNDc1IiB5MT0iNTEwIiB4Mj0iNTc1IiB5Mj0iNjUwIi8+CiAgPC9nPgo8L3N2Zz4K" width="800" height="600"/>
+</imagedata>
+</imageobject>
+</mediaobject>
+</informalfigure>
+<para>反射 API 提供：</para>
+<itemizedlist>
+<listitem>
+<para><literal>fields(T)</literal>：返回任何结构体、联合体、枚举或错误集的编译时字段信息</para>
+</listitem>
+<listitem>
+<para><literal>fieldInfo(T, field)</literal>：获取特定字段的详细信息（名称、类型、默认值、对齐）</para>
+</listitem>
+<listitem>
+<para><literal>FieldEnum(T)</literal>：创建一个枚举，其变体用于每个字段名称，对字段进行 switch 语句很有用</para>
+</listitem>
+<listitem>
+<para><literal>declarations(T)</literal>：返回类型中函数和常量的编译时声明信息</para>
+</listitem>
+</itemizedlist>
+<para>当你在合并逻辑中看到 <literal>inline for (std.meta.fields(Config))</literal> 时，Zig 在编译时展开这个循环，为每个字段生成专门的代码。这消除了运行时开销，同时保持类型安全——编译器验证所有字段类型在层之间匹配（参见 <link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/meta.zig">meta.zig</link>）。</para>
+</section>
+<section xml:id="config-layering-precedence">
+<title>使优先级明确</title>
+<para>因为 <literal>apply</literal> 在每次迭代时复制合并的结构体，切片字面量的顺序读取自上而下的优先级：后面的条目获胜。如果你需要惰性求值或短路合并，将 <literal>apply</literal> 交换为一旦设置字段就停止的版本——只要记住保持默认值不可变，这样前面的层就不会意外变异共享状态。<link xl:href="07__project-safe-file-copier.adoc">第7章</link></para>
+<section xml:id="deep-equality">
+<title>使用 std.meta.eql 进行深度结构相等性比较</title>
+<para>对于高级配置场景，如检测是否需要重新加载，<literal>std.meta.eql(a, b)</literal> 执行深度结构比较。这个函数递归处理嵌套结构体、联合体、错误联合和可选值：</para>
+<informalfigure>
+<mediaobject>
+<imageobject>
+<imagedata fileref="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNDAwIj4KICA8ZGVmcz4KICAgIDxzdHlsZT4KICAgICAgLm5vZGUgeyBmaWxsOiAjZjBmMGYwOyBzdHJva2U6ICMzMzM7IHN0cm9rZS13aWR0aDogMnB4OyB9CiAgICAgIC5lZGdlIHsgc3Ryb2tlOiAjMzMzOyBzdHJva2Utd2lkdGg6IDJweDsgfQogICAgICAubGFiZWwgeyBmb250LWZhbWlseTogQXJpYWwsIHNhbnMtc2VyaWY7IGZvbnQtc2l6ZTogMTRweDsgfQogICAgPC9zdHlsZT4KICA8L2RlZnM+CiAgPGcgY2xhc3M9ImxhYmVsIj4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIyMDAiIHk9IjUwIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iMzAwIiB5PSI4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgc3R5bGU9ImZvbnQtd2VpZ2h0OiBib2xkOyI+ZXFsKGEsIGIpPC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMTAwIiB5PSIxNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjE4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+5pWw5o2u5YiG5Lqr5rSyPC90ZXh0PgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjEwMCIgeT0iMjUwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iMTc1IiB5PSIyODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPuWfuuacrOihqDwvdGV4dD4KICAgIAogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjQwMCIgeT0iMTUwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iNDc1IiB5PSIxODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPuWfuuacrOiuruaWvTwvdGV4dD4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSI0MDAiIHk9IjI1MCIgd2lkdGg9IjE1MCIgaGVpZ2h0PSI2MCIgcng9IjUiLz4KICAgIDx0ZXh0IHg9IjQ3NSIgeT0iMjg1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj7ln7rmnKzooajmn6U8L3RleHQ+CiAgICAKICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIzMDAiIHk9IjM1MCIgd2lkdGg9IjE1MCIgaGVpZ2h0PSI2MCIgcng9IjUiLz4KICAgIDx0ZXh0IHg9IjM3NSIgeT0iMzg1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj7ln7rmnKzmlrDooag8L3RleHQ+CiAgICAKICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iMzAwIiB5MT0iMTEwIiB4Mj0iMTc1IiB5Mj0iMTUwIi8+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjMwMCIgeTE9IjExMCIgeDI9IjQ3NSIgeTI9IjE1MCIvPgogICAgCiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjE3NSIgeTE9IjIxMCIgeDI9IjE3NSIgeTI9IjI1MCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSI0NzUiIHkxPSIyMTAiIHgyPSI0NzUiIHkyPSIyNTAiLz4KICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iMzAwIiB5MT0iMzEwIiB4Mj0iMzc1IiB5Mj0iMzUwIi8+CiAgPC9nPgo8L3N2Zz4K" width="800" height="400"/>
+</imagedata>
+</imageobject>
+</mediaobject>
+</informalfigure>
+<para><literal>eql(a, b)</literal> 函数执行深度结构相等性比较，递归处理嵌套结构体、联合体、错误联合和可选值。这对于检测"无操作"配置更新很有用：</para>
+<screen><code language="zig">const old_config = loadedConfig;
+const new_config = parseConfigFile("app.conf");
+
+if (std.meta.eql(old_config, new_config)) {
+    // Skip reload, nothing changed
+    return;
+}
+// Apply new config</code></screen>
+<para>比较对结构体逐字段进行（包括嵌套的 <literal>Timeouts</literal>），比较联合体的标签和有效负载，并正确处理错误联合和可选值（参见 <link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/meta.zig">meta.zig</link>）。</para>
+</section>
+</section>
+<chapter xml:id="config-validation">
+<title>验证和防护栏</title>
+<para>一旦你捍卫了它们的不变式，类型化配置就变得值得信赖。Zig 的错误集将验证失败转化为可操作的诊断，辅助函数保持报告一致，无论你是在记录日志还是向 CLI 提供反馈（参见 <link xl:href="04__errors-resource-cleanup.adoc">第4章</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/debug.zig">debug.zig</link>）。</para>
+<section xml:id="config-validation-example">
+<title>使用错误集编码不变式</title>
+<para>这个验证器检查端口范围、TLS 先决条件和超时排序。每个失败映射到专用错误标签，以便调用者可以相应地进行反应。</para>
+<screen><code language="zig">const std = @import("std");
+
+const AppConfig = struct {
+    host: []const u8,
+    port: u16,
+    tls: bool = false,
+    cert_file: ?[]const u8 = null,
+    key_file: ?[]const u8 = null,
+    timeouts: struct {
+        connect_ms: u32,
+        read_ms: u32,
+    },
+};
+
+const ConfigError = error{
+    PortOutOfRange,
+    InsecureProduction,
+    TimeoutOrdering,
+    MissingTlsMaterial,
+};
+
+fn validate(config: AppConfig) ConfigError!void {
+    // 端口必须在 1024-65535 范围内（生产安全）
+    if (config.port &lt; 1024 or config.port &gt; 65535) {
+        return ConfigError.PortOutOfRange;
+    }
+
+    // 如果我们在生产环境中，不允许不安全的端口
+    if (std.mem.eql(u8, config.host, "0.0.0.0") and config.port &lt; 3000) {
+        return ConfigError.InsecureProduction;
+    }
+
+    // 连接超时必须小于读取超时
+    if (config.timeouts.connect_ms &gt;= config.timeouts.read_ms) {
+        return ConfigError.TimeoutOrdering;
+    }
+
+    // 如果启用了 TLS，我们需要证书文件
+    if (config.tls) {
+        if (config.cert_file == null or config.key_file == null) {
+            return ConfigError.MissingTlsMaterial;
+        }
+    }
+}
+
+fn report(name: []const u8, result: anytype) !void {
+    const stdout = std.io.getStdOut().writer();
+    if (@TypeOf(result) == @TypeOf({})) {
+        try stdout.print("{s}: ok\n", .{name});
+    } else {
+        try stdout.print("{s}: error {s}\n", .{ name, @errorName(result) });
+    }
+}
+
+pub fn main() !void {
+    const production = AppConfig{
+        .host = "config.internal",
+        .port = 9443,
+        .tls = true,
+        .cert_file = "/etc/ssl/cert.pem",
+        .key_file = "/etc/ssl/key.pem",
+        .timeouts = .{ .connect_ms = 60, .read_ms = 1100 },
+    };
+    try report("production", validate(production));
+
+    const insecure = AppConfig{
+        .host = "0.0.0.0",
+        .port = 8080,
+        .timeouts = .{ .connect_ms = 100, .read_ms = 1500 },
+    };
+    try report("insecure", validate(insecure));
+
+    const misordered = AppConfig{
+        .host = "localhost",
+        .port = 8080,
+        .timeouts = .{ .connect_ms = 1500, .read_ms = 1200 },
+    };
+    try report("misordered", validate(misordered));
+
+    const missing_tls_material = AppConfig{
+        .host = "secure.example.com",
+        .port = 443,
+        .tls = true,
+        // cert_file 和 key_file 缺失
+        .timeouts = .{ .connect_ms = 100, .read_ms = 1200 },
+    };
+    try report("missing_tls_material", validate(missing_tls_material));
+}</code></screen>
+<screen><prompt>运行</prompt>
+<code language="shell">$ zig run chapters-data/code/12__config-as-data/validate_config.zig</code></screen>
+<screen><prompt>输出</prompt>
+<code language="shell">production: ok
+insecure: error InsecureProduction
+misordered: error TimeoutOrdering
+missing_tls_material: error MissingTlsMaterial</code></screen>
+<para><link xl:href="04__errors-resource-cleanup.adoc">第4章</link></para>
+</section>
+<section xml:id="config-validation-reporting">
+<title>报告有用的诊断</title>
+<para>打印验证错误时使用 <literal>@errorName</literal>（或结构化枚举以获得更丰富的数据），这样操作员就能看到失败的确切不变式。将其与共享报告辅助函数配对——比如示例中的 <literal>report</literal>——以统一测试、日志记录和 CLI 反馈的格式。<link xl:href="03__data-fundamentals.adoc">第3章</link>，<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/Writer.zig">Writer.zig</link></para>
+<section xml:id="error-message-format">
+<title>错误消息格式化标准</title>
+<para>对于生产级诊断，遵循编译器的错误消息格式以提供一致、可解析的输出。标准格式符合用户对 Zig 工具链的期望：</para>
+<table frame="all" rowsep="1" colsep="1" id="table-error-format">
+<title>错误消息格式组件</title>
+<tgroup cols="3">
+<colspec colname="col_1" colwidth="1*"/>
+<colspec colname="col_2" colwidth="1*"/>
+<colspec colname="col_3" colwidth="2*"/>
+<thead>
+<row>
+<entry>组件</entry>
+<entry>格式</entry>
+<entry>描述</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry>位置</entry>
+<entry><literal>:line:col:</literal></entry>
+<entry>行号和列号（1 索引）</entry>
+</row>
+<row>
+<entry>严重性</entry>
+<entry><literal>error:</literal> 或 <literal>note:</literal></entry>
+<entry>消息严重级别</entry>
+</row>
+<row>
+<entry>消息</entry>
+<entry>文本</entry>
+<entry>实际错误或注释消息</entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+<para>示例错误消息：</para>
+<screen><code language="shell">config.toml:12:8: error: port must be between 1024 and 65535
+config.toml:15:1: error: TLS enabled but cert_file not specified
+config.toml:15:1: note: set cert_file and key_file when tls = true</code></screen>
+<para>冒号分隔的格式允许工具解析错误位置以进行 IDE 集成，严重级别（<literal>error:</literal> 与 <literal>note:</literal>）帮助用户区分问题和有用的上下文。验证配置文件时，包括文件名、行号（如果从解析器可用），以及对不变式违规的清晰描述。这种一致性使你的配置错误在 Zig 生态系统中感觉原生。</para>
+</section>
+</section>
+<section xml:id="config-validation-comptime">
+<title>模式漂移的编译时辅助函数</title>
+<para>对于更大的系统，考虑将配置结构体包装在编译时函数中，该函数使用 <literal>@hasField</literal> 验证字段存在或从默认值生成文档。这使得运行时代码保持较小，同时保证演进中的模式与生成的配置文件保持同步（参见 <link xl:href="15__comptime-and-reflection.adoc">第15章</link>）。</para>
+</section>
+<chapter xml:id="notes-caveats">
+<title>注意事项与警告</title>
+<itemizedlist>
+<listitem>
+<para>为字符串设置保留不可变的 <literal>[]const u8</literal> 切片，这样它们就可以安全地别名编译时常量而无需额外复制（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link>）。</para>
+</listitem>
+<listitem>
+<para>记住在发出配置诊断后刷新缓冲写入器，特别是当将 stdout 与进程管道混合时。</para>
+</listitem>
+<listitem>
+<para>分层覆盖时，在变异之前克隆可变子结构体（如分配器支持的列表），以避免跨层别名。<link xl:href="10__allocators-and-memory-management.adoc">第10章</link></para>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<para>使用可选遥测端点（<literal>?[]const u8</literal>）扩展 <literal>AppConfig</literal>，并更新验证器以确保在启用检测时设置它。</para>
+</listitem>
+<listitem>
+<para>实现一个 <literal>fromArgs</literal> 辅助函数，将键值命令行对解析为覆盖结构体，重用分层函数来应用它们。<link xl:href="05__project-tempconv-cli.adoc">第5章</link></para>
+</listitem>
+<listitem>
+<para>通过在编译时迭代 <literal>std.meta.fields(AppConfig)</literal> 并将行写入缓冲写入器，生成一个总结默认值的 Markdown 表格。<link xl:href="11__project-dynamic-string-builder.adoc">第11章</link></para>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<para>对于大规模配置，将 JSON/YAML 数据流式传输到竞技场支持的的结构体中，而不是在栈上构建所有内容，以避免耗尽临时缓冲区（参见 <link xl:href="10__allocators-and-memory-management.adoc">第10章</link>）。</para>
+</listitem>
+<listitem>
+<para>如果你需要动态键，将基于结构体的配置与 <literal>std.StringHashMap</literal> 查找配对，这样你就可以保持类型化默认值，同时仍然尊重用户提供的额外内容（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/hash_map.zig">hash_map.zig</link>）。</para>
+</listitem>
+<listitem>
+<para>验证通过网络上传的文件时，考虑 <literal>std.io.Reader</literal> 管道；这让你在实现整个配置之前进行短路（参见 <link xl:href="28__filesystem-and-io.adoc">第28章</link>）。</para>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>在 Zig 中进行 GPU 计算</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara><link xl:href="34__gpu-fundamentals.xml">第 34 章</link>概述了 GPU 执行模型、地址空间与调度规划；现在我们构建一个端到端工作负载：从 Zig 源开始，到验证后的二进制转储结束，准备提交到 Vulkan 或 WebGPU 的队列族。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Target.zig">Target.zig</link> 本项目由三部分拼接而成：用纯 Zig 编写的 SPIR-V 内核、具备 CPU 回退的宿主编排 CLI、以及用于比较捕获的 GPU 缓冲与期望结果的 diff 工具。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/build.zig">build.zig</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用自托管后端将 Zig 计算内核翻译为 SPIR-V，并理解其期望的资源布局。</simpara>
+</listitem>
+<listitem>
+<simpara>在可有/无 GPU 访问的宿主应用中协调缓冲、调度几何与验证路径。</simpara>
+</listitem>
+<listitem>
+<simpara>构建轻量诊断，将 GPU 输出与确定性的 CPU 参考进行比对。</simpara>
+</listitem>
+</itemizedlist>
+<simpara><emphasis>Refs: <link xl:href="34__gpu-fundamentals.xml">34__gpu-fundamentals.xml</link>, <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Random.zig">Random.zig</link></emphasis></simpara>
+</chapter>
+<chapter xml:id="pipeline-topology">
+<title>构建计算流水线</title>
+<simpara>本工作负载对向量元素进行平方。宿主创建提交元数据与数据缓冲，内核对每个 lane 求平方，diff 工具校验设备捕获的结果。静态的 lane 容量映射 GPU 的 storage-buffer 布局，而宿主强制逻辑边界，以便在调度了额外线程时内核可以安全退出。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link></simpara>
+<section xml:id="pipeline-topology-flow">
+<title>拓扑与数据流</title>
+<simpara>调度规模刻意保持适中（1000 个元素，按 64 线程分块），从而让你把精力放在正确性而非占用率调优上。宿主注入随机浮点值、记录校验和以便观测，并发射下游工具或真实 GPU 驱动可复用的二进制数据。由于 storage buffer 面向原始字节，我们为每个指针参数配以<literal>extern struct</literal>封装，以保证与描述符表的布局一致。</simpara>
+</section>
+</chapter>
+<chapter xml:id="authoring-kernel">
+<title>编写 SPIR-V 内核</title>
+<simpara>内核接收三个 storage buffer：描述逻辑长度的提交头、输入向量与输出向量。每次调用读取一个 lane、进行平方，并在边界内时将结果写回。防御性检查可阻止游离工作组越过逻辑长度访问内存——这在宿主为匹配 wavefront 粒度而填充调度时尤为常见。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 35__project-gpu-compute-in-zig.adoc - include::example$chapters-data/code/35__project-gpu-compute-in-zig/01_vector_square_kernel.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-obj -fno-llvm -O ReleaseSmall -target spirv32-vulkan-none \
+    -femit-bin=kernels/vector_square.spv \
+    01_vector_square_kernel.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">no output (binary module generated)</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>实验结束后删除<literal>kernels/vector_square.spv</literal>，以便重复运行时始终从源代码重建着色程序。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs.zig">fs.zig</link></simpara>
+</note>
+</chapter>
+<chapter xml:id="host-orchestration">
+<title>宿主编排与 CPU 回退</title>
+<simpara>宿主 CLI 规划调度、播种确定性输入、运行 CPU 回退，并在需要时将参考转储写入<literal>out/reference.bin</literal>。它还校验 SPIR-V 头（0x07230203），使构建问题能立即暴露，而非在图形 API 深处才失败。可选钩子允许你放入捕获的 GPU 缓冲（<literal>out/gpu_result.bin</literal>）以供事后比较。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 35__project-gpu-compute-in-zig.adoc - include::example$chapters-data/code/35__project-gpu-compute-in-zig/02_host_pipeline.zig[]</programlisting>
+<simpara><link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/math.zig">math.zig</link></simpara>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-obj -fno-llvm -O ReleaseSmall -target spirv32-vulkan-none \
+    -femit-bin=kernels/vector_square.spv \
+    01_vector_square_kernel.zig
+$ zig run 02_host_pipeline.zig -- --emit-binary</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">launch plan: 16 groups × 64 lanes =&gt; 1024 invocations (tail 24)
+cpu fallback checksum: 83467485.758038
+gpu module: kernels/vector_square.spv (5368 bytes, header ok)
+gpu capture diff: skipped (no out/gpu_result.bin file found)
+lane   0: in=0.10821 out=0.01171
+lane   1: in=1.07972 out=1.16579
+lane   2: in=1.03577 out=1.07281
+lane   3: in=2.33225 out=5.43938
+lane   4: in=2.92146 out=8.53491
+lane   5: in=2.89332 out=8.37133
+cpu reference written to out/reference.bin</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>若计划捕获 GPU 缓冲，请保留生成的<literal>out/reference.bin</literal>；否则删除以保持工作区整洁。</simpara>
+</tip>
+</chapter>
+<chapter xml:id="validation-diff">
+<title>验证设备转储</title>
+<simpara>diff 工具读取两份二进制转储（期望与捕获），并报告不匹配的 lane，同时预览前几处差异，以帮助你快速发现与数据相关的缺陷。它假定小端<literal>f32</literal>值，这与多数宿主 API 暴露原始映射缓冲的方式一致。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 35__project-gpu-compute-in-zig.adoc - include::example$chapters-data/code/35__project-gpu-compute-in-zig/03_compare_dump.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 03_compare_dump.zig -- out/reference.bin out/reference.bin</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">mismatched lanes: 0</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>要验证一次真实 GPU 运行，请将设备缓冲保存为<literal>out/gpu_result.bin</literal>，并用该文件重新运行<literal>03_compare_dump.zig</literal>以暴露任何分歧。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io.zig">Io.zig</link></simpara>
+</note>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>storage buffer 需要显式对齐；请让你的<literal>extern struct</literal>定义与宿主描述符绑定保持同步，以避免隐性填充错误。</simpara>
+</listitem>
+<listitem>
+<simpara>自托管 SPIR-V 后端会在 CPU 目标上拒绝不受支持的地址空间，因此需将内核源文件与宿主构建隔离（CPU 可执行不应<literal>@import</literal>内核）。</simpara>
+</listitem>
+<listitem>
+<simpara>确定性 PRNG 播种能使 CPU 与 GPU 执行在多次运行与 CI 环境中保持可比较性。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>通过绑定第二个输入缓冲扩展内核以融合乘加（<literal>a * a + b</literal>）；相应更新宿主与 diff 工具。</simpara>
+</listitem>
+<listitem>
+<simpara>让宿主 CLI 发射描述调度计划的 JSON 元数据，以便外部分析器读取运行配置。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json.zig">json.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>捕获真实 GPU 输出（通过 Vulkan、WebGPU 或 wgpu-native），并将二进制输入<literal>03_compare_dump.zig</literal>，注意你的硬件可能需要调整容差。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>不同厂商对 storage buffer 的映射不同；在假设<literal>f32</literal>数组是密集排布前，请检查所需的最小对齐（例如部分驱动要求 16 字节）。</simpara>
+</listitem>
+<listitem>
+<simpara>对非常大的缓冲，采用流式比较而非将整个转储载入内存，以避免在低端机器上对分配器施压。</simpara>
+</listitem>
+<listitem>
+<simpara>面向 CUDA（<literal>nvptx64</literal>）目标时，将调用约定切换为<literal>.kernel</literal>并调整地址空间（<literal>.global</literal>/<literal>.shared</literal>），以满足 PTX 预期。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

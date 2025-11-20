@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>Zig CLI 深入解析</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>上一章我们强化了不变量与快速失败策略（见<link xl:href="37__illegal-behavior-and-safety-modes.xml">37</link>）；现在将这套纪律用于驱动每个 Zig 项目的工具上。<literal>zig</literal>命令行接口不仅是编译器包装器：它可调度构建图运行器、即插即用的工具链垫片、格式化流水线与元数据导出器，保证代码库可复现。参见<link xl:href="ZIG_DEEP_WIKI.md#entry-points-and-command-structure">#entry points and command structure</link>。</simpara>
+<simpara>此处获得的洞见将直接用于即将到来的性能调优讨论，其中<literal>-OReleaseFast</literal>与<literal>--time-report</literal>等 CLI 标志成为关键测量杠杆（见<link xl:href="39__performance-and-inlining.xml">39</link>）。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>映射 <literal>zig</literal> CLI 暴露的主要命令家族，并了解何时使用每个命令。</simpara>
+</listitem>
+<listitem>
+<simpara>从 CLI 驱动编译、测试和清理器，同时保持跨目标输出的可复现性。</simpara>
+</listitem>
+<listitem>
+<simpara>将诊断命令—<literal>fmt</literal>、<literal>ast-check</literal>、<literal>env</literal>、<literal>targets</literal>—整合到日常工作中，及早发现正确性问题。</simpara>
+</listitem>
+</itemizedlist>
+<simpara><emphasis>Refs: <link xl:href="https://ziglang.org/documentation/master/#Command-line-flags">#Command-line-flags</link></emphasis></simpara>
+</chapter>
+<chapter xml:id="cli-topology">
+<title><literal>zig</literal>工具的命令地图</title>
+<simpara>Zig 提供一个单一二进制文件，其第一个位置参数选择要执行的子系统。理解该分发表是掌握 CLI 的最快途径。</simpara>
+<programlisting language="markdown" linenumbering="unnumbered">Unresolved directive in 38__zig-cli-deep-dive.adoc - include::example$chapters-data/code/38__zig-cli-deep-dive/zig-help.md[]</programlisting>
+<section xml:id="cli-build-execute">
+<title>构建与执行命令</title>
+<simpara>以编译为中心的命令（<literal>build-exe</literal>、<literal>build-lib</literal>、<literal>build-obj</literal>、<literal>run</literal>、<literal>test</literal>、<literal>test-obj</literal>）都流经相同的构建输出机制，为目标、优化、清理器和发射控制提供一致的选项。<literal>zig test-obj</literal>（0.15.2 新增）现在在需要与外部测试框架集成时，为嵌入自己的测试运行器发出对象文件（参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#compile-tests-to-object-file">#compile tests to object file</link>）。</simpara>
+</section>
+<section xml:id="cli-toolchain-dropin">
+<title>工具链即插即用模式</title>
+<simpara><literal>zig cc</literal>、<literal>zig c++</literal>、<literal>zig ar</literal>、<literal>zig dlltool</literal> 及其相关命令让您可以用 Zig 管理的垫片替换 Clang/LLVM 工具，保持交叉编译资源、libc 头文件和目标三元组的一致性，而无需处理 SDK 安装。这些命令遵循与 <literal>zig env</literal> 中相同的缓存目录，因此它们生成的工件会与您的原生 Zig 输出放在一起。</simpara>
+</section>
+<section xml:id="cli-package-init">
+<title>包引导命令</title>
+<simpara><literal>zig init</literal> 和 <literal>zig fetch</literal> 处理项目脚手架和依赖固定。版本 0.15.2 引入了 <literal>zig init --minimal</literal>，为已经知道如何构建构建图的团队仅生成一个 <literal>build.zig</literal> 存根加上有效的 <literal>build.zig.zon</literal> 指纹（参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#zig-init">#zig init</link>）。结合 <literal>zig fetch</literal>，您可以在 CI 启动前预热全局缓存，避免 <literal>zig build</literal> 从包管理器拉取模块时的首次运行延迟。</simpara>
+</section>
+</chapter>
+<chapter xml:id="cli-driving-compilation">
+<title>从 CLI 驱动编译</title>
+<simpara>一旦知道要调用哪个命令，艺术就在于选择正确的标志并读取它们呈现的元数据。Zig 的 CLI 反映了语言的明确性：每个安全切换和工件旋钮都呈现为标志，而 <literal>@import("builtin")</literal> 命名空间反映了构建所见的内容。</simpara>
+<section xml:id="cli-run-summary">
+<title>使用<literal>zig run</literal>检查构建上下文</title>
+<simpara><literal>zig run</literal>封装器接受所有编译标志，并支持通过<literal>--</literal>分隔将剩余参数转发给你的程序。这使其非常适合需要确定目标与优化设置的快速试验。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 38__zig-cli-deep-dive.adoc - include::example$chapters-data/code/38__zig-cli-deep-dive/01_cli_modes.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 01_cli_modes.zig -OReleaseFast -- --name zig --count 2</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">optimize-mode: ReleaseFast
+target-triple: x86_64-linux-gnu
+single-threaded: false
+user-args:
+  arg[0] = --name
+  arg[1] = zig
+  arg[2] = --count
+  arg[3] = 2</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>将 <literal>zig run</literal> 与 <literal>-fsanitize-c=trap</literal> 或 <literal>-fsanitize-c=full</literal> 配对，无需接触源代码即可切换 UBSan 风格的诊断。这些标志反映了 0.15.2 中添加的新模块级清理器控制（参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#allow-configuring-ubsan-mode-at-the-module-level">#allow configuring ubsan mode at the module level</link>）。</simpara>
+</tip>
+</section>
+<section xml:id="cli-test-filter">
+<title>按需过滤测试套件</title>
+<simpara><literal>zig test</literal> 接受 <literal>--test-filter</literal> 来限制编译和执行哪些测试名称，即使在单体套件中也能实现紧密的编辑-运行循环。当需要在 CI 管道中进行确定性报告时，将其与 <literal>--summary all</literal> 或 <literal>--summary failing</literal> 结合使用。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 38__zig-cli-deep-dive.adoc - include::example$chapters-data/code/38__zig-cli-deep-dive/02_cli_tests.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 02_cli_tests.zig --test-filter sum</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>当构建图产出<literal>zig test-obj</literal>时，可复用相同的过滤器。命令<literal>zig build test-obj --test-filter sum</literal>会以同样方式将过滤器转发给底层运行器。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="cli-long-running">
+<title>长时间构建与报告</title>
+<simpara>大型项目通常持续运行 <literal>zig build</literal>，因此理解其监视模式、Web UI 和报告钩子会带来回报。macOS 用户终于在 0.15.2 中获得了可靠的文件监视功能，这得益于重写的 <literal>--watch</literal> 实现（参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#macos-file-system-watching">#macos file system watching</link>）。将其与增量编译（<literal>-fincremental</literal>）配对，当文件更改时可将重建变为亚秒级操作。</simpara>
+<section xml:id="cli-webui">
+<title>Web 界面与时间报告</title>
+<simpara><literal>zig build --webui</literal> 启动一个本地仪表板，可视化构建图、活动步骤，当与 <literal>--time-report</literal> 结合时，还可显示语义分析和代码生成热点的细分（参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#web-interface-and-time-report">#web interface and time report</link>）。当怀疑编译时间缓慢时使用它："Declarations" 表突出显示哪些文件或声明消耗最多的分析时间，这些见解直接流入下一章涵盖的优化工作（参见<link xl:href="39__performance-and-inlining.xml">39</link>）。</simpara>
+</section>
+</chapter>
+<chapter xml:id="cli-diagnostics">
+<title>诊断与自动化助手</title>
+<simpara>除了编译程序外，CLI 还提供保持仓库整洁和可内省的工具：格式化器、AST 验证器、环境报告器和目标枚举器（参见<link xl:href="ZIG_DEEP_WIKI.md#formatter-zig-fmt">#formatter zig fmt</link>）。</simpara>
+<section xml:id="cli-ast-check">
+<title>使用<literal>zig ast-check</literal>进行批量语法校验</title>
+<simpara><literal>zig ast-check</literal> 解析文件而不发出二进制文件，比完整编译更快地捕获语法和导入问题。这对于编辑器保存钩子或预提交检查非常方便。下面的助手返回构建脚本可以重用的缓存和格式化默认值；对其运行 <literal>ast-check</literal> 可确保文件保持格式良好，即使没有可执行文件导入它。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 38__zig-cli-deep-dive.adoc - include::example$chapters-data/code/38__zig-cli-deep-dive/03_cli_astcheck.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig ast-check 03_cli_astcheck.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">(no output)</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>将 <literal>zig ast-check</literal> 与 <literal>zig fmt --check --ast-check</literal> 结合使用，拒绝违反样式或无法解析的提交——格式化器在底层已经有一个 AST 通道，因此额外的标志保持两个阶段同步。</simpara>
+</tip>
+</section>
+<section xml:id="cli-env-targets">
+<title>值得脚本化的自省命令</title>
+<simpara><literal>zig env</literal> 打印工具链解析的路径、缓存目录和活动目标三元组，使其成为在错误报告或 CI 日志中捕获的完美快照。<literal>zig targets</literal> 返回详尽的架构/操作系统/ABI 矩阵，您可以将其输入到 <literal>std.build</literal> 矩阵中以预计算发布工件。它们一起用单一事实来源替换脆弱的环境变量。</simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>优先使用<literal>zig build --build-file &lt;path&gt;</literal>，而不是将项目复制到临时目录；这可让你在隔离的构建图上试验 CLI 选项，并保持缓存条目确定。</simpara>
+</listitem>
+<listitem>
+<simpara>macOS 用户仍然需要为 <literal>--watch</literal> 授予文件系统权限。没有这些权限，构建器将回退到轮询并失去 0.15.2 中的新响应性。</simpara>
+</listitem>
+<listitem>
+<simpara>时间报告可以呈现大量数据。将它们与清理后的构建一起捕获，以便您知道昂贵的声明是否与调试断言或优化器工作相关。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>在 <literal>zig fetch</literal> 之前和之后编写 <literal>zig env</literal> 脚本，以验证您在 CI 中依赖的缓存路径在 Zig 版本之间保持不变。</simpara>
+</listitem>
+<listitem>
+<simpara>扩展 <literal>zig ast-check</literal> 示例以遍历目录树，然后将其连接到 <literal>zig build</literal> 自定义步骤，以便 <literal>zig build lint</literal> 在不编译的情况下验证语法。<link xl:href="22__build-system-deep-dive.xml">22</link></simpara>
+</listitem>
+<listitem>
+<simpara>在中等项目上使用 <literal>zig build --webui --time-report --watch</literal> 并记录哪些声明主导时间报告；重构一个热点声明并重新运行以量化改进。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>zig run</literal> always produces build artifacts in the cache. If you need a hermetic sandbox, favor <literal>zig build-exe -femit-bin</literal> into a throwaway directory and run the binary manually.</simpara>
+</listitem>
+<listitem>
+<simpara>CLI 的即插<literal>zig cc</literal>遵循 Zig 对 sysroot 的认知。若需平台厂商工具链的原样行为，请直接调用<literal>clang</literal>以避免头文件选择上的意外。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>zig targets</literal> output can be enormous. Filter it with <literal>jq</literal> or <literal>grep</literal> before piping into build scripts so that your automation remains stable even if future releases add new fields.</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

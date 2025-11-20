@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>Grep-Lite</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>我们的第二个项目从算术运算升级到文本处理：一个微型的<literal>grep</literal>克隆，它接受搜索模式和文件路径，然后只打印匹配的行。这个练习巩固了前一章中的参数处理，同时引入了标准库中的文件I/O和切片实用工具。<link xl:href="https://ziglang.org/documentation/master/#Command-line-flags">#Command-line-flags</link>, <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/File.zig">File.zig</link></simpara>
+<simpara>我们不再逐字节流式处理，而是依赖Zig的内存安全助手来加载文件、将其拆分成行，并通过简单的子字符串检查来显示匹配项。每个失败路径在退出前都会产生用户友好的消息，因此该工具在shell脚本中表现可预测——这是我们将在下一个项目中延续的主题。有关相关API，请参见<link xl:href="https://ziglang.org/documentation/master/#Command-line-flags">#Command-line-flags</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/File.zig">File.zig</link>，有关错误处理模式，请参见<link xl:href="https://ziglang.org/documentation/master/#Error-Handling">#Error-Handling</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>实现一个支持<literal>--help</literal>、强制执行参数数量并在误用时优雅终止的命令行解析例程。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>std.fs.File.readToEndAlloc</literal>和<literal>std.mem.splitScalar</literal>来加载和迭代文件内容（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>std.mem.indexOf</literal>过滤行，并通过stdout报告结果，同时将诊断信息定向到stderr（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/debug.zig">debug.zig</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="section-1">
+<title>构建搜索框架</title>
+<simpara>我们从连接CLI前端开始：分配参数、支持<literal>--help</literal>，并确认恰好有两个位置参数——模式和路径——存在。任何偏差都会打印使用横幅并以代码1退出，避免堆栈跟踪，同时仍然向调用者发出失败信号。</simpara>
+<section xml:id="section-1-sub-a">
+<title>验证参数和使用路径</title>
+<simpara>这个框架镜像了第5章的TempConv CLI，但现在我们将诊断信息发送到stderr，并在输入错误或无法打开文件时显式退出。<literal>printUsage</literal>将横幅保持在一个地方，而<literal>std.process.exit</literal>确保我们在消息写入后立即停止。</simpara>
+</section>
+<section xml:id="section-1-sub-b">
+<title>加载和拆分文件</title>
+<simpara>我们不再处理部分读取，而是使用<literal>File.readToEndAlloc</literal>将文件加载到内存中，将大小限制为8兆字节以防止意外的巨大文件。然后，对<literal>std.mem.splitScalar</literal>的单个调用会生成一个按换行符分隔的段的迭代器，我们会为Windows风格的回车符进行修剪。</simpara>
+<section xml:id="_understanding_std_fs_structure">
+<title>理解 std.fs 结构</title>
+<simpara>在深入文件操作之前，了解Zig的文件系统API是如何组织的很有帮助。<literal>std.fs</literal>模块提供了一个分层层次结构，使文件访问具有可移植性和可组合性：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "File System API Hierarchy"
+        CWD["std.fs.cwd()&lt;br/&gt;Returns: Dir"]
+        DIR["Dir type&lt;br/&gt;(fs/Dir.zig)"]
+        FILE["File type&lt;br/&gt;(fs/File.zig)"]
+    end
+
+    subgraph "Dir Operations"
+        OPENFILE["openFile(path, flags)&lt;br/&gt;Returns: File"]
+        MAKEDIR["makeDir(path)"]
+        OPENDIR["openDir(path)&lt;br/&gt;Returns: Dir"]
+        ITERATE["iterate()&lt;br/&gt;Returns: Iterator"]
+    end
+
+    subgraph "File Operations"
+        READ["read(buffer)&lt;br/&gt;Returns: bytes read"]
+        READTOEND["readToEndAlloc(allocator, max_size)&lt;br/&gt;Returns: []u8"]
+        WRITE["write(bytes)&lt;br/&gt;Returns: bytes written"]
+        SEEK["seekTo(pos)"]
+        CLOSE["close()"]
+    end
+
+    CWD --&gt; DIR
+    DIR --&gt; OPENFILE
+    DIR --&gt; MAKEDIR
+    DIR --&gt; OPENDIR
+    DIR --&gt; ITERATE
+
+    OPENFILE --&gt; FILE
+    OPENDIR --&gt; DIR
+
+    FILE --&gt; READ
+    FILE --&gt; READTOEND
+    FILE --&gt; WRITE
+    FILE --&gt; SEEK
+    FILE --&gt; CLOSE</literallayout>
+<simpara><emphasis role="strong">关键概念：</emphasis></simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">入口点</emphasis>：<literal>std.fs.cwd()</literal>返回一个表示当前工作目录的<literal>Dir</literal>句柄</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">目录类型</emphasis>：提供目录级操作，如打开文件、创建子目录和迭代内容</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">文件类型</emphasis>：表示具有读/写操作的打开文件</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">链式调用</emphasis>：你调用<literal>cwd().openFile()</literal>是因为<literal>openFile()</literal>是<literal>Dir</literal>类型上的方法</simpara>
+</listitem>
+</itemizedlist>
+<simpara><emphasis role="strong">为什么这种结构对Grep-Lite很重要：</emphasis></simpara>
+<programlisting language="zig" linenumbering="unnumbered">// 这就是我们这样写的原因：
+const file = try std.fs.cwd().openFile(path, .{});
+//                    ^        ^
+//                    |        +-- Dir上的方法
+//                    +----------- 返回Dir句柄</programlisting>
+<simpara>两步过程（<literal>cwd()</literal> → <literal>openFile()</literal>）让你可以控制<emphasis role="strong">在哪个</emphasis>目录中打开文件。虽然这个例子使用当前目录，但你同样可以使用：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>std.fs.openDirAbsolute()</literal>用于绝对路径</simpara>
+</listitem>
+<listitem>
+<simpara><literal>dir.openFile()</literal>用于相对于任何目录句柄的文件</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.fs.openFileAbsolute()</literal>完全跳过<literal>Dir</literal></simpara>
+</listitem>
+</itemizedlist>
+<simpara>这种可组合的设计使文件系统代码可测试（使用临时目录）且可移植（相同的API在所有平台上工作）。</simpara>
+</section>
+</section>
+</chapter>
+<chapter xml:id="section-2">
+<title>扫描匹配项</title>
+<simpara>一旦我们拥有每行的切片，匹配就是使用<literal>std.mem.indexOf</literal>的一行代码。我们重用TempConv模式，将stdout保留用于成功输出，stderr用于诊断，使工具对管道友好。</simpara>
+<section xml:id="workflow-1">
+<title>完整的Grep-Lite清单</title>
+<simpara>下面的完整清单展示了辅助函数如何组合在一起。注意将每个块与上面章节联系起来的注释。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 06__project-grep-lite.adoc - include::example$chapters-data/code/06__project-grep-lite/grep_lite.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run grep_lite.zig -- pattern grep_lite.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">    std.debug.print("usage: grep-lite &lt;pattern&gt; &lt;path&gt;\n", .{});
+        std.debug.print("error: expected a pattern and a path\n", .{});
+    const pattern = args[1];
+        if (std.mem.indexOf(u8, line, pattern) != null) {
+        std.debug.print("no matches for '{s}' in {s}\n", .{ pattern, path });</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>输出显示包含字面单词<literal>pattern</literal>的每个源代码行。当针对其他文件运行时，你的匹配列表会有所不同。</simpara>
+</note>
+</section>
+<section xml:id="workflow-2">
+<title>优雅地检测缺失文件</title>
+<simpara>为了保持shell脚本的可预测性，当文件路径无法打开时，该工具会发出单行诊断信息并以非零状态退出。</simpara>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run grep_lite.zig -- foo missing.txt</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">error: unable to open 'missing.txt'</programlisting>
+</para>
+</formalpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>readToEndAlloc</literal>很简单但会加载整个文件；如果你需要处理非常大的输入，稍后添加流式读取器。</simpara>
+</listitem>
+<listitem>
+<simpara>大小限制防止失控的分配。一旦你信任你的部署环境，可以提高它或使其可配置。</simpara>
+</listitem>
+<listitem>
+<simpara>这个例子使用缓冲的stdout写入器进行匹配，并使用<literal>std.debug.print</literal>向stderr进行诊断；我们通过写入器的<literal>end()</literal>在退出时刷新（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io.zig">Io.zig</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>在命令行上接受多个文件，并为每个匹配项打印<literal>path:line</literal>前缀（参见<link xl:href="https://ziglang.org/documentation/master/#for">#for</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>通过使用<literal>std.ascii.toLower</literal>规范化模式和每行来添加<literal>--ignore-case</literal>标志（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/ascii.zig">ascii.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>通过在整个缓冲区加载后集成第三方匹配器来支持正则表达式。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>Windows文件通常以<literal>\r\n</literal>结束行；修剪回车符保持子字符串检查的清洁。</simpara>
+</listitem>
+<listitem>
+<simpara>空模式当前匹配每一行。如果你倾向于将空字符串视为误用，请引入显式防护。</simpara>
+</listitem>
+<listitem>
+<simpara>要与更大的构建集成，请将<literal>zig run</literal>替换为<literal>zig build-exe</literal>步骤，并将二进制文件打包到你的<literal>PATH</literal>上。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

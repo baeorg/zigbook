@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>路径工具 (TDD)</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>在本实践章节中，我们构建一个微小的、分配器友好的路径助手，它与Zig的标准库配合良好，并且跨平台工作。我们将采用测试优先的方式开发它——然后还提供一个小型CLI演示，以便您无需测试工具就能看到实际输出。在此过程中，我们故意引入泄漏并观察Zig的测试分配器捕获它，然后修复并验证。</simpara>
+<simpara>目标不是替换<literal>std.fs.path</literal>，而是在一个现实的、小型的实用程序中练习API设计、测试驱动开发（TDD）和防泄漏分配。参见<link xl:href="13__testing-and-leak-detection.xml">13__testing-and-leak-detection.xml</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/path.zig">path.zig</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>设计一个小型、可组合的API：连接、基本名称/目录路径、扩展名和更改扩展名。</simpara>
+</listitem>
+<listitem>
+<simpara>正确使用分配器，在成功和失败路径下避免泄漏。<link xl:href="10__allocators-and-memory-management.xml">10__allocators-and-memory-management.xml</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>std.testing</literal>练习TDD，并将TDD与<literal>zig run</literal>演示配对以获得可见输出。<link xl:href="13__testing-and-leak-detection.xml">13__testing-and-leak-detection.xml</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="api-sketch">
+<title>小型API表面</title>
+<simpara>我们将在<literal>pathutil</literal>命名空间中实现四个助手：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>joinAlloc(allocator, parts)</literal> → <literal>[]u8</literal>：使用单个分隔符连接组件，保留绝对根路径</simpara>
+</listitem>
+<listitem>
+<simpara><literal>basename(path)</literal> → <literal>[]const u8</literal>：最后一个组件，忽略尾部分隔符</simpara>
+</listitem>
+<listitem>
+<simpara><literal>dirpath(path)</literal> → <literal>[]const u8</literal>：目录部分，无尾部分隔符（裸名称使用"."，根路径使用"/"）</simpara>
+</listitem>
+<listitem>
+<simpara><literal>extname(path)</literal> → <literal>[]const u8</literal> 和 <literal>changeExtAlloc(allocator, path, new_ext)</literal> → <literal>[]u8</literal></simpara>
+</listitem>
+</itemizedlist>
+<simpara>这些函数强调可预测的、教学友好的行为；对于生产级的边缘情况，请优先使用<literal>std.fs.path</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 14__project-path-utility.adoc - include::example$chapters-data/code/14__project-path-utility-tdd/path_util.zig[]</programlisting>
+<note>
+<simpara>出于教学目的，我们在解析时接受任何平台上的<literal>'/'</literal>或<literal>'\\'</literal>作为分隔符，但在连接时始终发出本地分隔符（<literal>std.fs.path.sep</literal>）。</simpara>
+</note>
+</chapter>
+<chapter xml:id="demo-run">
+<title>尝试：运行演示（可见输出）</title>
+<simpara>为了在测试运行器之外保持输出可见，这里有一个小型CLI，它调用我们的助手并打印结果。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 14__project-path-utility.adoc - include::example$chapters-data/code/14__project-path-utility-tdd/path_util_demo.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/14__project-path-utility-tdd/path_util_demo.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">join a,b,c =&gt; a/b/c
+join /,usr/,/bin =&gt; /usr/bin
+basename(/home/user/docs/report.txt) =&gt; report.txt
+dirpath(/home/user/docs/report.txt) =&gt; /home/user/docs
+extname(/home/user/docs/report.txt) =&gt; txt
+changeExt(/home/user/docs/report.txt, md) =&gt; /home/user/docs/report.md</programlisting>
+</para>
+</formalpara>
+</chapter>
+<chapter xml:id="tdd-loop">
+<title>测试优先：编码行为和边缘情况</title>
+<simpara>TDD有助于澄清意图并锁定边缘情况。我们保持测试小型且快速；它们使用Zig的测试分配器运行，该分配器默认捕获泄漏。本章包含测试，因为内容计划要求TDD；在其他地方，我们将优先使用<literal>zig run</literal>风格的演示以获得可见输出。参见<link xl:href="13__testing-and-leak-detection.xml">13__testing-and-leak-detection.xml</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/testing.zig">testing.zig</link>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 14__project-path-utility.adoc - include::example$chapters-data/code/14__project-path-utility-tdd/path_util_test.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/14__project-path-utility-tdd/path_util_test.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 3 tests passed.</programlisting>
+</para>
+</formalpara>
+</chapter>
+<chapter xml:id="leak-catch-fix">
+<title>捕获故意泄漏 → 修复它</title>
+<simpara>测试分配器在测试结束时标记泄漏。首先，一个忘记<literal>free</literal>的失败示例：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 14__project-path-utility.adoc - include::example$chapters-data/code/14__project-path-utility-tdd/leak_demo_fail.zig[]</programlisting>
+<formalpara>
+<title>运行（预期失败）</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/14__project-path-utility-tdd/leak_demo_fail.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出（摘录）</title>
+<para>
+<screen>[gpa] (err): memory address 0x… leaked:
+… path_util.zig:49:33: … in joinAlloc
+… leak_demo_fail.zig:6:42: … in test.deliberate leak caught by testing allocator
+
+All 1 tests passed.
+1 errors were logged.
+1 tests leaked memory.
+error: the following test command failed with exit code 1:
+…/test --seed=0x…</screen>
+</para>
+</formalpara>
+<simpara>然后使用<literal>defer</literal>修复它，并观察测试套件变为绿色：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 14__project-path-utility.adoc - include::example$chapters-data/code/14__project-path-utility-tdd/leak_demo_fix.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/14__project-path-utility-tdd/leak_demo_fix.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<simpara><link xl:href="10__allocators-and-memory-management.xml">10__allocators-and-memory-management.xml</link>, <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/heap.zig">heap.zig</link></simpara>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>对于生产级路径处理，请参考<literal>std.fs.path</literal>以了解平台细微差别（UNC路径、驱动器字母、特殊根路径）。</simpara>
+</listitem>
+<listitem>
+<simpara>在成功分配后立即优先使用<literal>defer allocator.free(buf)</literal>；它通过构造使成功和错误路径都正确。<link xl:href="04__errors-resource-cleanup.xml">04__errors-resource-cleanup.xml</link></simpara>
+</listitem>
+<listitem>
+<simpara>当您需要可见输出（教程、演示）时，优先使用<literal>zig run</literal>示例；当您需要保证（CI）时，优先使用<literal>zig test</literal>。本章演示了两种方法，因为它明确关注TDD。<link xl:href="13__testing-and-leak-detection.xml">13__testing-and-leak-detection.xml</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展<literal>joinAlloc</literal>以省略<literal>.</literal>段并折叠中间的<literal>..</literal>对（在根路径附近要小心）。为边缘情况添加测试，然后使用<literal>zig run</literal>进行演示。</simpara>
+</listitem>
+<listitem>
+<simpara>添加<literal>stem(path)</literal>，返回不带扩展名的基本名称；验证<literal>.gitignore</literal>、多点名称和尾随点的行为。</simpara>
+</listitem>
+<listitem>
+<simpara>编写一个微型CLI，接受<literal>--change-ext md file1 file2 …</literal>并打印结果，使用页面分配器和缓冲写入器。<link xl:href="28__filesystem-and-io.xml">28__filesystem-and-io.xml</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>在Windows上，此教学工具在输入时接受<literal>'/'</literal>和<literal>'\\'</literal>作为分隔符，但始终打印本地分隔符。如果你需要确切的Windows行为，<literal>std.fs.path</literal>具有更丰富的语义。</simpara>
+</listitem>
+<listitem>
+<simpara>分配失败处理：演示使用<literal>std.heap.page_allocator</literal>并在OOM时中止；测试使用<literal>std.testing.allocator</literal>来系统性地捕获泄漏。<link xl:href="10__allocators-and-memory-management.xml">10__allocators-and-memory-management.xml</link></simpara>
+</listitem>
+<listitem>
+<simpara>如果你将这些助手嵌入到更大的工具中，通过你的API传递分配器并保持所有权规则明确；避免全局状态。<link xl:href="36__style-and-best-practices.xml">36__style-and-best-practices.xml</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

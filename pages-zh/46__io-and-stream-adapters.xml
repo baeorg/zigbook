@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>I/O 与流适配器</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>上一章聚焦格式化与文本，其他章节介绍了使用简单缓冲输出的基础打印。本章深入 Zig 0.15.2 的流式原语：现代<literal>std.Io.Reader</literal>/<literal>std.Io.Writer</literal>接口及其配套适配器（限流视图、丢弃、复制、简单计数）。这些抽象有意暴露缓冲内部，使性能关键路径（格式化、分隔符扫描、哈希）保持确定性且零分配。不同于其他语言的不透明 I/O 层，Zig 的适配器极薄——往往是操作显式切片与索引的普通结构体方法。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/Writer.zig">Writer.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/Reader.zig">Reader.zig</link></simpara>
+<simpara>您将学习如何创建固定的内存写入器、迁移传统的 <literal>std.io.fixedBufferStream</literal> 使用、使用 <literal>limited</literal> 限制读取、复制输入流（tee）、高效丢弃输出以及组装管道（例如，分隔符处理）而无需隐藏分配。每个示例都很小、自包含，并演示了您可以在连接文件、套接字或未来异步抽象时重用的单个概念。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用 <literal>Writer.fixed</literal> / <literal>Reader.fixed</literal> 构造固定缓冲区写入器/读取器并检查缓冲的数据。</simpara>
+</listitem>
+<listitem>
+<simpara>安全地从传统的 <literal>std.io.fixedBufferStream</literal> 迁移到较新的 API。<link xl:href="44__collections-and-algorithms.xml">44</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>Reader.limited</literal> 强制执行字节限制，以保护解析器免受失控输入的影响。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/Reader/Limited.zig">Limited.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>实现复制（tee）和丢弃模式，无需额外分配。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>takeDelimiter</literal> / 相关助手流式传输分隔符分隔的数据进行行处理。</simpara>
+</listitem>
+<listitem>
+<simpara>分析何时选择缓冲与直接流式传输及其性能影响。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="fundamentals">
+<title>基础：固定 Writer 与 Reader</title>
+<simpara>基石抽象是表示流端点状态的值类型。固定 writer 会缓冲字节，直至缓冲满或显式刷新；固定 reader 暴露其缓冲区域的切片，并提供 peek/take 语义，便于在不复制的情况下进行增量解析。<link xl:href="03__data-fundamentals.xml">3</link></simpara>
+<section xml:id="fixed-writer-basic">
+<title>固定 Writer 基础（<literal>Writer.fixed</literal>）</title>
+<simpara>创建内存写入器，发出格式化的内容，然后检查并转发缓冲的切片。这反映了早期的格式化模式，但无需分配 <literal>ArrayList</literal> 或处理动态容量。<link xl:href="45__text-formatting-and-unicode.xml">45</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 46__io-and-stream-adapters.adoc - include::example$chapters-data/code/46__io-and-stream-adapters/reader_writer_basics.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run reader_writer_basics.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Header: I/O adapters
+Value A: 42
+Value B: deadbeef</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>缓冲由用户所有；你决定其生命周期与大小预算。不会发生隐式堆分配——这对紧密循环或嵌入式目标至关重要。</simpara>
+</tip>
+</section>
+<section xml:id="legacy-migration">
+<title>从<literal>std.io.fixedBufferStream</literal>迁移</title>
+<simpara>传统的 <literal>fixedBufferStream</literal>（小写 <literal>io</literal>）返回带有 <literal>reader()</literal> / <literal>writer()</literal> 方法的包装器类型。Zig 0.15.2 保留它们以保持兼容性，但更倾向于使用 <literal>std.Io.Writer.fixed</literal> / <literal>Reader.fixed</literal> 来进行统一的适配器组合。<link xl:href="01__boot-basics.xml">1</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/fixed_buffer_stream.zig">fixed_buffer_stream.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 46__io-and-stream-adapters.adoc - include::example$chapters-data/code/46__io-and-stream-adapters/fixed_buffer_stream.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run fixed_buffer_stream.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Legacy buffered writer example: answer 42
+Capacity used: 42/64</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>面向未来的互操作性，优先使用首字母大写的 <literal>Io</literal> 新接口；随着更多适配器转向现代接口，<literal>fixedBufferStream</literal> 可能最终退出历史舞台。</simpara>
+</note>
+</section>
+<section xml:id="limited-reader">
+<title>限制输入（<literal>Reader.limited</literal>）</title>
+<simpara>使用硬上限包装读取器以防御过大的输入（例如，标题部分、魔术前缀）。一旦限制耗尽，后续读取会提早指示流结束，保护下游逻辑。<link xl:href="04__errors-resource-cleanup.xml">4</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 46__io-and-stream-adapters.adoc - include::example$chapters-data/code/46__io-and-stream-adapters/limited_reader.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run limited_reader.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Hello</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>使用 <literal>limited(.limited(N), tmp_buffer)</literal> 进行协议保护；解析函数可以假设有界消耗并在提前结束时干净地退出。<link xl:href="33__c-interop-import-export-abi.xml">33</link></simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="adapters">
+<title>适配器与模式</title>
+<simpara>更高级别的行为（计数、tee、丢弃、分隔符流式传输）通过 <literal>buffered()</literal> 和小型辅助函数的简单循环出现，而不是繁重的继承或特征链。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+<section xml:id="counting">
+<title>字节计数（缓冲长度）</title>
+<simpara>在许多场景中，您只需要到目前为止生成的字节数——读取写入器当前缓冲的切片长度就足够了，避免了专用的计数适配器。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 46__io-and-stream-adapters.adoc - include::example$chapters-data/code/46__io-and-stream-adapters/counting_writer.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run counting_writer.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Total bytes logically written: 29</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>对于在刷新后缓冲区长度重置的流式接收器，集成一个自定义的 <literal>update</literal> 函数（参见哈希写入器设计）来跨刷新边界累积总计。</simpara>
+</note>
+</section>
+<section xml:id="discarding">
+<title>丢弃输出（<literal>Writer.consumeAll</literal>）</title>
+<simpara>基准测试和干运行通常需要测量格式化或转换成本，而不保留结果。消费缓冲区会将其长度归零；后续写入继续正常进行。<link xl:href="45__text-formatting-and-unicode.xml">45</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 46__io-and-stream-adapters.adoc - include::example$chapters-data/code/46__io-and-stream-adapters/discarding_writer.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run discarding_writer.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Buffer after consumeAll length: 0</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>consumeAll</literal> 是一种结构性的无分配操作；它只是调整 <literal>end</literal> 并（如果需要）移动剩余的字节。对于紧凑的内循环来说足够便宜。</simpara>
+</tip>
+</section>
+<section xml:id="tee">
+<title>Tee / 复制</title>
+<simpara>复制流（"tee"）可以手动构建：偷看、写入两个目标、丢弃。这避免了中间堆缓冲区，适用于有限或流水线输入。<link xl:href="28__filesystem-and-io.xml">28</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 46__io-and-stream-adapters.adoc - include::example$chapters-data/code/46__io-and-stream-adapters/tee_stream.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run tee_stream.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">A: tee me please
+B: tee me please</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>写入前始终执行<literal>peekGreedy(1)</literal>（或合适大小）；若不确保已缓冲内容，可能导致不必要的底层读取或过早终止。<link xl:href="44__collections-and-algorithms.xml">44</link></simpara>
+</important>
+</section>
+<section xml:id="delimiter-stream">
+<title>分隔符流式管线</title>
+<simpara>基于行或记录的协议受益于 <literal>takeDelimiter</literal>，它返回不包含分隔符的切片。循环直到 <literal>null</literal> 来处理所有逻辑行，而无需复制或分配。<link xl:href="31__networking-http-and-json.xml">31</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 46__io-and-stream-adapters.adoc - include::example$chapters-data/code/46__io-and-stream-adapters/stream_pipeline.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run stream_pipeline.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Line(5): alpha
+Line(4): beta
+Line(5): gamma</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>takeDelimiter</literal> 在最后一段之后产生 <literal>null</literal>——即使底层数据以分隔符结束——允许简单的终止检查而无需额外状态。<link xl:href="04__errors-resource-cleanup.xml">4</link></simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>固定缓冲区是有限的：超出容量会触发可能失败的写入——根据最坏情况下的格式化输出选择大小。<link xl:href="45__text-formatting-and-unicode.xml">45</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>limited</literal> 强制执行硬性上限；原始流的任何剩余部分保持未读状态（防止过读漏洞）。</simpara>
+</listitem>
+<listitem>
+<simpara>分隔符流式传输需要非零缓冲区容量；极小的缓冲区可能由于频繁的底层读取而降低性能。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</listitem>
+<listitem>
+<simpara>混合传统的 <literal>std.io.fixedBufferStream</literal> 和新的 <literal>std.Io.*</literal> 是安全的，但为了未来的维护，建议保持一致性。</simpara>
+</listitem>
+<listitem>
+<simpara>通过 <literal>buffered().len</literal> 计数不包括刷新的数据——如果在管道中间刷新，请使用持久累加器。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>实现一个简单的行计数器，如果任何单行超过 256 字节则使用 <literal>limited</literal> 包装器中止。<link xl:href="04__errors-resource-cleanup.xml">4</link></simpara>
+</listitem>
+<listitem>
+<simpara>构建一个 tee，同时使用哈希写入器适配器中的 <literal>Hasher.update</literal> 计算所有流式传输字节的 SHA-256 哈希。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/crypto/sha2.zig">sha2.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>编写一个基于分隔符 + 限制的读取器，从大型记录中仅提取前 M 个 CSV 字段，而不读取整个行。<link xl:href="44__collections-and-algorithms.xml">44</link></simpara>
+</listitem>
+<listitem>
+<simpara>扩展计数示例以在使用 <literal>{any}</literal> 格式化时跟踪逻辑（格式化后）和原始内容长度。<link xl:href="45__text-formatting-and-unicode.xml">45</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>零容量写入器是合法的，但会立即强制耗尽——为了性能，除非有意测试错误路径，否则应避免。</simpara>
+</listitem>
+<listitem>
+<simpara>复制非常大的缓冲块的 tee 循环可能会垄断缓存；对于巨大的流，考虑分块以提高局部性。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>takeDelimiter</literal> 将流结束符视为与分隔符类似；如果必须区分尾随空段，请跟踪处理的最后一个字节是否为分隔符。<link xl:href="31__networking-http-and-json.xml">31</link></simpara>
+</listitem>
+<listitem>
+<simpara>与文件系统 API（第 28 章）直接混合会引入平台特定的缓冲区；在包装 OS 文件描述符时重新验证限制。<link xl:href="28__filesystem-and-io.xml">28</link></simpara>
+</listitem>
+<listitem>
+<simpara>如果未来的异步 I/O 引入暂停点，依赖紧凑的 peek/toss 循环的适配器必须确保跨产量的不变性——尽早记录假设。<link xl:href="17__generic-apis-and-type-erasure.xml">17</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

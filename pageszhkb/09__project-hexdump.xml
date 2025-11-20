@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<article xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目：十六进制转储</title>
+<date>2025-11-03</date>
+<author>
+<personname>
+<firstname>Zig</firstname>
+<surname>文档团队</surname>
+</personname>
+<email>zig@example.com</email>
+</author>
+<authorinitials>ZT</authorinitials>
+<revhistory>
+<revision>
+<revnumber>1</revnumber>
+<date>2025-11-03</date>
+<authorinitials>ZT</authorinitials>
+</revision>
+</revhistory>
+<keywordset>
+<keyword>cli</keyword>
+<keyword>filesystem</keyword>
+<keyword>formatting</keyword>
+<keyword>hex</keyword>
+<keyword>io</keyword>
+</keywordset>
+</info>
+
+<section xml:id="overview">
+<title>概览</title>
+<simpara>这个项目将原始字节转换为整洁的、对齐感知的十六进制视图。我们将逐步读取文件，将每行格式化为 <literal>OFFSET: HEX  ASCII</literal>，并在跨平台时保持输出稳定。写入器接口通过 <literal>std.fs.File.writer</literal> 和 <literal>std.Io.Writer</literal> 使用缓冲的stdout，如 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/File.zig">File.zig</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io.zig">Io.zig</link> 中所述。</simpara>
+<simpara>格式化器默认每行打印16个字节，可以用 <literal>--width N</literal> (4..32) 配置。字节按 <literal>8|8</literal> 分组以便于扫描，不可打印的ASCII在右侧边栏中变为点，如 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link> 和 <link xl:href="https://ziglang.org/documentation/master/#Command-line-flags">#命令行标志</link> 中所述。</simpara>
+</section>
+
+<section xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>用 <literal>std.fmt.parseInt</literal> 解析CLI标志和验证数字。</simpara>
+</listitem>
+<listitem>
+<simpara>用固定缓冲区流式传输文件并组装精确宽度的输出行。</simpara>
+</listitem>
+<listitem>
+<simpara>使用非弃用的 <literal>File.Writer</literal> + <literal>Io.Writer</literal> 缓冲stdout并干净地刷新。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="building">
+<title>构建转储</title>
+<simpara>我们将连接三个部分：一个微型CLI解析器、一个行格式化器，以及一个以精确宽度块提供格式化器的循环。实现依赖于Zig的切片和显式生命周期（在释放args之前复制路径）以保持健壮；参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/process.zig">process.zig</link> 和 <link xl:href="https://ziglang.org/documentation/master/#Error-Handling">#错误处理</link>。</simpara>
+
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 09__project-hexdump.adoc - include::example$chapters-data/code/09__project-hexdump/hexdump.zig[]</programlisting>
+
+<para>运行</para>
+<screen><prompt>$</prompt> <userinput>zig run hexdump.zig -- sample.txt</userinput></screen>
+
+<para>输出</para>
+<screen>00000000: 48 65 6C 6C 6F 2C 20 48  65 78 64 75 6D 70 21 0A   Hello, Hexdump!.</screen>
+
+<note><simpara>ASCII边栏用 <literal>.</literal> 替换不可打印的字节；文件末尾的换行符显示为 <literal>0A</literal> 和右侧的点。</simpara></note>
+</section>
+
+<section xml:id="width">
+<title>宽度和分组</title>
+<simpara>传递 <literal>--width N</literal> 以更改每行的字节数。分组仍然将行分成两半（<literal>N/2</literal>）以保持眼睛固定。</simpara>
+
+<screen><prompt>$</prompt> <userinput>zig run hexdump.zig -- --width 8 sample.txt</userinput></screen>
+
+<para>输出</para>
+<screen>00000000: 48 65 6C 6C  6F 2C 20 48   Hello, H
+00000008: 65 78 64 75  6D 70 21 0A   exdump!.</screen>
+
+<tip><simpara>行格式化器填充十六进制和ASCII区域，以便最后一行列对齐整齐，其中字节可能无法填充完整的宽度。</simpara></tip>
+</section>
+
+<section xml:id="notes-caveats">
+<title>说明与注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>避免弃用的I/O表面；这个例子使用 <literal>File.writer</literal> 加上 <literal>Io.Writer</literal> 缓冲区并调用 <literal>end()</literal> 来刷新并设置最终位置。</simpara>
+</listitem>
+<listitem>
+<simpara>十六进制格式化保持简单——超出偏移量没有 <literal>-C</literal> 风格的索引列。扩展格式化器是一个简单的后续练习。</simpara>
+</listitem>
+<listitem>
+<simpara>参数生命周期很重要：如果你在使用 <literal>cli.path</literal> 之前释放 <literal>args</literal>，复制路径字符串。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>添加 <literal>--group N</literal> 以控制额外空格位置（当前 <literal>N = width/2</literal>）。</simpara>
+</listitem>
+<listitem>
+<simpara>支持 <literal>--offset 0xNN</literal> 以在除零之外的基数处启动地址。</simpara>
+</listitem>
+<listitem>
+<simpara>包括每行右侧的十六进制校验和和最终页脚（例如，总字节数）。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="caveats-alternatives-edge-cases">
+<title>替代方案和边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>大文件：代码在固定大小的块中流式传输并组装行；调整缓冲区大小以匹配你的I/O环境。</simpara>
+</listitem>
+<listitem>
+<simpara>非ASCII编码：ASCII边栏是故意粗糙的。对于UTF-8感知，你需要一个更仔细的渲染器；参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/unicode.zig">unicode.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>二进制管道：当没有提供路径时从 <literal>stdin</literal> 读取；如果你想支持管道，相应地调整打开/循环。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+</article>
+</book>

@@ -1,0 +1,620 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>构建系统深度解析</title>
+<subtitle><literal>build.zig</literal> &amp; <literal>std.Build</literal></subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>第21章<link xl:href="21__zig-init-and-package-metadata.xml">21</link>展示了<literal>build.zig.zon</literal>如何声明包元数据；本章揭示<literal>build.zig</literal>如何使用<literal>std.Build</literal> API编写构建步骤的有向无环图来编排编译过程，构建运行器执行该图以产生产物——可执行文件、库、测试和自定义转换——同时缓存中间结果并并行化独立工作（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build.zig">Build.zig</link>）。</simpara>
+<simpara>与命令式编译单个入口点的<literal>zig run</literal>或<literal>zig build-exe</literal>不同，<literal>build.zig</literal>是可执行的Zig代码，它构建声明式构建图：节点表示编译步骤，边表示依赖关系，构建运行器（<literal>zig build</literal>）以最优方式遍历该图。有关发布详情，请参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>区分 <literal>zig build</literal>（构建图执行）与 <literal>zig run</literal> / <literal>zig build-exe</literal>（直接编译）。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>b.standardTargetOptions()</literal> 和 <literal>b.standardOptimizeOption()</literal> 暴露用户可配置的目标和优化选项。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>b.addModule()</literal> 和 <literal>b.createModule()</literal> 创建模块，理解何时公开模块与私有模块（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build/Module.zig">Module.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>b.addExecutable()</literal> 构建可执行文件，使用 <literal>b.addLibrary()</literal> 构建库，并在构件之间建立依赖关系（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build/Step/Compile.zig">Compile.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>b.addTest()</literal> 集成测试，使用 <literal>b.step()</literal> 连接自定义顶层步骤。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>zig build -v</literal> 调试构建失败，并解释因缺失模块或错误依赖关系导致的图错误。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="build-zig-as-code">
+<title><literal>build.zig</literal> 作为可执行的 Zig 代码</title>
+<simpara>每个 <literal>build.zig</literal> 导出一个 <literal>pub fn build(b: *std.Build)</literal> 函数，构建运行器在解析 <literal>build.zig.zon</literal> 并设置构建图上下文后调用此函数；在此函数内，您使用 <literal>*std.Build</literal> 指针上的方法以声明方式注册步骤、构件和依赖关系。<link xl:href="21__zig-init-and-package-metadata.xml">21</link></simpara>
+<section xml:id="imperative-vs-declarative">
+<title>命令式命令 vs. 声明式图</title>
+<simpara>当您运行 <literal>zig run main.zig</literal> 时，编译器立即编译 <literal>main.zig</literal> 并执行它——这是一个单次执行的命令式工作流。当您运行 <literal>zig build</literal> 时，运行器首先执行 <literal>build.zig</literal> 来构建步骤图，然后分析该图以确定哪些步骤需要运行（基于缓存状态和依赖关系），最后在可能的情况下并行执行这些步骤。</simpara>
+<simpara>这种声明式方法实现了：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">增量构建</emphasis>：未更改的构件不会被重新编译</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">并行执行</emphasis>：独立的步骤同时运行</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">可重现性</emphasis>：相同的图产生相同的输出</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">可扩展性</emphasis>：自定义步骤无缝集成</simpara>
+</listitem>
+</itemizedlist>
+<simpara><link xl:href="https://github.com/ziglang/zig/blob/master/lib/init/build.zig">build.zig 模板</link></simpara>
+</section>
+<section xml:id="minimal-build">
+<title>最小化 <literal>build.zig</literal></title>
+<simpara>最简单的 <literal>build.zig</literal> 创建一个可执行文件并安装它：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/01_minimal/build.zig[]</programlisting>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/01_minimal/main.zig[]</programlisting>
+<formalpara><title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build
+$ ./zig-out/bin/hello</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Hello from minimal build!</programlisting>
+</para>
+</formalpara>
+<simpara>此示例硬编码 <literal>b.graph.host</literal>（运行构建的机器）作为目标和 <literal>.Debug</literal> 优化，因此用户无法自定义它。对于实际项目，请将这些暴露为选项。</simpara>
+<important>
+<simpara><literal>build</literal> 函数本身不编译任何内容——它只在图中注册步骤。构建运行器在 <literal>build()</literal> 返回后执行该图。</simpara>
+</important>
+</section>
+</chapter>
+<chapter xml:id="standard-options">
+<title>标准选项助手</title>
+<simpara>大多数项目希望用户能够控制目标架构/操作系统和优化级别；<literal>std.Build</literal> 提供了两个助手，将这些暴露为 CLI 标志并优雅地处理默认值。</simpara>
+<section xml:id="standard-target-options">
+<title><literal>standardTargetOptions()</literal>：简化跨平台编译</title>
+<simpara><literal>b.standardTargetOptions(.{})</literal> 返回一个 <literal>std.Build.ResolvedTarget</literal>，它尊重 <literal>-Dtarget=</literal> 标志，允许用户在不修改 <literal>build.zig</literal> 的情况下进行跨平台编译：</simpara>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build -Dtarget=x86_64-linux       # Linux x86_64
+$ zig build -Dtarget=aarch64-macos      # macOS ARM64
+$ zig build -Dtarget=wasm32-wasi        # WebAssembly WASI</programlisting>
+<simpara>空选项结构体 <literal>(.{})</literal> 接受默认值；您可以选择性地白名单目标或指定回退：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">const target = b.standardTargetOptions(.{
+    .default_target = .{ .cpu_arch = .x86_64, .os_tag = .linux },
+});</programlisting>
+</section>
+<section xml:id="standard-optimize-options">
+<title><literal>standardOptimizeOption()</literal>：用户控制的优化</title>
+<simpara><literal>b.standardOptimizeOption(.{})</literal> 返回一个 <literal>std.builtin.OptimizeMode</literal>，它尊重 <literal>-Doptimize=</literal> 标志，值为 <literal>.Debug</literal>、<literal>.ReleaseSafe</literal>、<literal>.ReleaseFast</literal> 或 <literal>.ReleaseSmall</literal>：</simpara>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build                             # Debug（默认）
+$ zig build -Doptimize=ReleaseFast      # 最大速度
+$ zig build -Doptimize=ReleaseSmall     # 最小大小</programlisting>
+<simpara>选项结构体接受一个 <literal>.preferred_optimize_mode</literal> 来在用户未指定时建议默认值。如果您不传递偏好，系统将从 <literal>build.zig.zon</literal> 中的包 <literal>release_mode</literal> 设置推断。<link xl:href="21__zig-init-and-package-metadata.xml">21</link></simpara>
+<simpara>在底层，选择的 <literal>OptimizeMode</literal> 会输入到编译器配置中，并影响安全检查、调试信息和后端优化级别：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "Optimization Mode Effects"
+        OptMode["optimize_mode: OptimizeMode"]
+
+        OptMode --&gt; SafetyChecks["Runtime Safety Checks"]
+        OptMode --&gt; DebugInfo["Debug Information"]
+        OptMode --&gt; CodegenStrategy["Codegen Strategy"]
+        OptMode --&gt; LLVMOpt["LLVM Optimization Level"]
+
+        SafetyChecks --&gt; Overflow["Integer overflow checks"]
+        SafetyChecks --&gt; Bounds["Bounds checking"]
+        SafetyChecks --&gt; Null["Null pointer checks"]
+        SafetyChecks --&gt; Unreachable["Unreachable assertions"]
+
+        DebugInfo --&gt; StackTraces["Stack traces"]
+        DebugInfo --&gt; DWARF["DWARF debug info"]
+        DebugInfo --&gt; LineInfo["Source line information"]
+
+        CodegenStrategy --&gt; Inlining["Inline heuristics"]
+        CodegenStrategy --&gt; Unrolling["Loop unrolling"]
+        CodegenStrategy --&gt; Vectorization["SIMD vectorization"]
+
+        LLVMOpt --&gt; O0["Debug: -O0"]
+        LLVMOpt --&gt; O2Safe["ReleaseSafe: -O2 + safety"]
+        LLVMOpt --&gt; O3["ReleaseFast: -O3"]
+        LLVMOpt --&gt; Oz["ReleaseSmall: -Oz"]
+    end</literallayout>
+<simpara>这与 <literal>b.standardOptimizeOption()</literal> 返回的 <literal>OptimizeMode</literal> 相同，因此您在 <literal>build.zig</literal> 中暴露的标志直接决定了哪些安全检查保持启用以及编译器选择哪个优化管道。</simpara>
+</section>
+<section xml:id="configurable-example">
+<title>完整示例与标准选项</title>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/02_standard_options/build.zig[]</programlisting>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/02_standard_options/main.zig[]</programlisting>
+<formalpara><title>使用选项构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build -Dtarget=x86_64-linux -Doptimize=ReleaseFast run</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出（示例）</title>
+<para>
+<screen>Target: x86_64-linux
+Optimize: ReleaseFast</screen>
+</para>
+</formalpara>
+<tip>
+<simpara>除非您有非常具体的原因需要硬编码值（例如，针对固定嵌入式系统的固件），否则始终使用 <literal>standardTargetOptions()</literal> 和 <literal>standardOptimizeOption()</literal>。</simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="modules-and-imports">
+<title>模块：公共与私有</title>
+<simpara>Zig 0.15.2 区分 <emphasis role="strong">公共模块</emphasis>（通过 <literal>b.addModule()</literal> 暴露给消费者）和 <emphasis role="strong">私有模块</emphasis>（当前包内部使用，通过 <literal>b.createModule()</literal> 创建）。公共模块通过 <literal>b.dependency()</literal> 出现在下游的 <literal>build.zig</literal> 文件中，而私有模块仅存在于您的构建图中。</simpara>
+<section xml:id="add-module-vs-create-module">
+<title><literal>addModule</literal> vs. <literal>createModule</literal></title>
+<itemizedlist>
+<listitem>
+<simpara><literal>b.addModule(name, options)</literal> 创建一个模块并将其注册到包的公共模块表中，使其可供依赖此包的消费者使用。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>b.createModule(options)</literal> 创建一个不暴露的模块；适用于可执行文件特定的代码或内部辅助工具。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>两个函数都返回一个 <literal>*std.Build.Module</literal>，您通过 <literal>.imports</literal> 字段将其连接到编译步骤中。</simpara>
+</section>
+<section xml:id="module-example">
+<title>示例：公共模块与可执行文件</title>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/03_modules/build.zig[]</programlisting>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/03_modules/math.zig[]</programlisting>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/03_modules/main.zig[]</programlisting>
+<formalpara><title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build run</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">10 + 20 = 30
+10 * 20 = 200</programlisting>
+</para>
+</formalpara>
+<simpara>这里 <literal>math</literal> 是一个 <emphasis role="strong">公共模块</emphasis>（此包的消费者可以 <literal>@import("math")</literal>），而可执行文件的根模块是 <emphasis role="strong">私有</emphasis>的（使用 <literal>createModule</literal> 创建）。</simpara>
+<note>
+<simpara><literal>Module.CreateOptions</literal> 中的 <literal>.imports</literal> 字段是一个 <literal>.{ .name = &#8230;&#8203;, .module = &#8230;&#8203; }</literal> 对的切片，允许您将任意导入名称映射到模块指针——在消费多个包时避免名称冲突非常有用。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="artifacts">
+<title>构件：可执行文件、库、对象文件</title>
+<simpara>一个 <emphasis role="strong">构件</emphasis> 是产生二进制输出的编译步骤：可执行文件、静态或动态库，或对象文件。<literal>std.Build</literal> API 提供了 <literal>addExecutable()</literal>、<literal>addLibrary()</literal> 和 <literal>addObject()</literal> 函数，它们返回 <literal>*Step.Compile</literal> 指针。</simpara>
+<section xml:id="add-executable">
+<title><literal>addExecutable()</literal>: 构建程序</title>
+<simpara><literal>b.addExecutable(.{ .name = &#8230;&#8203;, .root_module = &#8230;&#8203; })</literal> 创建一个 <literal>Step.Compile</literal>，它将 <literal>main</literal> 函数（或独立环境的 <literal>_start</literal>）链接到可执行文件中：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">const exe = b.addExecutable(.{
+    .name = "myapp",
+    .root_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    }),
+});
+b.installArtifact(exe);</programlisting>
+<itemizedlist>
+<listitem>
+<simpara><literal>.name</literal>: 输出文件名（例如，Windows 上的 <literal>myapp.exe</literal>，Unix 上的 <literal>myapp</literal>）。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>.root_module</literal>: 包含入口点的模块。</simpara>
+</listitem>
+<listitem>
+<simpara>可选：<literal>.version</literal>、<literal>.linkage</literal>（用于 PIE）、<literal>.max_rss</literal>、<literal>.use_llvm</literal>、<literal>.use_lld</literal>、<literal>.zig_lib_dir</literal>。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+<section xml:id="add-library">
+<title><literal>addLibrary()</literal>: 静态和动态库</title>
+<simpara><literal>b.addLibrary(.{ .name = &#8230;&#8203;, .root_module = &#8230;&#8203;, . linkage = &#8230;&#8203; })</literal> 创建一个库：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">const lib = b.addLibrary(.{
+    .name = "utils",
+    .root_module = b.createModule(.{
+        .root_source_file = b.path("utils.zig"),
+        .target = target,
+        .optimize = optimize,
+    }),
+    . linkage = .static, // or .dynamic
+    .version = .{ .major = 1, .minor = 0, .patch = 0 },
+});
+b.installArtifact(lib);</programlisting>
+<itemizedlist>
+<listitem>
+<simpara><literal>.linkage = .static</literal> 产生一个 <literal>.a</literal>（Unix）或 <literal>.lib</literal>（Windows）归档文件。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>.linkage = .dynamic</literal> 产生一个 <literal>.so</literal>（Unix）、<literal>.dylib</literal>（macOS）或 <literal>.dll</literal>（Windows）共享库。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>.version</literal>: 嵌入在库元数据中的语义版本（仅 Unix）。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+<section xml:id="linking-libraries">
+<title>将库链接到可执行文件</title>
+<simpara>要将库链接到可执行文件中，在创建两个构件后调用 <literal>exe.linkLibrary(lib)</literal>：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/05_library/build.zig[]</programlisting>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/05_library/utils.zig[]</programlisting>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/05_library/main.zig[]</programlisting>
+<formalpara><title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build run</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">double(7) = 14
+square(7) = 49</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>当链接 Zig 库时，符号必须被 <literal>export</literal>（用于 C ABI）或者您必须使用模块导入——Zig 没有与模块导出不同的链接器级"公共 Zig API"概念。</simpara>
+</important>
+</section>
+<section xml:id="install-artifact">
+<title>安装构件：<literal>installArtifact()</literal></title>
+<simpara><literal>b.installArtifact(exe)</literal> 添加对默认安装步骤（不带参数的 <literal>zig build</literal>）的依赖，该步骤将构件复制到 <literal>zig-out/bin/</literal>（可执行文件）或 <literal>zig-out/lib/</literal>（库）。您可以自定义安装目录，或者如果构件仅是中间产物，则完全跳过安装。</simpara>
+</section>
+</chapter>
+<chapter xml:id="tests-and-test-steps">
+<title>测试与测试步骤</title>
+<simpara>Zig 的测试块直接集成到构建系统中：<literal>b.addTest(.{ .root_module = &#8230;&#8203; })</literal> 创建一个特殊的可执行文件，运行给定模块中的所有 <literal>test</literal> 块，并向构建运行器报告通过/失败。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+<section xml:id="add-test">
+<title><literal>addTest()</literal>：编译测试可执行文件</title>
+<programlisting language="zig" linenumbering="unnumbered">const lib_tests = b.addTest(.{
+    .root_module = lib_mod,
+});
+
+const run_lib_tests = b.addRunArtifact(lib_tests);
+
+const test_step = b.step("test", "Run library tests");
+test_step.dependOn(&amp;run_lib_tests.step);</programlisting>
+<simpara><literal>b.addTest()</literal> 返回一个 <literal>*Step.Compile</literal>，就像 <literal>addExecutable()</literal> 一样，但它以测试模式编译模块，链接测试运行器并启用仅测试代码路径。</simpara>
+</section>
+<section xml:id="test-example">
+<title>完整测试集成示例</title>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/04_tests/build.zig[]</programlisting>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/04_tests/lib.zig[]</programlisting>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/04_tests/main.zig[]</programlisting>
+<formalpara><title>运行测试</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build test</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出（成功）</title>
+<para>
+<screen>All 3 tests passed.</screen>
+</para>
+</formalpara>
+<tip>
+<simpara>为每个模块创建单独的测试步骤，以隔离故障并启用并行测试执行。</simpara>
+</tip>
+<simpara><emphasis>要了解这在大型代码库中的扩展方式，Zig 编译器自身的 <literal>build.zig</literal> 将许多专门的测试步骤连接到一个统一的 <literal>test</literal> 步骤中：</emphasis></simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "测试步骤"
+        TEST_STEP["test 步骤&lt;br/&gt;(总括步骤)"]
+        FMT["test-fmt&lt;br/&gt;格式检查"]
+        CASES["test-cases&lt;br/&gt;编译器测试用例"]
+        MODULES["test-modules&lt;br/&gt;按目标模块测试"]
+        UNIT["test-unit&lt;br/&gt;编译器单元测试"]
+        STANDALONE["独立测试"]
+        CLI["CLI 测试"]
+        STACK_TRACE["堆栈跟踪测试"]
+        ERROR_TRACE["错误跟踪测试"]
+        LINK["链接测试"]
+        C_ABI["C ABI 测试"]
+        INCREMENTAL["test-incremental&lt;br/&gt;增量编译"]
+    end
+
+    subgraph "模块测试"
+        BEHAVIOR["行为测试&lt;br/&gt;test/behavior.zig"]
+        COMPILER_RT["compiler_rt 测试&lt;br/&gt;lib/compiler_rt.zig"]
+        ZIGC["zigc 测试&lt;br/&gt;lib/c.zig"]
+        STD["std 测试&lt;br/&gt;lib/std/std.zig"]
+        LIBC_TESTS["libc 测试"]
+    end
+
+    subgraph "测试配置"
+        TARGET_MATRIX["test_targets 数组&lt;br/&gt;不同架构&lt;br/&gt;不同操作系统&lt;br/&gt;不同ABI"]
+        OPT_MODES["优化模式:&lt;br/&gt;Debug, ReleaseFast&lt;br/&gt;ReleaseSafe, ReleaseSmall"]
+        FILTERS["test-filter&lt;br/&gt;test-target-filter"]
+    end
+
+    TEST_STEP --&gt; FMT
+    TEST_STEP --&gt; CASES
+    TEST_STEP --&gt; MODULES
+    TEST_STEP --&gt; UNIT
+    TEST_STEP --&gt; STANDALONE
+    TEST_STEP --&gt; CLI
+    TEST_STEP --&gt; STACK_TRACE
+    TEST_STEP --&gt; ERROR_TRACE
+    TEST_STEP --&gt; LINK
+    TEST_STEP --&gt; C_ABI
+    TEST_STEP --&gt; INCREMENTAL
+
+    MODULES --&gt; BEHAVIOR
+    MODULES --&gt; COMPILER_RT
+    MODULES --&gt; ZIGC
+    MODULES --&gt; STD
+
+    TARGET_MATRIX --&gt; MODULES
+    OPT_MODES --&gt; MODULES
+    FILTERS --&gt; MODULES</literallayout>
+<simpara>您自己的项目可以借鉴这种模式：一个高级别的 <literal>test</literal> 步骤，分散到格式检查、单元测试、集成测试和跨目标测试矩阵，全部使用相同的 <literal>b.step</literal> 和 <literal>b.addTest</literal> 原语连接在一起。</simpara>
+</section>
+</chapter>
+<chapter xml:id="top-level-steps">
+<title>顶层步骤：自定义构建命令</title>
+<simpara>一个 <emphasis role="strong">顶层步骤</emphasis> 是一个命名的入口点，用户使用 <literal>zig build &lt;step-name&gt;</literal> 调用它。您使用 <literal>b.step(name, description)</literal> 创建它们，并使用 <literal>step.dependOn(other_step)</literal> 连接依赖关系。</simpara>
+<section xml:id="step-example">
+<title>创建 <literal>run</literal> 步骤</title>
+<programlisting language="zig" linenumbering="unnumbered">const run_step = b.step("run", "Run the application");
+const run_cmd = b.addRunArtifact(exe);
+run_cmd.step.dependOn(b.getInstallStep());
+run_step.dependOn(&amp;run_cmd.step);</programlisting>
+<itemizedlist>
+<listitem>
+<simpara><literal>b.step("run", &#8230;&#8203;)</literal> 创建用户调用的顶层步骤。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>b.addRunArtifact(exe)</literal> 创建一个执行已编译二进制文件的步骤。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>run_cmd.step.dependOn(b.getInstallStep())</literal> 确保在运行二进制文件之前已安装它。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>run_step.dependOn(&amp;run_cmd.step)</literal> 将顶层步骤连接到运行命令。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>这种模式出现在几乎每个 <literal>zig init</literal> 生成的 <literal>build.zig</literal> 中。</simpara>
+<simpara><emphasis>在 Zig 编译器自身的 <literal>build.zig</literal> 中，默认安装和测试步骤形成了一个更大的依赖图：</emphasis></simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "安装步骤（默认）"
+        INSTALL["b.getInstallStep()"]
+    end
+
+    subgraph "编译器构件"
+        EXE_STEP["exe.step&lt;br/&gt;(编译编译器)"]
+        INSTALL_EXE["install_exe.step&lt;br/&gt;(安装二进制文件)"]
+    end
+
+    subgraph "文档"
+        LANGREF["generateLangRef()"]
+        INSTALL_LANGREF["install_langref.step"]
+        STD_DOCS_GEN["autodoc_test"]
+        INSTALL_STD_DOCS["install_std_docs.step"]
+    end
+
+    subgraph "库文件"
+        LIB_FILES["installDirectory(lib/)"]
+    end
+
+    subgraph "测试步骤"
+        TEST["test 步骤"]
+        FMT["test-fmt 步骤"]
+        CASES["test-cases 步骤"]
+        MODULES["test-modules 步骤"]
+    end
+
+    INSTALL --&gt; INSTALL_EXE
+    INSTALL --&gt; INSTALL_LANGREF
+    INSTALL --&gt; LIB_FILES
+
+    INSTALL_EXE --&gt; EXE_STEP
+    INSTALL_LANGREF --&gt; LANGREF
+    INSTALL --&gt; INSTALL_STD_DOCS
+    INSTALL_STD_DOCS --&gt; STD_DOCS_GEN
+
+    TEST --&gt; EXE_STEP
+    TEST --&gt; FMT
+    TEST --&gt; CASES
+    TEST --&gt; MODULES
+
+    CASES --&gt; EXE_STEP
+    MODULES --&gt; EXE_STEP</literallayout>
+<simpara>运行 <literal>zig build</literal>（没有显式步骤）通常执行像这样的默认安装步骤，而 <literal>zig build test</literal> 执行一个依赖于相同核心编译操作的专用测试步骤。</simpara>
+<simpara><emphasis>为了将本章置于更广泛的 Zig 工具链中，编译器自身的引导过程使用 CMake 生成一个中间的 <literal>zig2</literal> 可执行文件，然后在其本地的 <literal>build.zig</literal> 脚本上调用 <literal>zig2 build</literal>：</emphasis></simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "CMake 阶段 (stage2)"
+        CMAKE["CMake"]
+        ZIG2_C["zig2.c&lt;br/&gt;(生成的 C 代码)"]
+        ZIGCPP["zigcpp&lt;br/&gt;(C++ LLVM/Clang 包装器)"]
+        ZIG2["zig2 可执行文件"]
+
+        CMAKE --&gt; ZIG2_C
+        CMAKE --&gt; ZIGCPP
+        ZIG2_C --&gt; ZIG2
+        ZIGCPP --&gt; ZIG2
+    end
+
+    subgraph "原生构建系统 (stage3)"
+        BUILD_ZIG["build.zig&lt;br/&gt;原生构建脚本"]
+        BUILD_FN["build() 函数"]
+        COMPILER_STEP["addCompilerStep()"]
+        EXE["std.Build.Step.Compile&lt;br/&gt;(编译器可执行文件)"]
+        INSTALL["安装步骤"]
+
+        BUILD_ZIG --&gt; BUILD_FN
+        BUILD_FN --&gt; COMPILER_STEP
+        COMPILER_STEP --&gt; EXE
+        EXE --&gt; INSTALL
+    end
+
+    subgraph "构建参数"
+        ZIG_BUILD_ARGS["ZIG_BUILD_ARGS&lt;br/&gt;--zig-lib-dir&lt;br/&gt;-Dversion-string&lt;br/&gt;-Dtarget&lt;br/&gt;-Denable-llvm&lt;br/&gt;-Doptimize"]
+    end
+
+    ZIG2 --&gt;|"zig2 build"| BUILD_ZIG
+    ZIG_BUILD_ARGS --&gt; BUILD_FN
+
+    subgraph "Output"
+        STAGE3_BIN["stage3/bin/zig"]
+        STD_LIB["stage3/lib/zig/std/"]
+        LANGREF["stage3/doc/langref.html"]
+    end
+
+    INSTALL --&gt; STAGE3_BIN
+    INSTALL --&gt; STD_LIB
+    INSTALL --&gt; LANGREF</literallayout>
+<simpara><emphasis>换句话说，您用于应用程序项目的相同 <literal>std.Build</literal> API 也驱动着自托管的 Zig 编译器构建。</emphasis></simpara>
+</section>
+</chapter>
+<chapter xml:id="custom-options">
+<title>自定义构建选项</title>
+<simpara>除了 <literal>standardTargetOptions()</literal> 和 <literal>standardOptimizeOption()</literal> 之外，您可以使用 <literal>b.option()</literal> 定义任意面向用户的标志，并通过 <literal>b.addOptions()</literal> 将它们暴露给 Zig 源代码（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build/Step/Options.zig">Options.zig</link>）。</simpara>
+<section xml:id="option-api">
+<title><literal>b.option()</literal>: CLI 标志</title>
+<simpara><literal>b.option(T, name, description)</literal> 注册一个面向用户的标志并返回 <literal>?T</literal>（如果用户未提供则为 null）：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">const enable_logging = b.option(bool, "enable-logging", "Enable debug logging") orelse false;
+const app_name = b.option([]const u8, "app-name", "Application name") orelse "MyApp";</programlisting>
+<simpara>用户通过 <literal>-Dname=value</literal> 传递值：</simpara>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build -Denable-logging -Dapp-name=CustomName run</programlisting>
+</section>
+<section xml:id="add-options">
+<title><literal>addOptions()</literal>: 将配置传递给代码</title>
+<simpara><literal>b.addOptions()</literal> 创建一个步骤，从键值对生成 Zig 源文件，然后您将其作为模块导入：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/06_options/build.zig[]</programlisting>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 22__build-system-deep-dive.adoc - include::example$chapters-data/code/22__build-system-deep-dive/06_options/main.zig[]</programlisting>
+<formalpara><title>使用自定义选项构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build run -Denable-logging -Dapp-name=TestApp</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Application: TestApp
+Logging enabled: true
+[DEBUG] This is a debug message</programlisting>
+</para>
+</formalpara>
+<simpara>这种模式避免了在构建时常量足够时对环境变量或运行时配置文件的需求。</simpara>
+<simpara>Zig 编译器本身使用相同的方法：命令行 <literal>-D</literal> 选项通过 <literal>b.option()</literal> 解析，通过 <literal>b.addOptions()</literal> 收集到选项步骤中，然后作为 <literal>build_options</literal> 模块导入，普通 Zig 代码可以读取它。</simpara>
+<literallayout class="monospaced">graph LR
+    subgraph "Command Line"
+        CLI["-Ddebug-allocator&lt;br/&gt;-Denable-llvm&lt;br/&gt;-Dversion-string&lt;br/&gt;etc."]
+    end
+
+    subgraph "build.zig"
+        PARSE["b.option()&lt;br/&gt;Parse options"]
+        OPTIONS["exe_options =&lt;br/&gt;b.addOptions()"]
+        ADD["exe_options.addOption()"]
+
+        PARSE --&gt; OPTIONS
+        OPTIONS --&gt; ADD
+    end
+
+    subgraph "Generated Module"
+        BUILD_OPTIONS["build_options&lt;br/&gt;(auto-generated)"]
+        CONSTANTS["pub const mem_leak_frames = 4;&lt;br/&gt;pub const have_llvm = true;&lt;br/&gt;pub const version = '0.16.0';&lt;br/&gt;etc."]
+
+        BUILD_OPTIONS --&gt; CONSTANTS
+    end
+
+    subgraph "Compiler Source"
+        IMPORT["@import('build_options')"]
+        USE["if (build_options.have_llvm) { ... }"]
+
+        IMPORT --&gt; USE
+    end
+
+    CLI --&gt; PARSE
+    ADD --&gt; BUILD_OPTIONS
+    BUILD_OPTIONS --&gt; IMPORT</literallayout>
+<simpara>将 <literal>b.addOptions()</literal> 视为从您的 <literal>zig build</literal> 命令行到普通 Zig 模块的结构化、类型检查的配置通道，就像编译器为其自身的 <literal>build_options</literal> 模块所做的那样。</simpara>
+</section>
+</chapter>
+<chapter xml:id="debugging-builds">
+<title>调试构建失败</title>
+<simpara>当 <literal>zig build</literal> 失败时，错误消息通常指向缺失的模块、错误的依赖关系或配置错误的步骤。<literal>-v</literal> 标志启用详细输出，显示所有编译器调用。</simpara>
+<section xml:id="verbose-flag">
+<title><literal>zig build -v</literal>: 检查编译器调用</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build -v
+zig build-exe /path/to/main.zig -target x86_64-linux -O Debug -femit-bin=zig-cache/...
+zig build-lib /path/to/lib.zig -target x86_64-linux -O Debug -femit-bin=zig-cache/...
+...</programlisting>
+<simpara>这揭示了构建运行器执行的确切 <literal>zig</literal> 子命令，有助于诊断标志问题或缺失文件。</simpara>
+</section>
+<section xml:id="common-errors">
+<title>常见图错误</title>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">"module 'foo' not found"</emphasis>: <literal>.imports</literal> 表不包含名为 <literal>foo</literal> 的模块，或者依赖关系未正确连接。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">"circular dependency detected"</emphasis>: 两个步骤传递性地相互依赖——构建图必须是无环的。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">"file not found: src/main.zig"</emphasis>: 传递给 <literal>b.path()</literal> 的路径相对于构建根目录不存在。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">"no member named 'root_source_file' in ExecutableOptions"</emphasis>: 您正在使用 Zig 0.15.2 语法与较旧的编译器，反之亦然。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项与警告</title>
+<itemizedlist>
+<listitem>
+<simpara>构建运行器在 <literal>zig-cache/</literal> 中缓存构件哈希；删除此目录会强制完全重新构建。</simpara>
+</listitem>
+<listitem>
+<simpara>在 <literal>zig build run</literal> 后传递 <literal>--</literal> 会将参数转发给执行的二进制文件：<literal>zig build run&#8201;&#8212;&#8201;--help</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>b.installArtifact()</literal> 是暴露输出的规范方式；除非有特定需求，否则避免手动文件复制。</simpara>
+</listitem>
+<listitem>
+<simpara>默认安装步骤（不带参数的 <literal>zig build</literal>）安装所有使用 <literal>installArtifact()</literal> 注册的构件——如果您想要无操作的默认值，请不要安装任何内容。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>修改最小示例以硬编码跨编译目标（例如，<literal>wasm32-wasi</literal>），并使用 <literal>file zig-out/bin/hello</literal> 验证输出格式。<link xl:href="41__cross-compilation-and-wasm.xml">43</link></simpara>
+</listitem>
+<listitem>
+<simpara>扩展模块示例以创建第二个模块 <literal>utils</literal>，让 <literal>math</literal> 导入它，演示传递性依赖关系。</simpara>
+</listitem>
+<listitem>
+<simpara>向选项示例添加自定义选项 <literal>-Dmax-threads=N</literal>，并使用它来初始化编译时常量线程池大小。</simpara>
+</listitem>
+<listitem>
+<simpara>创建一个具有静态和动态链接模式的库，安装两者，并检查输出文件以查看大小差异。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>警告、替代方案、边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>Zig 0.14.0 引入了 <literal>root_module</literal> 字段；在 Zig 0.15.2 上，直接在 <literal>ExecutableOptions</literal> 上使用 <literal>root_source_file</literal> 的旧代码将失败。</simpara>
+</listitem>
+<listitem>
+<simpara>一些项目仍然手动使用 <literal>--pkg-begin</literal>/<literal>--pkg-end</literal> 标志而不是模块系统——这些已弃用，应迁移到 <literal>Module.addImport()</literal>。<link xl:href="20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.xml">20</link></simpara>
+</listitem>
+<listitem>
+<simpara>构建运行器不支持 <literal>build.zig</literal> 本身的增量编译——更改 <literal>build.zig</literal> 会触发完整的图重新评估。</simpara>
+</listitem>
+<listitem>
+<simpara>If you see "userland" mentioned in documentation, it means the build system is implemented entirely in Zig standard library code, not compiler magic—you can read <literal>std.Build</literal> source to understand any behavior.</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

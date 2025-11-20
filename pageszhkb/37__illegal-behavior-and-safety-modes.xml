@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>非法行为和安全模式</title>
+<subtitle>理解Zig的非法行为分类和运行时安全检查</subtitle>
+<date>2025-11-06</date>
+<copyright>
+<creativeCommons>
+<holder>zigbook</holder>
+</creativeCommons>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>完成我们的样式调整后，很明显，除非不变式大声失败，否则它们毫无价值（<xref linkend="36__style-and-best-practices" xrefstyle="short">第36章</xref>）。本章解释了Zig如何将这些失败形式化为非法行为，以及工具链如何在它们破坏状态之前捕获大部分非法行为。<link xl:href="https://ziglang.org/documentation/master/#illegal-behavior">#非法行为</link>
+</simpara>
+<simpara>接下来我们将深入研究命令行工具，所以我们希望在进行脚本切换优化模式之前，先准备好运行时护栏。<xref linkend="38__zig-cli-deep-dive" xrefstyle="short">第38章</xref>
+</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>区分安全检查和非法行为的非检查类别。</simpara>
+</listitem>
+<listitem>
+<simpara>检查活动优化模式并推理Zig将发出哪些运行时检查。</simpara>
+</listitem>
+<listitem>
+<simpara>围绕<literal>@setRuntimeSafety</literal>、<literal>unreachable</literal>和<literal>std.debug.assert</literal>构建合同，使不变式在每个构建中都可证明。</simpara>
+</listitem>
+</itemizedlist>
+<simpara><emphasis>参考资料：</emphasis> <xref linkend="04__errors-resource-cleanup" xrefstyle="short">第4章</xref>
+</simpara>
+</chapter>
+<chapter xml:id="illegal-behavior-basics">
+<title>Zig中的非法行为</title>
+<simpara>非法行为是Zig对语言拒绝定义的操作的总称，范围从整数溢出到解引用无效指针。我们已经依赖切片和可选类型的边界检查；本节巩固了这些规则，以便即将到来的CLI工作继承可预测的失败故事。<xref linkend="03__data-fundamentals" xrefstyle="short">第3章</xref>
+</simpara>
+<chapter xml:id="illegal-behavior-checked-unchecked">
+<title>安全检查与非检查路径</title>
+<simpara>安全检查的非法行为涵盖了编译器可以在运行时检测的情况（溢出、哨兵不匹配、错误的联合体字段访问），而非检查情况对安全检测保持不可见（通过错误的指针类型进行别名、来自外部代码的布局违规）。</simpara>
+<simpara>调试和ReleaseSafe默认保持保护开启。ReleaseFast和ReleaseSmall假设你用这些陷阱换取了性能，因此任何滑过你不变式的东西在实践中都变得未定义。</simpara>
+</chapter>
+<chapter xml:id="illegal-behavior-guarded-example">
+<title>示例：保护非检查算术</title>
+<simpara>以下助手用<literal>@addWithOverflow</literal>证明加法安全，然后为最终的<literal>+</literal>禁用运行时安全，以避免冗余检查，同时将病态输入饱和到类型的最大值。<link xl:href="https://ziglang.org/documentation/master/#setruntimesafety">#setruntimesafety</link>
+</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 37__illegal-behavior-and-safety-modes.adoc - include::example$chapters-data/code/37__illegal-behavior-and-safety-modes/01_guarded_runtime_safety.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig test 01_guarded_runtime_safety.zig</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>All 2 tests passed.</screen>
+<note>
+<simpara>用<literal>-OReleaseFast</literal>运行相同测试验证保护继续饱和而不是恐慌，即使全局运行时安全不存在。</simpara>
+</note>
+</chapter>
+</chapter>
+<chapter xml:id="safety-modes">
+<title>按优化模式的安全默认设置</title>
+<simpara>当前优化模式公开为<literal>@import("builtin").mode</literal>，使得在不咨询构建脚本的情况下，很容易显示给定构件中将存在哪些运行时检查。<link xl:href="https://ziglang.org/documentation/master/#compile-variables">#编译变量</link> 下表总结了在你开始手动选择加入或退出检查之前，每种模式提供的默认合同。</simpara>
+<table frame="all" rowsep="1" colsep="1" xml:id="table-optimize-modes">
+<title>优化模式和安全默认设置</title>
+<tgroup cols="3">
+<thead>
+<row>
+<entry>模式</entry>
+<entry>运行时安全</entry>
+<entry>典型意图</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry>调试</entry>
+<entry>启用</entry>
+<entry>具有最大诊断和堆栈跟踪的开发构建。</entry>
+</row>
+<row>
+<entry>ReleaseSafe</entry>
+<entry>启用</entry>
+<entry>仍然更喜欢可预测陷阱而不是静默损坏的生产构建。</entry>
+</row>
+<row>
+<entry>ReleaseFast</entry>
+<entry>禁用</entry>
+<entry>高性能二进制文件，假设不变式已在其他地方证明。</entry>
+</row>
+<row>
+<entry>ReleaseSmall</entry>
+<entry>禁用</entry>
+<entry>大小受限的交付物，其中每个注入的陷阱都是负担。</entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+<chapter xml:id="safety-modes-probe">
+<title>在运行时检测安全</title>
+<simpara>此探测器打印活动模式和隐含的安全默认设置，然后比较检查加法与未检查加法，这样你可以看到在检查消失时什么存活。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 37__illegal-behavior-and-safety-modes.adoc - include::example$chapters-data/code/37__illegal-behavior-and-safety-modes/02_mode_probe.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig run 02_mode_probe.zig</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>optimize-mode: Debug
+runtime-safety-default: true
+checked-add result=24 overflowed=true
+unchecked-add result=24</screen>
+<tip>
+<simpara>用<literal>-OReleaseFast</literal>重新运行探测器，观察默认安全标志翻转为<literal>false</literal>，而检查路径仍然报告溢出，帮助你记录发布构建中可能需要的特性标志或遥测。</simpara>
+</tip>
+</chapter>
+</chapter>
+<chapter xml:id="contracts-and-panics">
+<title>合同、恐慌和恢复</title>
+<simpara>当你在启用安全的构建中触发<literal>unreachable</literal>时，堆栈跟踪平静地可怕。将它们视为断言和错误联合耗尽优雅退出后的最后防线。<link xl:href="https://ziglang.org/documentation/master/#reaching-unreachable-code">#到达不可达代码</link>
+</simpara>
+<simpara>与前面章节中的错误处理技术相结合，保持失败模式可调试，而不牺牲确定性。<xref linkend="04__errors-resource-cleanup" xrefstyle="short">第4章</xref>
+</simpara>
+<chapter xml:id="contracts-example">
+<title>示例：断言数字转换</title>
+<simpara>这里我们用断言记录了ASCII数字合同两次：一次用断言解锁未检查数学，一次用错误联合进行调用者友好的验证。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/debug.zig">debug.zig</link>
+</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 37__illegal-behavior-and-safety-modes.adoc - include::example$chapters-data/code/37__illegal-behavior-and-safety-modes/03_unreachable_contract.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig test 03_unreachable_contract.zig</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>All 2 tests passed.</screen>
+<important>
+<simpara>断言支持的路径在ReleaseFast中编译为单个减法，但如果你传递非数字，它仍会在调试中恐慌。为不受信任的数据保留防御性错误返回变体。</simpara>
+</important>
+</chapter>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara>即使在调试模式下，一些基于指针的错误仍未检查。当你需要边界强制执行时，更喜欢基于切片的API。</simpara>
+</listitem>
+<listitem>
+<simpara>将<literal>@setRuntimeSafety(false)</literal>的范围缩小到尽可能小的块，并在切换之前证明前提条件。</simpara>
+</listitem>
+<listitem>
+<simpara>在开发中捕获恐慌堆栈跟踪，如果你期望稍后分类ReleaseSafe崩溃，请提供符号文件。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<info>
+<title>练习</title>
+</info>
+<itemizedlist>
+<listitem>
+<simpara>扩展<literal>guardedUncheckedAdd</literal>以在哨兵终止的切片会溢出目标缓冲区时发出诊断，然后测量安全开启和安全关闭构建之间的差异。<link xl:href="https://ziglang.org/documentation/master/#sentinel-terminated-arrays">#哨兵终止数组</link>
+</simpara>
+</listitem>
+<listitem>
+<simpara>编写一个基准测试工具，循环数百万次安全加法，在每个迭代中切换<literal>@setRuntimeSafety</literal>，以确认每种模式中守卫的成本。</simpara>
+</listitem>
+<listitem>
+<simpara>增强模式探测器，以在即将到来的CLI项目中记录构建元数据，这样脚本可以在ReleaseFast二进制文件省略陷阱时发出警告。<xref linkend="38__zig-cli-deep-dive" xrefstyle="short">第38章</xref>
+</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<info>
+<title>替代方案和边缘情况</title>
+</info>
+<itemizedlist>
+<listitem>
+<simpara>未能从<literal>+</literal>切换到<literal>@addWithOverflow</literal>在ReleaseFast中风险静默回绕，这仅在罕见负载模式下显现。</simpara>
+</listitem>
+<listitem>
+<simpara>运行时安全不能防御并发数据竞争。将这些工具与本书后面介绍的同步原语配对。</simpara>
+</listitem>
+<listitem>
+<simpara>调用C代码时，记住Zig的检查在FFI边界处停止。在信任不变式之前验证外部输入。<xref linkend="33__c-interop-import-export-abi" xrefstyle="short">第33章</xref>
+</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

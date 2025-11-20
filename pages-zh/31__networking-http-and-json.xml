@@ -1,0 +1,243 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>网络、HTTP 与 JSON</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>本章从本地文件与线程提升到套接字，使用 Zig 的<literal>std.net</literal>与<literal>std.http</literal>在进程间有序传输数据。背景参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/net.zig">net.zig</link>。我们将构建一个最小回环服务器、探索握手，并在其上叠加 HTTP/JSON 工作流以展示这些组件如何组合。</simpara>
+<simpara>Zig 0.15.2 的 I/O 重设计移除了旧式缓冲助手，因此我们将采用现代的<literal>std.Io.Reader</literal>/<literal>std.Io.Writer</literal>接口，并在必要时演示如何手动管理分帧。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/Reader.zig">Reader.zig</link>与<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>。</simpara>
+<section xml:id="_the_network_stack_architecture">
+<title>网络栈架构</title>
+<simpara>在编写套接字代码之前，理解<literal>std.net</literal>如何融入 Zig 标准库架构至关重要。下图展示了从高层网络 API 到系统调用的完整分层：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "User Code"
+        APP[Application Code]
+    end
+
+    subgraph "High-Level APIs (lib/std)"
+        FS["std.fs&lt;br/&gt;(fs.zig)"]
+        NET["std.net&lt;br/&gt;(net.zig)"]
+        PROCESS["std.process&lt;br/&gt;(process.zig)"]
+        FMT["std.fmt&lt;br/&gt;(fmt.zig)"]
+        HEAP["std.heap&lt;br/&gt;(heap.zig)"]
+    end
+
+    subgraph "Mid-Level Abstractions"
+        POSIX["std.posix&lt;br/&gt;(posix.zig)&lt;br/&gt;Cross-platform POSIX API"]
+        OS["std.os&lt;br/&gt;(os.zig)&lt;br/&gt;OS-specific wrappers"]
+        MEM["std.mem&lt;br/&gt;(mem.zig)&lt;br/&gt;Memory utilities"]
+        DEBUG["std.debug&lt;br/&gt;(debug.zig)&lt;br/&gt;Stack traces, assertions"]
+    end
+
+    subgraph "Platform Layer"
+        LINUX["std.os.linux&lt;br/&gt;(os/linux.zig)&lt;br/&gt;Direct syscalls"]
+        WINDOWS["std.os.windows&lt;br/&gt;(os/windows.zig)&lt;br/&gt;Win32 APIs"]
+        WASI["std.os.wasi&lt;br/&gt;(os/wasi.zig)&lt;br/&gt;WASI APIs"]
+        LIBC["std.c&lt;br/&gt;(c.zig)&lt;br/&gt;C interop"]
+    end
+
+    subgraph "System Layer"
+        SYSCALL["System Calls"]
+        KERNEL["Operating System"]
+    end
+
+    APP --&gt; FS
+    APP --&gt; NET
+    APP --&gt; PROCESS
+    APP --&gt; FMT
+    APP --&gt; HEAP
+
+    FS --&gt; POSIX
+    NET --&gt; POSIX
+    PROCESS --&gt; POSIX
+    FMT --&gt; MEM
+    HEAP --&gt; MEM
+
+    POSIX --&gt; OS
+    OS --&gt; LIBC
+    OS --&gt; LINUX
+    OS --&gt; WINDOWS
+    OS --&gt; WASI
+
+    DEBUG --&gt; OS
+
+    LINUX --&gt; SYSCALL
+    WINDOWS --&gt; SYSCALL
+    WASI --&gt; SYSCALL
+    LIBC --&gt; SYSCALL
+
+    SYSCALL --&gt; KERNEL</literallayout>
+<simpara>该分层设计与第 28 章的文件系统架构相映：<literal>std.net</literal>提供高层、可移植的网络抽象（Address、Stream、Server），经由<literal>std.posix</literal>实现跨平台 POSIX 套接字兼容，再分派到平台特定实现——Linux 下为直接系统调用（<literal>socket</literal>、<literal>bind</literal>、<literal>listen</literal>、<literal>accept</literal>），Windows 下为 Win32 Winsock API。调用<literal>Address.listen()</literal>时，请求按层穿越：<literal>std.net.Address</literal> → <literal>std.posix.socket()</literal> → <literal>std.os.linux.socket()</literal>（或<literal>std.os.windows.WSASocketW()</literal>）→ 内核。这也解释了为何 WASI 构建在套接字操作上失败——多数运行时的 WASI 层并不支持套接字。理解该架构有助于你推理错误处理（错误自系统调用冒泡）、调试平台特定问题，并就 libc 链接做出更具可移植性的决策。</simpara>
+</section>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<simpara>本模块的目标围绕<literal>std.net</literal>中的网络原语及其之上的 HTTP 栈（<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/http/Server.zig">Server.zig</link>、<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/http/Client.zig">Client.zig</link>）。你将学习如何：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>使用<literal>std.net.Address.listen</literal>构建回环服务，及时接受连接，并通过<literal>std.Thread.ResetEvent</literal>协调就绪。</simpara>
+</listitem>
+<listitem>
+<simpara>使用新的<literal>std.Io.Reader</literal>助手实现按换行的分帧，替代已弃用的缓冲适配器。</simpara>
+</listitem>
+<listitem>
+<simpara>调用<literal>std.http.Client.fetch</literal>、捕获响应流，并使用<literal>std.json</literal>工具解析 JSON 载荷。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json.zig">json.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="socket-building-blocks">
+<title>套接字基元</title>
+<simpara><literal>std.net</literal>提供跨平台 TCP 原语，镜像 POSIX 套接字生命周期，并与 Zig 的错误语义与资源管理集成。结合<literal>std.Thread.ResetEvent</literal>可在无需轮询的情况下将服务器线程的就绪与客户端同步。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Thread/ResetEvent.zig">ResetEvent.zig</link></simpara>
+<section xml:id="loopback-handshake">
+<title>回环握手演示</title>
+<simpara>下例绑定到<literal>127.0.0.1</literal>、接受单个客户端，并回显其接收的修剪后文本行。因 Zig 的 reader API 不再提供便捷的行读取器，示例使用<literal>Reader.takeByte</literal>实现<literal>readLine</literal>助手，演示如何直接构建该功能。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 31__networking-http-and-json.adoc - include::example$chapters-data/code/31__networking-http-and-json/01_loopback_ping.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 01_loopback_ping.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">loopback handshake succeeded
+client received: server observed "ping over loopback"</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>std.Thread.ResetEvent</literal>提供低成本的门闩，用于宣告服务器线程已到达<literal>accept</literal>，确保客户端连接尝试不会抢先。</simpara>
+</tip>
+</section>
+<section xml:id="manual-framing">
+<title>显式管理分帧</title>
+<simpara>读取一行需要了解新 reader 接口如何交付字节：<literal>takeByte</literal>一次产出一个字节并报告<literal>error.EndOfStream</literal>，我们据此转换为<literal>null</literal>（无数据）或已完成的切片。该手动分帧促使你思考协议边界而非依赖隐式缓冲读取器，也呼应了 0.15.2 I/O 重设计的意图。</simpara>
+</section>
+</chapter>
+<chapter xml:id="http-pipeline">
+<title>Zig 中的 HTTP 流水线</title>
+<simpara>有了套接字，我们可以更进一步：Zig 标准库提供完全用 Zig 实现的 HTTP 服务器与客户端，使你无需第三方依赖即可提供端点与发起请求。</simpara>
+<section xml:id="http-serve">
+<title>从回环监听器提供 JSON</title>
+<simpara>下一示例中的服务器线程以<literal>std.http.Server</literal>包装已接受的流，解析一个请求并输出精简的 JSON。注意我们预渲染响应到固定缓冲区，使<literal>request.respond</literal>能准确标注内容长度。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/Writer.zig">Writer.zig</link></simpara>
+</section>
+<section xml:id="http-fetch-json">
+<title>使用<literal>std.http.Client</literal>抓取与解码</title>
+<simpara>配套客户端使用<literal>std.http.Client.fetch</literal>执行 GET 请求，通过固定 writer 收集正文并使用<literal>std.json.parseFromSlice</literal>解码为强类型结构。该流程可扩展为跟随重定向、流式大载荷或协商 TLS，具体取决于你的需求。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json/static.zig">static.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 31__networking-http-and-json.adoc - include::example$chapters-data/code/31__networking-http-and-json/02_http_fetch_and_json.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 02_http_fetch_and_json.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">status: 200
+service: loopback-api
+method: GET
+path: /stats
+message: hello from Zig HTTP server</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>Client.fetch</literal>默认保持连接并自动复用池中的套接字。若你提供固定 writer，而缓冲区过小则返回<literal>error.WriteFailed</literal>。请为预期载荷预留足够容量，或回退为由分配器支撑的 writer。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="json-tooling">
+<title>JSON 工具要点</title>
+<simpara><literal>std.json.Stringify</literal>与<literal>std.json.parseFromSlice</literal>使你在发射或消费 JSON 文本时仍然停留在类型化的 Zig 数据中，前提是注意分配策略。示例中，我们使用<literal>std.Io.Writer.fixed</literal>构建正文以避免堆活动，并在完成后通过<literal>Parsed.deinit()</literal>释放解析结果。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json/Stringify.zig">Stringify.zig</link></simpara>
+<section xml:id="_understanding_the_writer_abstraction">
+<title>理解 Writer 抽象</title>
+<simpara>HTTP 响应生成与 JSON 序列化都依赖 Zig 的 Writer 接口。下图展示了 writer 抽象及其关键实现：</simpara>
+<literallayout class="monospaced">graph TB
+    WRITER["Writer"]
+
+    subgraph "Writer Types"
+        FIXED["fixed(buffer)"]
+        ALLOC["Allocating"]
+        DISCARD["Discarding"]
+    end
+
+    WRITER --&gt; FIXED
+    WRITER --&gt; ALLOC
+    WRITER --&gt; DISCARD
+
+    subgraph "Write Methods"
+        PRINT["print(fmt, args)"]
+        PRINTVAL["printValue(specifier, options, value, depth)"]
+        PRINTINT["printInt(value, base, case, options)"]
+        WRITEBYTE["writeByte(byte)"]
+        WRITEALL["writeAll(bytes)"]
+    end
+
+    WRITER --&gt; PRINT
+    WRITER --&gt; PRINTVAL
+    WRITER --&gt; PRINTINT
+    WRITER --&gt; WRITEBYTE
+    WRITER --&gt; WRITEALL</literallayout>
+<simpara>Writer 抽象为输出操作提供统一接口，主要有三种实现策略。<emphasis role="strong">固定缓冲 writer</emphasis>（<literal>std.Io.Writer.fixed(buffer)</literal>）写入预分配缓冲区，当缓冲区满时返回<literal>error.WriteFailed</literal>——HTTP 示例用它以零堆分配构建响应正文。<emphasis role="strong">分配型 writer</emphasis>通过分配器动态增长缓冲，适合无上限输出，如大型 JSON 文档的流式序列化。<emphasis role="strong">丢弃型 writer</emphasis>只计字节不存储，适合在真正写入前计算内容长度。写方法在各实现间保持一致：<literal>writeAll</literal>写原始字节，<literal>print</literal>做格式化输出，<literal>writeByte</literal>写单字节，<literal>printInt</literal>做数值格式化。当你调用<literal>std.json.stringify(value, .{}, writer)</literal>时，JSON 序列化器并不关心<literal>writer</literal>是固定、分配还是丢弃——它只调用<literal>writeAll</literal>，具体细节由 writer 实现处理。这也是本章提到“为预期载荷预留容量或回退为由分配器支撑的 writer”的原因——你在有界固定缓冲（快速、无分配、可能溢出）与动态分配缓冲（灵活、有堆开销、无上限）之间做选择。</simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>TCP 回环服务器仍会在<literal>accept</literal>处阻塞当前线程；面向单线程构建时，必须基于<literal>builtin.single_threaded</literal>分支以避免 spawn。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>HTTP 客户端在首次发起 HTTPS 请求时会重新扫描系统信任存储；若你提供自有证书包，请相应切换<literal>client.next_https_rescan_certs</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara>新的 I/O API 暴露原始缓冲，因此在跨请求复用固定 writer 与 reader 之前，请确保其容量足够。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>Extend the loopback handshake to accept multiple clients by storing handles in a slice and joining them after broadcasting a shutdown message. <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Thread.zig">Thread.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>Add a <literal>--head</literal> flag to the HTTP example that issues a <literal>HEAD</literal> request and prints the negotiated headers, inspecting <literal>Response.head</literal> for metadata.</simpara>
+</listitem>
+<listitem>
+<simpara>Replace the manual <literal>readLine</literal> helper with <literal>Reader.discardDelimiterLimit</literal> to compare behaviour and error handling under the new I/O contracts.</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>Caveats, alternatives, edge cases</title>
+<itemizedlist>
+<listitem>
+<simpara>Not every Zig target supports sockets; WASI builds, for instance, will fail during <literal>Address.listen</literal>, so guard availability by inspecting the target OS tag.</simpara>
+</listitem>
+<listitem>
+<simpara>TLS requests require a certificate bundle; embed one with <literal>Client.ca_bundle</literal> when running in environments without system stores (CI, containers, early boot environments).</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.json.parseFromSlice</literal> loads the whole document into memory; for large payloads prefer the streaming <literal>std.json.Scanner</literal> API to process tokens incrementally. <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json/Scanner.zig">Scanner.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="summary">
+<title>Summary</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>std.net</literal> and <literal>std.Io.Reader</literal> give you the raw tools to accept connections, manage framing, and synchronise readiness across threads in a predictable way.</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.http.Server</literal> and <literal>std.http.Client</literal> sit naturally atop <literal>std.net</literal>, providing composable building blocks for REST-style services without external dependencies.</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.json</literal> rounds out the story by turning on-wire data into typed structs and back, keeping ownership explicit so you can choose between fixed buffers and heap-backed writers.</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

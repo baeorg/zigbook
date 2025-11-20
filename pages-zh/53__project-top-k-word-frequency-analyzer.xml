@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>Top-K 词频分析器</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>调试章节介绍了用于解释程序<emphasis role="strong">为什么</emphasis>表现不佳的工具。<link xl:href="52__debug-and-valgrind.xml">52</link> 这个项目依赖于类似的规范来构建确定性文本分析工具：向其提供日志摘录，收集最频繁的标记，并发出每个阶段的时序数据。我们将结合 <literal>std.mem</literal> 的分词助手、<literal>std</literal> 的哈希集合、<literal>heap</literal> 排序器和 <literal>Timer</literal> API，以产生可重现的排名和可测量的成本。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/hash_map.zig">hash_map.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/sort.zig">sort.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/time.zig">time.zig</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>构建端到端 I/O 管道，读取语料库、规范化文本，并使用 <literal>std.StringHashMap</literal> 和 <literal>std.ArrayList</literal> 累积计数。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/array_list.zig">array_list.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用显式比较器确定性地排名频率，而不依赖于哈希映射迭代顺序来解析平局。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>std.time.Timer</literal> 捕获每个阶段的时序，以验证回归并传达性能期望。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="pipeline-design">
+<title>设计管道</title>
+<simpara>我们的分析器接受可选的文件路径和可选的 <literal>k</literal> 参数（<literal>前 k</literal> 个令牌）；两者分别默认为捆绑语料库和 <literal>5</literal>。为简单起见，我们将整个文件读入内存，但规范化计数循环编写为线性操作，因此以后可以适应流块。<literal>GeneralPurposeAllocator</literal> 支持所有动态结构，arena 友好工作流（仅在首次出现时复制字符串）使分配与词汇表大小成正比。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/heap.zig">heap.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/process.zig">process.zig</link></simpara>
+<simpara>分词通过 <literal>std.mem.tokenizeAny</literal> 进行，配置了保守的分隔符集，用于修剪空白、标点符号和标记字符。每个令牌在尝试插入映射之前在可重用的 <literal>std.ArrayList(u8)</literal> 中小写化；如果令牌已存在，则仅增加计数，保持临时分配有界。</simpara>
+</chapter>
+<chapter xml:id="count-and-rank">
+<title>计数和排名</title>
+<simpara>完整的实用程序并排演示了 StringHashMap、ArrayList、排序和时序。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 53__project-top-k-word-frequency-analyzer.adoc - include::example$chapters-data/code/53__project-top-k-word-frequency-analyzer/topk_word_frequency.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/53__project-top-k-word-frequency-analyzer/topk_word_frequency.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">source -&gt; chapters-data/code/53__project-top-k-word-frequency-analyzer/sample_corpus.txt
+tokens -&gt; 102, unique -&gt; 86
+top 5 words:
+   1. the -&gt; 6
+   2. a -&gt; 3
+   3. and -&gt; 3
+   4. are -&gt; 2
+   5. latency -&gt; 2
+timings (ns): read=284745, tokenize=3390822, sort=236725</programlisting>
+</para>
+</formalpara>
+<simpara><literal>std.StringHashMap</literal> 存储规范的小写拼写，另一个 <literal>std.ArrayList</literal> 收集最终的 <literal>(word, count)</literal> 对进行排序。我们选择 <literal>std.sort.heap</literal>，因为它是确定性的，没有分配器依赖，并且在小型数据集上表现良好；比较器主要按降序计数排序，其次按词典顺序排序以保持平局稳定。当跨运行或机器重新运行分析时，这很重要——现场团队可以差异产生的 CSV 而不会感到惊讶。</simpara>
+</chapter>
+<chapter xml:id="timing-and-reproducibility">
+<title>时序和可重现性</title>
+<simpara>单个 <literal>Timer</literal> 实例测量三个阶段：文件摄取、分词和排序。我们每个阶段后调用 <literal>lap()</literal> 来重置零点，同时记录经过的纳秒数，轻松发现哪个步骤占主导地位。因为分析器规范化大小写并使用确定性排序，给定语料库的输出在运行中保持相同，允许将时序差异归因于硬件或工具链变化而不是非确定性排序。</simpara>
+<simpara>对于回归测试，使用更大的 <literal>k</literal> 或不同的语料库重新运行：</simpara>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/53__project-top-k-word-frequency-analyzer/topk_word_frequency.zig -- chapters-data/code/53__project-top-k-word-frequency-analyzer/sample_corpus.txt 10</programlisting>
+<simpara>可选参数让您保持二进制文件的可脚本化——将其放入 CI，比较输出工件，并在时序预算变化超过阈值时发出警报。当集成到更大的系统中时，映射构建循环可以交换为从 <literal>stdin</literal> 或 TCP 套接字流式传输，同时保持相同的确定性排名规则。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/File.zig">File.zig</link></simpara>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>Notes &amp; Caveats</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>StringHashMap</literal> 不会自动释放存储的键；此示例在删除映射之前显式释放它们，以保持通用分配器泄漏检查器满意。</simpara>
+</listitem>
+<listitem>
+<simpara>分词器专注于 ASCII。对于完整的 Unicode 分段，将管道与 <literal>std.unicode.ScalarIterator</literal> 配对或集成 ICU 绑定。<link xl:href="45__text-formatting-and-unicode.xml">45</link></simpara>
+</listitem>
+<listitem>
+<simpara>将整个语料库读入内存简化了教程，但可能不适合多千兆字节的日志。在扩展时将 <literal>readFileAlloc</literal> 交换为分块的 <literal>readAll</literal> 循环或内存映射文件。<link xl:href="28__filesystem-and-io.xml">28</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>通过序列化排序的切片以 JSON 格式发出报告，然后比较与文本版本的差异友好性。<link xl:href="32__project-http-json-client.xml">32</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json.zig">json.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>用两阶段管道替换单线程分析器：跨线程分片令牌，然后在排序前合并哈希映射。使用 <literal>Timer</literal> 测量收益并总结扩展性。<link xl:href="29__threads-and-atomics.xml">29</link></simpara>
+</listitem>
+<listitem>
+<simpara>添加一个 <literal>--stopwords</literal> 选项，该选项加载一个换行符分隔的忽略列表，在计数前删除这些令牌，并报告过滤掉了多少候选对象。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives">
+<title>Caveats, Alternatives, Edge Cases</title>
+<itemizedlist>
+<listitem>
+<simpara>对于流式环境，考虑使用 <literal>std.PriorityQueue</literal> 以增量方式维护前 <literal>k</literal> 个，而不是在排序前记录整个直方图。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/priority_queue.zig">priority_queue.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>如果性能需求超出堆排序，请尝试 <literal>std.sort.pdq</literal> 或基于桶的方法，同时保持确定性比较器契约完整。</simpara>
+</listitem>
+<listitem>
+<simpara>为了支持多语言文本，叠加规范化（NFC/NFKC）并使用 Unicode 感知的大小写助手；比较器可能需要特定于语言环境的排序以保持结果直观。<link xl:href="45__text-formatting-and-unicode.xml">45</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

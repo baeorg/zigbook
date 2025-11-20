@@ -1,0 +1,459 @@
+////
+changes: ["启动基础章节初稿"]
+examples_compile: yes
+keywords: ["基础", "入口点", "打印"]
+last_updated: 2025-11-01
+last_verified: 2025-11-01
+next_chapter: "02__control-flow-essentials"
+open_questions: []
+previous_chapter: null
+status: reviewed
+xref_complete: true
+////
+
+= 启动基础
+:chapter-number: 1
+:chapter-slug: boot-basics
+:copyright: zigbook
+:doctype: book
+:embedded:
+:experimental:
+:icons: font
+:partnums:
+:pygments-linenums-mode: inline
+:pygments-style: manni
+:safe-mode-level: 0
+:sectanchors:
+:sectids:
+:sectlinks:
+:source-highlighter: pygments
+:sourcedir: example$chapters-data/code
+:webfonts:
+:xrefstyle: short
+:zig-version: 0.15.2
+:linkcss:
+:stylesdir: styles
+:stylesheet: zigbook.css
+
+[[overview]]
+== 概览
+
+Zig 将每个源文件视为带命名空间的模块，编译模型围绕使用 `@import` 显式地将这些单元连线展开，使依赖关系与程序边界一眼可辨，详见 link:https://ziglang.org/documentation/master/#Compilation-Model[#Compilation Model]。本章构建这段旅程的第一里路：展示根模块、`std` 与 `builtin` 如何协作，在保留对目标与优化模式的显式控制的同时，从单文件生成一个可运行的程序。
+
+我们也会确立数据与执行的基本规则：`const` 和 `var` 如何引导可变性；诸如 `void {}` 这样的字面量为何对 API 设计重要；Zig 如何处理默认溢出；以及如何为任务选择合适的打印面板，详见 link:https://ziglang.org/documentation/master/#Values[#Values]。同时，我们会预览你在后续章节会依赖的发布模式变体与缓冲输出辅助器；参见 link:https://ziglang.org/documentation/master/#Build-Mode[#Build-Mode]。
+
+[[learning-goals]]
+== 学习目标
+
+* 解释 Zig 如何通过 `@import` 解析模块，以及根命名空间的角色。
+* 描述 `std.start` 如何发现 `main` 以及为何入口点通常返回 `!void`，详见 link:https://ziglang.org/documentation/master/#Entry-Point[#Entry Point]。
+* 使用 `const`、`var` 与诸如 `void {}` 的字面量形式，表达关于可变性与单位值的意图。
+* 根据输出通道与性能需求，在 `std.debug.print`、无缓冲 writer 与缓冲 stdout 之间做出选择。
+
+[[section-1]]
+== 从单一源文件开始
+
+在 Zig 中把内容显示到屏幕上最快的方式是依赖默认的模块图：你编译的根文件成为规范命名空间，而 `@import` 让你触达从标准库到编译器元数据的一切。你会频繁地使用这些钩子来让运行时行为与构建时决策保持一致。
+
+== 入口点选择
+
+Zig 编译器会基于目标平台、链接模式与用户声明导出不同的入口点符号。该选择在编译期发生，见 link:[lib/std/start.zig:28-100]。
+
+=== 入口点符号表
+
+|===
+| 平台 | 链接模式 | 条件 | 导出符号 | 处理函数
+
+| POSIX/Linux
+| 可执行文件
+| 默认
+| `_start`
+| `_start()`
+
+| POSIX/Linux
+| 可执行文件
+| 链接 libc
+| `main`
+| `main()`
+
+| Windows
+| 可执行文件
+| 默认
+| `wWinMainCRTStartup`
+| `WinStartup()` / `wWinMainCRTStartup()`
+
+| Windows
+| 动态库
+| 默认
+| `_DllMainCRTStartup`
+| `_DllMainCRTStartup()`
+
+| UEFI
+| 可执行文件
+| 默认
+| `EfiMain`
+| `EfiMain()`
+
+| WASI
+| 可执行（command）
+| 默认
+| `_start`
+| `wasi_start()`
+
+| WASI
+| 可执行（reactor）
+| 默认
+| `_initialize`
+| `wasi_start()`
+
+| WebAssembly
+| 自由环境（Freestanding）
+| 默认
+| `_start`
+| `wasm_freestanding_start()`
+
+| WebAssembly
+| 链接 libc
+| 默认
+| `__main_argc_argv`
+| `mainWithoutEnv()`
+
+| OpenCL/Vulkan
+| Kernel
+| 默认
+| `main`
+| `spirvMain2()`
+
+| MIPS
+| 任意
+| 默认
+| `__start`
+| （等同 `_start`）
+|===
+
+=== 编译期入口点逻辑
+
+[mermaid]
+....
+graph TB
+    Start["comptime 块<br/>(start.zig:28)"]
+    CheckMode["检查 builtin.output_mode"]
+    CheckSimplified["简化逻辑？<br/>(stage2 后端)"]
+
+    CheckLinkC["link_libc 或<br/>object_format == .c?"]
+    CheckWindows["builtin.os == .windows?"]
+    CheckUEFI["builtin.os == .uefi?"]
+    CheckWASI["builtin.os == .wasi?"]
+    CheckWasm["arch.isWasm() 且<br/>os == .freestanding?"]
+
+    ExportMain["@export(&main, 'main')"]
+    ExportWinMain["@export(&WinStartup,<br/>'wWinMainCRTStartup')"]
+    ExportStart["@export(&_start, '_start')"]
+    ExportEfi["@export(&EfiMain, 'EfiMain')"]
+    ExportWasi["@export(&wasi_start,<br/>wasm_start_sym)"]
+    ExportWasmStart["@export(&wasm_freestanding_start,<br/>'_start')"]
+
+    Start --> CheckMode
+    CheckMode -->|".Exe 或 has main"| CheckSimplified
+    CheckSimplified -->|"true"| Simple["简化逻辑<br/>(第33-51行)"]
+    CheckSimplified -->|"false"| CheckLinkC
+
+    CheckLinkC -->|"yes"| ExportMain
+    CheckLinkC -->|"no"| CheckWindows
+    CheckWindows -->|"yes"| ExportWinMain
+    CheckWindows -->|"no"| CheckUEFI
+    CheckUEFI -->|"yes"| ExportEfi
+    CheckUEFI -->|"no"| CheckWASI
+    CheckWASI -->|"yes"| ExportWasi
+    CheckWASI -->|"no"| CheckWasm
+    CheckWasm -->|"yes"| ExportWasmStart
+    CheckWasm -->|"no"| ExportStart
+....
+
+[[section-1-sub-a]]
+=== 模块与导入
+
+根模块就是你的顶层文件，因此任何你标记为 `pub` 的声明都可立即通过 `@import("root")` 重新导入。再配合 `@import("builtin")` 来检查当前编译器调用所选择的目标，详见 link:https://ziglang.org/documentation/master/#Builtin-Functions[#Builtin-Functions]。
+
+[source,zig]
+----
+include::{sourcedir}/01__boot-basics/imports.zig[]
+----
+
+.运行
+[source,shell]
+----
+$ zig run imports.zig
+----
+
+.输出
+[source,shell]
+----
+app: Boot Basics Tour
+optimize mode: Debug
+target: x86_64-linux-gnu
+----
+
+实际的目标标识取决于你的宿主三元组；关键在于看到 `@tagName` 如何暴露各枚举，以便你后续可以据此分支。
+
+由于缓冲的 stdout writer 会批量输出数据，退出前务必调用 `flush()`，以确保终端接收到最后一行。
+
+TIP: 使用 `@import("root")` 来公开配置常量，而不把额外的全局变量烘焙进你的命名空间。
+
+[[section-1-sub-b]]
+=== 入口点与早期错误
+
+Zig 的运行时胶水（`std.start`）会寻找 `pub fn main`，转发命令行状态，并将错误返回视为携带诊断的中止信号。由于 `main` 常常执行 I/O，为其赋予 `!void` 返回类型可以让错误传播保持显式。
+
+[source,zig]
+----
+include::{sourcedir}/01__boot-basics/entry_point.zig[]
+----
+
+.运行
+[source,shell]
+----
+$ zig run entry_point.zig
+----
+
+.输出
+[source,shell]
+----
+Zig 入口点报告。
+----
+
+在发布模式（`zig run -OReleaseFast ...`）下，会触发 `ModeError.ReleaseOnly` 分支，警告会在程序继续前浮现，这清晰地展示了 `catch` 如何将错误转换为面向用户的诊断，同时不阻止后续工作。
+
+[[section-1-sub-b2]]
+=== 如何处理 `main()` 的返回类型
+
+Zig 在 `std.start` 中的启动代码会在编译期检查你的 `main()` 返回类型，并生成相应的处理逻辑。这一弹性允许你选择最贴合程序需求的签名——无论是用 `!void` 获得简单的成功/失败语义、用 `u8` 明确退出码，还是用 `noreturn` 表示无限事件循环。`callMain()` 函数负责协调这类分派，确保错误被记录，退出码被正确传播到操作系统。
+
+==== callMain 返回类型处理
+
+`callMain()` 函数会处理用户 `main()` 的不同返回类型签名：
+
+[mermaid]
+....
+graph TB
+    Start["callMain()"]
+
+    GetRetType["ReturnType = @TypeOf(root.main)<br/>.return_type"]
+
+    CheckType["switch ReturnType"]
+
+    Void["void"]
+    CallVoid["root.main()<br/>return 0"]
+
+    NoReturn["noreturn"]
+    CallNoReturn["return root.main()"]
+
+    U8["u8"]
+    CallU8["return root.main()"]
+
+    ErrorUnion["error union"]
+
+    CheckInner["@TypeOf(result)?"]
+
+    InnerVoid["void"]
+    ReturnZero["return 0"]
+
+    InnerU8["u8"]
+    ReturnResult["return result"]
+
+    Invalid["@compileError"]
+
+    CallCatch["result = root.main()<br/>catch |err|"]
+
+    LogError["记录错误名<br/>与栈回溯<br/>(第707-712行)"]
+
+    ReturnOne["return 1"]
+
+    Start --> GetRetType
+    GetRetType --> CheckType
+    CheckType --> Void
+    CheckType --> NoReturn
+    CheckType --> U8
+    CheckType --> ErrorUnion
+    CheckType --> Invalid
+
+    Void --> CallVoid
+    NoReturn --> CallNoReturn
+    U8 --> CallU8
+
+    ErrorUnion --> CallCatch
+    CallCatch --> CheckInner
+    CallCatch --> LogError
+    LogError --> ReturnOne
+
+    CheckInner --> InnerVoid
+    CheckInner --> InnerU8
+    CheckInner --> Invalid
+
+    InnerVoid --> ReturnZero
+    InnerU8 --> ReturnResult
+....
+
+`main()` 的有效返回类型：
+
+* `void` —— 返回退出码 0
+* `noreturn` —— 永不返回（无限循环或显式退出）
+* `u8` —— 直接返回退出码
+* `!void` —— 成功返回 0，错误返回 1（记录错误与栈回溯）
+* `!u8` —— 成功返回退出码，错误返回 1（记录错误与栈回溯）
+
+示例中使用的 `!void` 提供了最佳平衡：显式错误处理，自动日志记录，并带有合适的退出码。
+
+[[section-1-sub-c]]
+=== 命名与作用域预览
+
+变量遵循词法作用域：每个块都会引入一个新区域，你可以在其内遮蔽或扩展绑定；同时 `const` 与 `var` 分别表示不可变与可变，并帮助编译器推理安全性，详见 link:https://ziglang.org/documentation/master/#Blocks[#Blocks]。Zig 将关于风格与遮蔽的深入讨论留到第38章，但请记住，顶层的审慎命名（通常通过 `pub const`）是跨文件共享配置的惯用方式；见 link:https://ziglang.org/documentation/master/#Variables[#Variables]。
+
+[[section-2]]
+== 处理值与构建
+
+拥有入口点后，下一站是数据：数值类型以明确大小的风味出现（`iN`、`uN`、`fN`），字面量会从上下文推断类型，且 Zig 使用调试安全检查来陷阱溢出，除非你选择包裹或饱和运算符。构建模式（`-O` 标志）决定哪些检查保留、编译器的优化力度如何。
+
+[[section-2-sub-a]]
+=== 优化模式
+
+Zig 提供四种优化模式，以控制代码速度、二进制体积与安全检查之间的权衡：
+
+|===
+| 模式 | 优先级 | 安全检查 | 速度 | 二进制体积 | 使用场景
+
+| `Debug`
+| 安全 + 调试信息
+| ✓ 全部启用
+| 最慢
+| 最大
+| 开发与调试
+
+| `ReleaseSafe`
+| 速度 + 安全
+| ✓ 全部启用
+| 快
+| 大
+| 带安全的生产环境
+
+| `ReleaseFast`
+| 最大速度
+| ✗ 禁用
+| 最快
+| 中等
+| 性能关键的生产环境
+
+| `ReleaseSmall`
+| 最小体积
+| ✗ 禁用
+| 快
+| 最小
+| 嵌入式、尺寸受限
+|===
+
+优化模式通过 `-O` 标志指定，并影响：
+
+* 运行时安全检查（溢出、边界检查、空指针检查）
+* 栈回溯与调试信息生成
+* LLVM 优化级别（使用 LLVM 后端时）
+* 内联启发与代码生成策略
+
+[mermaid]
+....
+graph TB
+    subgraph "优化模式的影响"
+        OptMode["optimize_mode: OptimizeMode"]
+
+        OptMode --> SafetyChecks["运行时安全检查"]
+        OptMode --> DebugInfo["调试信息"]
+        OptMode --> CodegenStrategy["代码生成策略"]
+        OptMode --> LLVMOpt["LLVM 优化级别"]
+
+        SafetyChecks --> Overflow["整数溢出检查"]
+        SafetyChecks --> Bounds["边界检查"]
+        SafetyChecks --> Null["空指针检查"]
+        SafetyChecks --> Unreachable["不可达断言"]
+
+        DebugInfo --> StackTraces["栈回溯"]
+        DebugInfo --> DWARF["DWARF 调试信息"]
+        DebugInfo --> LineInfo["源代码行信息"]
+
+        CodegenStrategy --> Inlining["内联启发"]
+        CodegenStrategy --> Unrolling["循环展开"]
+        CodegenStrategy --> Vectorization["SIMD 向量化"]
+
+        LLVMOpt --> O0["Debug: -O0"]
+        LLVMOpt --> O2Safe["ReleaseSafe: -O2 + 安全"]
+        LLVMOpt --> O3["ReleaseFast: -O3"]
+        LLVMOpt --> Oz["ReleaseSmall: -Oz"]
+    end
+....
+
+本章中我们使用默认的 `Debug` 进行开发，并预览 `ReleaseFast`，以演示优化选择如何影响行为与二进制特征。
+
+[[workflow-1]]
+=== 值、字面量与调试打印
+
+`std.debug.print` 写入到 stderr，非常适合早期试验；它可以接受你传入的任何值，从而揭示 `@TypeOf` 等如何对字面量进行反射。
+
+[source,zig]
+----
+include::{sourcedir}/01__boot-basics/values_and_literals.zig[]
+----
+
+.运行
+[source,shell]
+----
+$ zig run values_and_literals.zig
+----
+
+.输出
+[source,shell]
+----
+counter=3 ratio=0.5 safety=true
+newline byte=10 (ASCII)
+unit literal has type void
+----
+
+将 `void {}` 视为一个具有表达力的字面量，表示"无需配置"；同时记住调试打印默认走 stderr，因此不会干扰 stdout 的管道。
+
+[[workflow-2]]
+=== 缓冲 stdout 与构建模式
+
+当你需要确定性的 stdout 且减少系统调用时，借用一个缓冲并在最后统一刷新——特别是在发布配置中吞吐量更重要的场景。下面的示例展示了如何围绕 `std.fs.File.stdout()` 设置一个缓冲 writer，并强调不同构建模式的差异。
+
+[source,zig]
+----
+include::{sourcedir}/01__boot-basics/buffered_stdout.zig[]
+----
+
+.运行
+[source,shell]
+----
+$ zig build-exe buffered_stdout.zig -OReleaseFast
+$
+$ ./buffered_stdout
+----
+
+.输出
+[source,shell]
+----
+缓冲节省系统调用。
+结束时刷新一次。
+----
+
+使用缓冲 writer 与标准库自身的初始化模板相映成趣，并保持写入的凝聚性；退出前始终刷新，以确保操作系统能够看到你的最终消息。
+
+[[notes-caveats]]
+== 说明与注意事项
+
+* `std.debug.print` 目标为 stderr，绕过 stdout 缓冲，因此即便在简单工具中也应将其保留用于诊断。
+* 包裹（`+%`）与饱和（`+|`）算术在你有意跳过溢出陷阱时可用；默认运算符在 Debug 模式仍会 panic，以便尽早捕获错误，详见 link:https://ziglang.org/documentation/master/#Operators[#Operators]。
+* `std.fs.File.stdout().writer(&buffer)` 与 `zig init` 所用模式相呼应，并需要显式 `flush()` 将缓冲字节推下游。
+
+[[exercises]]
+== 练习
+
+* 扩展 `imports.zig`，打印由 `@sizeOf(usize)` 报告的指针大小，并通过在命令行切换 `-Dtarget` 值来比较各目标。
+* 重构 `entry_point.zig`，让 `requireDebugSafety` 返回一个描述性的错误联合（`error{ReleaseOnly}![]const u8`），并让 `main` 在重新抛出前将该消息写到 stdout。
+* 使用 `-OReleaseSafe` 与 `-OReleaseSmall` 构建 `buffered_stdout.zig`，测量二进制体积，观察优化选择如何影响部署占用。

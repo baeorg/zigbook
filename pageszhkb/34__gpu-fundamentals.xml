@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>GPU基础</title>
+<subtitle>使用Zig的GPU后端进行数据并行计算</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>上一章的C互操作桥让Zig能够与几十年的原生代码对话（参见 <link xl:href="33__c-interop-import-export-abi.adoc">第33章</link>）；下一个前沿是利用大规模并行设备，同时不放弃Zig的人体工程学。我们将把GPU执行模型映射到Zig的语言原语上，检查地址空间和调用约定如何约束内核代码，并学习驯服仍在发展的SPIR-V工具链的构建标志（参见 <link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>）。</simpara>
+<simpara>在此过程中，我们将对比计算优先设计与图形管道，强调Zig标准库已经理解GPU目标的地方，并概述务实的主机/设备协调模式，这些模式适用于仍需要在纯CPU硬件上运行的项目（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Target.zig">Target.zig</link>）。</simpara>
+</chapter>
+
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>将Zig的编译模型与GPU执行层次结构和内存类别相关联。</simpara>
+</listitem>
+<listitem>
+<simpara>使用显式调用约定和地址空间声明和编译GPU内核。</simpara>
+</listitem>
+<listitem>
+<simpara>规划启动参数，以便在没有加速器时优雅地降级到CPU后备方案。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/math.zig">math.zig</link> 以获取相关定义。</simpara>
+</chapter>
+
+<chapter xml:id="gpu-architecture-foundations">
+<title>GPU架构基础</title>
+<simpara>GPU暴露了数千个轻量级线程，这些线程排列成工作项、工作组和网格的层次结构；Zig通过 <code>@workGroupId</code>、<code>@workGroupSize</code> 和 <code>@workItemId</code> 等内建函数展示这些索引，保持模型显式，使内核保持可预测性。由于GPU编译器惩罚隐式全局状态，Zig对显式参数和结果位置的偏见自然适合SIMT硬件所要求的确定性流。</simpara>
+
+<section xml:id="simt-execution-model">
+<title>执行模型：SIMT和线程组</title>
+<simpara>单指令多线程（SIMT）执行将通道捆绑到warp或wavefront中，这些通道运行相同的操作码流，直到发散。当你为 <code>.spirv32</code>、<code>.spirv64</code>、<code>.nvptx</code> 或 <code>.amdgcn</code> 等目标编译时，Zig会将其默认调用约定交换为专门的GPU变体，因此 <code>callconv(.kernel)</code> 发出满足每个平台调度器期望的代码。显式处理发散：在每个通道值上分支会导致谓词掩码，这些掩码会暂停非活动线程，因此用粗分支构造内核可以保持吞吐量可预测。</simpara>
+</section>
+
+<section xml:id="memory-hierarchy-address-spaces">
+<title>内存层次结构和地址空间</title>
+<simpara>Zig通过第一类地址空间建模GPU内存——<code>.global</code>、<code>.shared</code>、<code>.local</code>、<code>.constant</code>、<code>.storage_buffer</code> 等——每个空间都有自己的一致性和生命周期规则。编译器拒绝跨越到不允许空间的指针算术，强制内核作者承认数据何时存在于共享内存与设备全局缓冲区中。仅当你能证明访问规则仍然有效时，才使用显式转换，如 <code>@addrSpaceCast</code>，并优先选择 <code>extern struct</code> 有效负载，以便与主机API共享数据，以保证布局稳定性。</simpara>
+</section>
+
+<section xml:id="compute-vs-graphics">
+<title>计算与图形管道</title>
+<simpara>计算内核只是你可以从主机代码排队的SPIR-V或PTX入口点；图形着色器遍历固定管道，Zig目前将其视为你用着色语言编写或翻译的SPIR-V blob的外部二进制文件。Zig的 <code>@import</code> 系统尚未生成渲染管道，但你可以嵌入预编译的SPIR-V，并通过用Zig编写的Vulkan或WebGPU主机分派它，与你在标准库中其他地方依赖的相同分配器和错误处理约束集成。</simpara>
+</section>
+</chapter>
+
+<chapter xml:id="targeting-gpus-with-zig">
+<title>使用Zig定位GPU</title>
+<simpara>编译器对构建的视图由 <code>builtin.target</code> 捕获，它记录架构、OS标签、ABI和允许的地址空间；在CLI级别切换 <code>-target</code> 足以重新定位主机CPU、SPIR-V或CUDA后端的代码。Zig 0.15.2提供了自托管SPIR-V后端和基于LLVM的后备方案，可使用 <code>-fllvm</code> 选择，让你试验哪个管道更好地匹配你的下游驱动程序。</simpara>
+
+<section xml:id="understanding-the-target-structure">
+<title>理解目标结构</title>
+<simpara>在使用GPU特定编译之前，理解Zig如何在内部表示编译目标是有价值的。下图显示了完整的 <code>std.Target</code> 结构：</simpara>
+<informalfigure>
+<mediaobject>
+<textobject role="monospaced"><![CDATA[graph TB
+    subgraph "std.Target结构"
+        TARGET["std.Target"]
+        CPU["cpu: Cpu"]
+        OS["os: Os"]
+        ABI["abi: Abi"]
+        OFMT["ofmt: ObjectFormat"]
+        DYNLINKER["dynamic_linker: DynamicLinker"]
+
+        TARGET --> CPU
+        TARGET --> OS
+        TARGET --> ABI
+        TARGET --> OFMT
+        TARGET --> DYNLINKER
+    end
+
+    subgraph "Cpu组件"
+        CPU --> ARCH["arch: Cpu.Arch"]
+        CPU --> MODEL["model: *const Cpu.Model"]
+        CPU --> FEATURES["features: Feature.Set"]
+
+        ARCH --> ARCHEX["x86_64, aarch64, wasm32, etc"]
+        MODEL --> MODELEX["generic, native, specific variants"]
+        FEATURES --> FEATEX["CPU特性标志"]
+    end
+
+    subgraph "Os组件"
+        OS --> OSTAG["tag: Os.Tag"]
+        OS --> VERSION["version_range: VersionRange"]
+
+        OSTAG --> OSEX["linux, windows, macos, wasi, etc"]
+        VERSION --> VERUNION["linux: LinuxVersionRange<br/>windows: WindowsVersion.Range<br/>semver: SemanticVersion.Range<br/>none: void"]
+    end
+
+    subgraph "Abi和格式"
+        ABI --> ABIEX["gnu, musl, msvc, none, etc"]
+        OFMT --> OFMTEX["elf, macho, coff, wasm, c, spirv"]
+    end]]></textobject>
+</mediaobject>
+</informalfigure>
+<simpara>此目标结构揭示了GPU编译如何与Zig的类型系统集成。当你指定 <code>-target spirv32-vulkan-none</code> 时，你正在设置：CPU架构为 <code>spirv32</code>（32位SPIR-V），OS标签为 <code>vulkan</code>（Vulkan环境），ABI为 <code>none</code>（独立，无C运行时），并隐式地将ObjectFormat设置为 <code>spirv</code>。目标完全确定代码生成行为：<code>builtin.target.cpu.arch.isSpirV()</code> 返回true，启用地址空间支持，编译器选择SPIR-V后端，而不是x86_64或ARM代码生成。此相同结构处理所有目标——CPU、GPU、WebAssembly、裸机——具有统一语义。ObjectFormat字段（<code>ofmt</code>）告诉链接器要生成哪种二进制格式：<code>elf</code> 用于Linux可执行文件，<code>macho</code> 用于Darwin，<code>coff</code> 用于Windows，<code>wasm</code> 用于WebAssembly，<code>spirv</code> 用于GPU着色器。理解此架构有助于你解码目标三元组，预测哪些内建函数可用（如GPU目标上的 <code>@workGroupId</code>），并排除交叉编译问题。</simpara>
+</section>
+
+<section xml:id="inspecting-targets">
+<title>检查目标和地址空间</title>
+<simpara>此第一个示例内省原生构建目标，报告编译器允许哪些GPU地址空间，并为SPIR-V合成交叉编译三元组。在非GPU主机上运行它仍然可以教授Zig用于描述加速器的词汇（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Target/Query.zig">Query.zig</link>）。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 34__gpu-fundamentals.adoc - include::example$chapters-data/code/34__gpu-fundamentals/01_target_introspection.zig[]</programlisting>
+<sidebar>
+<title>运行</title>
+<screen>$ zig run 01_target_introspection.zig</screen>
+</sidebar>
+<sidebar>
+<title>输出</title>
+<screen>host architecture: x86_64
+host operating system: linux
+default object format: elf
+compiling as GPU backend: false
+supports shared address space: false
+supports constant address space: false
+example SPIR-V triple: spirv64-vulkan-none</screen>
+</sidebar>
+<simpara>提示：即使原生架构是CPU，合成SPIR-V三元组也有助于你连接构建步骤，这些步骤在不切换机器的情况下发出GPU二进制文件。</simpara>
+</section>
+
+<section xml:id="declaring-kernels">
+<title>声明内核和分派元数据</title>
+<simpara>下面的内核将其分派坐标存储在存储缓冲区结构体中，说明了GPU特定调用约定、地址空间和内建函数如何组合。编译需要SPIR-V目标和自托管后端（<code>-fno-llvm</code>），以便Zig发出准备好用于Vulkan或WebGPU队列提交的二进制模块。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 34__gpu-fundamentals.adoc - include::example$chapters-data/code/34__gpu-fundamentals/02_spirv_fill_kernel.zig[]</programlisting>
+<sidebar>
+<title>运行</title>
+<screen>$ zig build-obj -fno-llvm -O ReleaseSmall -target spirv32-vulkan-none \
+    -femit-bin=chapters-data/code/34__gpu-fundamentals/capture_coordinates.spv \
+    chapters-data/code/34__gpu-fundamentals/02_spirv_fill_kernel.zig</screen>
+</sidebar>
+<sidebar>
+<title>输出</title>
+<screen>no output (binary module generated)</screen>
+</sidebar>
+<simpara>注意：发出的 <code>.spv</code> blob直接插入到Vulkan的 <code>vkCreateShaderModule</code> 或WebGPU的 <code>wgpuDeviceCreateShaderModule</code> 中，<code>extern struct</code> 确保主机描述符与内核的预期布局匹配。</simpara>
+</section>
+
+<section xml:id="toolchain-selection">
+<title>工具链选择和二进制格式</title>
+<simpara>Zig的构建系统可以通过 <code>addObject</code> 或 <code>addLibrary</code> 注册GPU工件，允许你在单个工作区中将SPIR-V模块与CPU可执行文件一起存放。当SPIR-V验证需要特定环境（Vulkan与OpenCL）时，在 <code>-target</code> 三元组中相应地设置OS标签，并固定优化模式（<code>-O ReleaseSmall</code> 用于着色器）以控制指令计数和寄存器压力（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/build.zig">build.zig</link>）。像 <code>-fllvm</code> 这样的后备方案在自托管后端落后于最新SPIR-V扩展时解锁供应商特定功能。</simpara>
+
+<section xml:id="object-formats-and-abi-for-gpu-targets">
+<title>GPU目标的对象格式和ABI</title>
+<simpara>SPIR-V是Zig中的一流对象格式，与传统可执行格式并存。下图显示了对象格式和ABI如何组织：</simpara>
+<informalfigure>
+<mediaobject>
+<textobject role="monospaced"><![CDATA[graph TB
+    subgraph "常见ABI"
+        ABI["Abi枚举"]
+
+        ABI --> GNU["gnu<br/>GNU工具链"]
+        ABI --> MUSL["musl<br/>musl libc"]
+        ABI --> MSVC["msvc<br/>Microsoft Visual C++"]
+        ABI --> NONE["none<br/>独立"]
+        ABI --> ANDROID["android, gnueabi, etc<br/>平台变体"]
+    end
+
+    subgraph "对象格式"
+        OFMT["ObjectFormat枚举"]
+
+        OFMT --> ELF["elf<br/>Linux, BSD"]
+        OFMT --> MACHO["macho<br/>Darwin系统"]
+        OFMT --> COFF["coff<br/>Windows PE"]
+        OFMT --> WASM["wasm<br/>WebAssembly"]
+        OFMT --> C["c<br/>C源输出"]
+        OFMT --> SPIRV["spirv<br/>着色器"]
+    end]]></textobject>
+</mediaobject>
+</informalfigure>
+<simpara>GPU内核通常使用 <code>abi = none</code>，因为它们在没有C运行时的独立环境中运行——没有libc，没有标准库初始化，只有原始计算。SPIR-V对象格式产生 <code>.spv</code> 二进制文件，绕过传统链接：与ELF或Mach-O链接器所做的解析重定位和合并段不同，SPIR-V模块是完整的、独立的着色器程序，准备好被Vulkan的 <code>vkCreateShaderModule</code> 或WebGPU的着色器创建API使用。这就是为什么你不需要GPU代码的单独链接步骤——编译器直接发出最终二进制文件。当你指定 <code>-target spirv32-vulkan-none</code> 时，<code>none</code> ABI告诉Zig跳过所有C运行时设置，<code>spirv</code> 对象格式确保输出是有效的SPIR-V字节码，而不是具有入口点和程序头的可执行文件。</simpara>
+</section>
+
+<section xml:id="code-generation-backend-architecture">
+<title>代码生成后端架构</title>
+<simpara>Zig支持多种代码生成后端，让你在如何生成SPIR-V方面具有灵活性：</simpara>
+<informalfigure>
+<mediaobject>
+<textobject role="monospaced"><![CDATA[graph TB
+    subgraph "代码生成"
+        CG["代码生成"]
+        CG --> LLVM["LLVM后端<br/>use_llvm标志"]
+        CG --> NATIVE["原生后端<br/>x86_64, aarch64, wasm, riscv64"]
+        CG --> CBACK["C后端<br/>ofmt == .c"]
+    end]]></textobject>
+</mediaobject>
+</informalfigure>
+<simpara><strong>LLVM后端</strong>（<code>-fllvm</code>）通过LLVM的SPIR-V目标路由，该目标支持供应商特定扩展和较新的SPIR-V版本。当你需要自托管后端尚未实现的功能，或调试编译器问题时，请使用此选项——LLVM成熟的SPIR-V支持提供了已知良好的参考。<strong>原生后端</strong>（<code>-fno-llvm</code>，默认）将Zig的自托管代码生成用于SPIR-V，编译速度更快，产生更小的二进制文件，但在扩展支持方面可能落后于LLVM。对于SPIR-V，自托管后端直接发出字节码，无需中间表示。在试验GPU代码时，从 <code>-fno-llvm</code> 开始，以便更快地迭代；如果遇到缺少的SPIR-V功能或需要与参考实现进行比较，请切换到 <code>-fllvm</code>。选择会影响编译速度和功能可用性，但不会影响你编写的API——你的内核代码保持相同。</simpara>
+</section>
+</section>
+</chapter>
+
+<chapter xml:id="launch-planning-data-parallel">
+<title>启动规划和数据并行模式</title>
+<simpara>选择启动大小涉及在共享内存预算与GPU占用率之间进行平衡，而CPU后备方案应重用相同的算术，以便正确性在设备之间保持相同。Zig的强类型使这些计算显式，鼓励主机规划器和内核的可重用助手。</simpara>
+
+<section xml:id="workgroup-sizing">
+<title>选择工作组大小</title>
+<simpara>此助手计算你需要多少工作组来处理问题大小，最终组引入多少填充，并为CPU端分块建模相同的计算。使用一个例程可以消除主机和设备调度之间的逐个取消同步。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 34__gpu-fundamentals.adoc - include::example$chapters-data/code/34__gpu-fundamentals/03_dispatch_planner.zig[]</programlisting>
+<sidebar>
+<title>运行</title>
+<screen>$ zig run 03_dispatch_planner.zig</screen>
+</sidebar>
+<sidebar>
+<title>输出</title>
+<screen>gpu dispatch: 16 groups × 64 lanes => 1024 invocations (tail 24)
+cpu chunks: 63 batches × 16 lanes => 1008 logical tasks (tail 8)</screen>
+</sidebar>
+<simpara>提示：将规划器的输出反馈到内核启动描述符和CPU任务调度器中，以便工具在平台之间保持一致。</simpara>
+</section>
+
+<section xml:id="cpu-fallbacks">
+<title>CPU后备方案和统一代码路径</title>
+<simpara>现代应用程序通常为功能受限的机器提供CPU实现；通过共享分派规划器和 <code>extern</code> 有效负载，你可以重用验证代码，这些代码在信任生产中的结果之前，对照CPU重新计算检查GPU输出。将其与Zig的构建选项（<code>-Dgpu=false</code>）配对，以便在为没有加速器的环境打包时有条件地排除内核模块。</simpara>
+</section>
+</chapter>
+
+<chapter xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara>始终将GPU特定代码置于功能检查之后，以便仅CPU构建仍然通过CI。</simpara>
+</listitem>
+<listitem>
+<simpara>Vulkan验证层早期捕获许多错误；在从Zig编译SPIR-V直到内核套件稳定之前，启用它们。</simpara>
+</listitem>
+<listitem>
+<simpara>优先选择内核的release-small优化：它最小化指令计数，减轻指令缓存和寄存器文件的压力。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展内核以将多个维度（XYZ）写入坐标结构体，并用 <code>spirv-dis</code> 验证发出的SPIR-V。</simpara>
+</listitem>
+<listitem>
+<simpara>添加一个CPU端验证器，将SPIR-V输出缓冲区映射回Zig，并针对 <code>simulateCpuFallback</code> 交叉检查运行时。</simpara>
+</listitem>
+<listitem>
+<simpara>修改构建脚本，通过翻转 <code>-target</code> 三元组和交换地址空间注释来发出SPIR-V和PTX变体。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案和边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>某些GPU驱动程序要求专门的调用约定（例如，AMD的 <code>.amdgcn.kernel</code>），因此参数顺序和类型必须精确匹配供应商文档。</simpara>
+</listitem>
+<listitem>
+<simpara>只有当你将函数标记为 <code>inline</code> 并提供大小字面量时，<code>@workGroupSize</code> 才返回编译时常量；否则，假设运行时值并保护动态路径。</simpara>
+</listitem>
+<listitem>
+<simpara>OpenCL目标更喜欢 <code>.param</code> 地址空间；交叉编译时，审计每个指针参数并调整 <code>addrspace</code> 注释以保持正确性。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+</book>

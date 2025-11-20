@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>附录E. 高级内联汇编</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>当你需要一次性指令、与旧 ABI 互操作或访问标准库尚未封装的处理器特性时，内联汇编让你能够越过 Zig 的抽象层。<link xl:href="33__c-interop-import-export-abi.xml">33</link> Zig 0.15.2 通过对指针转换强制对齐检查与更清晰的约束诊断加固了内联汇编，使其较以前版本更安全且更易调试。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>识别 Zig 的 GNU 风格内联汇编块的结构并将操作数映射到寄存器或内存。</simpara>
+</listitem>
+<listitem>
+<simpara>应用寄存器和 clobber 约束来编排 Zig 变量与机器指令之间的数据流。</simpara>
+</listitem>
+<listitem>
+<simpara>用编译期检查保护特定架构的代码片段，使你的构建在不支持的目标上快速失败。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="asm-shapes">
+<title>构造汇编块</title>
+<simpara>Zig adopts the familiar GCC/Clang inline assembly layout: a template string followed by colon-separated outputs, inputs, and clobbers. Start with simple arithmetic to get comfortable with operand binding before you reach for more exotic instructions. The first example uses <literal>addl</literal> to combine two 32-bit values, binding both operands to registers without touching memory. <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/os/plan9/x86_64.zig">x86_64.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 59__advanced-inline-assembly.adoc - include::example$chapters-data/code/59__advanced-inline-assembly/01_inline_add.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/59__advanced-inline-assembly/01_inline_add.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>Operand placeholders such as <literal>%[lhs]</literal> reference the symbolic names you assign in the constraint list; keeping those names mnemonic pays off once your templates grow beyond a single instruction. <link xl:href="58__mapping-c-rust-idioms.xml">58</link></simpara>
+</tip>
+</chapter>
+<chapter xml:id="register-choreography">
+<title>安全的寄存器编排</title>
+<simpara>More complex snippets often need bidirectional operands (read/write) or additional bookkeeping once the instruction finishes. The <literal>xchg</literal> sequence below swaps two integers entirely in registers, then writes the updated values back to Zig-managed memory. <link xl:href="04__errors-resource-cleanup.xml">4</link> Guarding the function with <literal>@compileError</literal> prevents accidental use on non-x86 platforms, while the <literal>+r</literal> constraint indicates that each operand is both read and written. <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/pie.zig">pie.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 59__advanced-inline-assembly.adoc - include::example$chapters-data/code/59__advanced-inline-assembly/02_xchg_swap.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/59__advanced-inline-assembly/02_xchg_swap.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>由于交换仅在寄存器内进行，你可避开棘手的内存约束；当确需直接访问内存时，请显式加入<literal>"memory"</literal> clobber，以免 Zig 的优化器重排周边的加载或存储。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</note>
+</chapter>
+<chapter xml:id="observability">
+<title>可观测性与护栏</title>
+<simpara>Once you trust the syntax, inline assembly becomes a precision tool for hardware-provided counters or instructions not yet surfaced elsewhere. Reading the x86 time-stamp counter with <literal>rdtsc</literal> gives you cycle-level timing while demonstrating multi-output constraints and the new alignment assertions introduced in 0.15.x. <link xl:href="39__performance-and-inlining.xml">39</link> The example bundles the low and high halves of the counter into a <literal>u64</literal> and falls back to a compile error on non-x86_64 targets.</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 59__advanced-inline-assembly.adoc - include::example$chapters-data/code/59__advanced-inline-assembly/03_rdtsc.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/59__advanced-inline-assembly/03_rdtsc.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<caution>
+<simpara>Instructions like <literal>rdtsc</literal> can reorder around other operations; consider pairing them with serializing instructions (e.g. <literal>lfence</literal>) or explicit memory clobbers when precise measurement matters. <link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</caution>
+</chapter>
+<chapter xml:id="patterns">
+<title>随手可用的模式</title>
+<itemizedlist>
+<listitem>
+<simpara>Wrap architecture-specific blocks in <literal>if (builtin.cpu.arch != …) @compileError</literal> guards so cross-compilation fails early. <link xl:href="41__cross-compilation-and-wasm.xml">41</link></simpara>
+</listitem>
+<listitem>
+<simpara>原型阶段优先使用仅寄存器操作数——在逻辑正确后，再有意识地引入内存操作数与 clobber。<link xl:href="33__c-interop-import-export-abi.xml">33</link></simpara>
+</listitem>
+<listitem>
+<simpara>Treat inline assembly as an escape hatch; if the standard library (or builtins) exposes the instruction, prefer that higher-level API to stay portable. <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>Inline assembly is target-specific; always document the minimum CPU features required and consider feature probes before executing the block. <link xl:href="29__threads-and-atomics.xml">29</link></simpara>
+</listitem>
+<listitem>
+<simpara>Clobber lists matter—forgetting <literal>"cc"</literal> or <literal>"memory"</literal> may lead to miscompilations that only surface under optimization. <link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+<listitem>
+<simpara>在混用 Zig 与外部 ABI 时，请反复确认调用约定与寄存器保留规则；编译器不会为你保存寄存器。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>Add an <literal>lfence</literal> instruction before <literal>rdtsc</literal> and measure the impact on stability; compare results in Debug and ReleaseFast builds. <link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</listitem>
+<listitem>
+<simpara>Extend <literal>swapXchg</literal> with a <literal>"memory"</literal> clobber and benchmark the difference when swapping values in a tight loop. <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/time.zig">time.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>Rewrite <literal>addAsm</literal> using a compile-time format string that emits <literal>add</literal> or <literal>sub</literal> based on a boolean parameter. <link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>Some instructions (e.g., privileged system calls) require elevated privileges—wrap them in runtime checks so they never execute inadvertently. <link xl:href="48__process-and-environment.xml">48</link></simpara>
+</listitem>
+<listitem>
+<simpara>On microarchitectures with out-of-order execution, pair timing reads with fences to avoid skewed measurements. <link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</listitem>
+<listitem>
+<simpara>For portable timing, prefer <literal>std.time.Timer</literal> or platform APIs and reserve inline assembly for truly architecture-specific hot paths.</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

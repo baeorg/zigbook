@@ -1,0 +1,395 @@
+////
+changes: ["Initial chapter draft for struct-based configuration"]
+examples_compile: yes
+keywords: ["配置","结构体","验证","覆盖"]
+last_updated: 2025-11-03
+last_verified: 2025-11-03
+next_chapter: "13__project-config-loader"
+open_questions: []
+previous_chapter: "11__project-dynamic-string-builder"
+status: draft
+xref_complete: true
+////
+
+= 配置即数据：基于结构体的配置
+:chapter-number: 12
+:chapter-slug: config-as-data
+:copyright: zigbook
+:doctype: book
+:embedded:
+:experimental:
+:icons: font
+:partnums:
+:pygments-linenums-mode: inline
+:pygments-style: manni
+:safe-mode-level: 0
+:sectanchors:
+:sectids:
+:sectlinks:
+:source-highlighter: pygments
+:sourcedir: example$chapters-data/code
+:webfonts:
+:xrefstyle: short
+:zig-version: 0.15.2
+:linkcss:
+:stylesdir: styles
+:stylesheet: zigbook.css
+
+[[overview]]
+== 概览
+
+配置文件最终会成为内存中的普通数据。通过为这些数据提供丰富的类型——包括默认值、枚举和可选类型——您可以在编译时对错误配置进行推理，以确定性方式验证不变性，并将经过手动调整的设置传递给下游代码，而无需使用字符串类型的胶水代码（参见 xref:11__project-dynamic-string-builder.adoc[11] 和 link:https://github.com/ziglang/zig/tree/master/lib/std/meta.zig[meta.zig]）。
+
+本章为基于结构体的配置建立了一个操作手册：从具有丰富默认值的结构体开始，叠加分层覆盖（如环境变量或命令行标志），然后使用显式错误集强制执行防护措施，以便下一个项目中的 CLI 可以信任其输入（参见 link:https://github.com/ziglang/zig/tree/master/lib/std/log.zig[log.zig]）。
+
+[[learning-goals]]
+== 学习目标
+
+* 使用枚举、可选类型和合理的默认值建模嵌套配置结构体，以捕获应用程序意图。
+* 使用反射助手（如 `std.meta.fields`）分层配置文件、环境和运行时覆盖，同时保持合并的类型安全性。
+* 使用专用错误集、结构化报告和廉价的诊断信息验证配置，以便下游系统能够快速失败。xref:04__errors-resource-cleanup.adoc[04]
+
+[[config-structs]]
+== 结构体作为配置契约
+
+类型化配置反映了您在生产环境中期望的不变性。Zig 结构体允许您内联声明默认值，使用枚举编码模式，并分组相关的旋钮，以便调用者不会意外传递格式错误的元组。依赖标准库的枚举、日志级别和写入器可以保持 API 的人体工程学，同时遵循 link:https://ziglang.org/download/0.15.1/release-notes.html[v0.15.2] 中的 I/O 接口大修。
+
+[[config-structs-defaults]]
+=== 默认丰富的结构体定义
+
+基线配置为每个字段提供默认值，包括嵌套结构体。消费者可以使用指定初始化器选择性地覆盖值，而不会丢失其余的默认值。
+
+[source,zig]
+----
+include::{sourcedir}/12__config-as-data/default_config.zig[]
+----
+
+.Run
+[source,shell]
+----
+$ zig run chapters-data/code/12__config-as-data/default_config.zig
+----
+
+.Output
+[source,shell]
+----
+defaults ->
+  host = 127.0.0.1
+  port = 8080
+  log_level = info
+  instrumentation = false
+  theme = system
+  timeouts = .{ connect_ms = 200, read_ms = 1200 }
+
+overrides ->
+  host = 0.0.0.0
+  port = 9090
+  log_level = debug
+  instrumentation = true
+  theme = dark
+  timeouts = .{ connect_ms = 75, read_ms = 1500 }
+----
+
+[[config-structs-optionals]]
+=== 可选类型 vs 哨兵默认值
+
+注意：只有真正需要三态语义的字段才成为可选类型（本章稍后的 TLS 文件路径使用 `?[]const u8`）；其他所有内容都使用具体默认值。将嵌套结构体（此处为 `Timeouts`）与 `[]const u8` 字符串结合使用，可以提供在配置生命周期内保持有效的不可变引用（参见 xref:03__data-fundamentals.adoc[03]）。
+
+[[config-structs-initializers]]
+=== 指定初始化器保持可读性
+
+由于指定初始化器允许您仅覆盖关心的字段，您可以将配置声明保留在调用站点附近，而不会牺牲可发现性。将结构体字面量视为文档：将相关的覆盖分组在一起，并依赖枚举（如 `Theme`）以保持构建中不出现魔法字符串。xref:02__control-flow-essentials.adoc[02], link:https://github.com/ziglang/zig/tree/master/lib/std/enums.zig[enums.zig]
+
+[[parsing-enum-values]]
+==== 从字符串解析枚举值
+
+当从 JSON、YAML 或环境变量加载配置时，您通常需要将字符串转换为枚举值。Zig 的 `std.meta.stringToEnum` 基于枚举大小在编译时优化处理此操作。
+
+[mermaid]
+....
+graph LR
+    STRINGTOENUM["stringToEnum(T, str)"]
+
+    subgraph "Small Enums"
+        SMALL["fields.len <= 100"]
+        MAP["StaticStringMap"]
+        STRINGTOENUM --> SMALL
+        SMALL --> MAP
+    end
+
+    subgraph "Large Enums"
+        LARGE["fields.len > 100"]
+        INLINE["inline for loop"]
+        STRINGTOENUM --> LARGE
+        LARGE --> INLINE
+    end
+
+    RESULT["?T"]
+    MAP --> RESULT
+    INLINE --> RESULT
+....
+
+对于小型枚举（≤100 个字段），`stringToEnum` 构建一个编译时 `StaticStringMap` 用于 O(1) 查找。较大的枚举使用内联循环以避免大规模 switch 语句导致的编译减速。该函数返回 `?T`（可选枚举值），允许您优雅地处理无效字符串：
+
+[source,zig]
+----
+const theme_str = "dark";
+const theme = std.meta.stringToEnum(Theme, theme_str) orelse .system;
+----
+
+**此模式对于配置加载器至关重要：** 解析字符串，如果无效则回退到合理的默认值。可选返回强制您显式处理错误情况，防止配置文件中的拼写错误导致静默失败（参见 link:https://github.com/ziglang/zig/blob/master/lib/std/meta.zig[meta.zig]）。
+
+[[config-layering]]
+== 分层和覆盖
+
+实际部署从多个来源拉取配置。通过将每个层表示为可选类型的结构体，您可以确定性地合并它们：反射桥使得无需为每个旋钮手动编写样板代码即可跨字段迭代。xref:05__project-tempconv-cli.adoc[05]
+
+[[config-layering-example]]
+=== 合并分层覆盖
+
+此程序在存在配置文件、环境和命令行覆盖的地方应用它们，否则回退到默认值。合并顺序在 `apply` 中变得明确，并且结果结构体保持完全类型化。
+
+[source,zig]
+----
+include::{sourcedir}/12__config-as-data/merge_overrides.zig[]
+----
+
+.Run
+[source,shell]
+----
+$ zig run chapters-data/code/12__config-as-data/merge_overrides.zig
+----
+
+.Output
+[source,shell]
+----
+defaults:
+  host = 127.0.0.1
+  port = 8080
+  log = info
+  instrumentation = false
+  theme = system
+  timeouts = .{ .connect_ms = 200, .read_ms = 1200 }
+profile:
+  host = 0.0.0.0
+  port = 9000
+  log = debug
+  instrumentation = true
+  theme = dark
+  timeouts = .{ .connect_ms = 100, .read_ms = 1500 }
+env:
+  host = config.internal
+  port = 9443
+  log = warn
+  instrumentation = false
+  theme = system
+  timeouts = .{ .connect_ms = 60, .read_ms = 1100 }
+command_line:
+  host = 127.0.0.1
+  port = 8080
+  log = info
+  instrumentation = false
+  theme = light
+  timeouts = .{ .connect_ms = 200, .read_ms = 1200 }
+
+resolved:
+  host = config.internal
+  port = 9443
+  log = warn
+  instrumentation = false
+  theme = light
+  timeouts = .{ .connect_ms = 60, .read_ms = 1100 }
+----
+
+See xref:10__allocators-and-memory-management.adoc[10] for allocator background relevant to layered configuration.
+
+[[field-introspection]]
+==== 字段迭代的底层工作原理
+
+`apply` 函数使用 `std.meta.fields` 在编译时迭代结构体字段。Zig 的反射 API 提供了一组丰富的内省功能，使得无需为每个字段手动编写样板代码即可实现通用配置合并。
+
+[mermaid]
+....
+graph TB
+    subgraph "Container Introspection"
+        FIELDS["fields(T)"]
+        FIELDINFO["fieldInfo(T, field)"]
+        FIELDNAMES["fieldNames(T)"]
+        TAGS["tags(T)"]
+        FIELDENUM["FieldEnum(T)"]
+    end
+
+    subgraph "Declaration Introspection"
+        DECLARATIONS["declarations(T)"]
+        DECLINFO["declarationInfo(T, name)"]
+        DECLENUM["DeclEnum(T)"]
+    end
+
+    subgraph "Applicable Types"
+        STRUCT["struct"]
+        UNION["union"]
+        ENUMP["enum"]
+        ERRORSET["error_set"]
+    end
+
+    STRUCT --> FIELDS
+    UNION --> FIELDS
+    ENUMP --> FIELDS
+    ERRORSET --> FIELDS
+
+    STRUCT --> DECLARATIONS
+    UNION --> DECLARATIONS
+    ENUMP --> DECLARATIONS
+
+    FIELDS --> FIELDINFO
+    FIELDS --> FIELDNAMES
+    FIELDS --> FIELDENUM
+    ENUMP --> TAGS
+....
+
+内省 API 提供：
+
+* *`fields(T)`*：返回任何结构体、联合体、枚举或错误集的编译时字段信息
+* *`fieldInfo(T, field)`*：获取特定字段的详细信息（名称、类型、默认值、对齐方式）
+* *`FieldEnum(T)`*：为每个字段名称创建具有变体的枚举，用于字段上的 switch 语句
+* *`declarations(T)`*：返回类型中函数和常量的编译时声明信息
+
+当您在合并逻辑中看到 `inline for (std.meta.fields(Config))` 时，Zig 在编译时展开此循环，为每个字段生成专门的代码。这消除了运行时开销，同时保持类型安全——编译器验证所有字段类型在层之间匹配（参见 link:https://github.com/ziglang/zig/blob/master/lib/std/meta.zig[meta.zig]）。
+
+[[config-layering-precedence]]
+=== 明确优先级
+
+由于 `apply` 在每次迭代时复制合并的结构体，切片字面量的顺序读取为从上到下的优先级：后面的条目获胜。如果您需要惰性评估或短路合并，请将 `apply` 替换为一旦字段设置就停止的版本——只需记住保持默认值不可变，以便较早的层不会意外地改变共享状态。xref:07__project-safe-file-copier.adoc[07]
+
+[[deep-equality]]
+==== 使用 std.meta.eql 进行深度结构相等性比较
+
+对于高级配置场景，如检测是否需要重新加载，`std.meta.eql(a, b)` 执行深度结构比较。此函数递归处理嵌套结构体、联合体、错误联合体和可选类型：
+
+[mermaid]
+....
+graph TB
+    subgraph "类型比较"
+        EQL["eql(a, b)"]
+
+        STRUCT_EQL["结构体比较"]
+        UNION_EQL["联合体比较"]
+        ERRORUNION_EQL["错误联合体比较"]
+        OPTIONAL_EQL["可选类型比较"]
+
+        EQL --> STRUCT_EQL
+        EQL --> UNION_EQL
+        EQL --> ERRORUNION_EQL
+        EQL --> OPTIONAL_EQL
+    end
+....
+
+`eql(a, b)` 函数执行深度结构相等性比较，递归处理嵌套结构体、联合体和错误联合体。这对于检测"无操作"配置更新很有用：
+
+[source,zig]
+----
+const old_config = loadedConfig;
+const new_config = parseConfigFile("app.conf");
+
+if (std.meta.eql(old_config, new_config)) {
+    // 跳过重新加载，没有变化
+    return;
+}
+// 应用新配置
+----
+
+比较对结构体逐字段工作（包括嵌套的 `Timeouts`），比较联合体的标签和有效载荷，并正确处理错误联合体和可选类型（参见 link:https://github.com/ziglang/zig/blob/master/lib/std/meta.zig[meta.zig]）。
+
+[[config-validation]]
+== 验证和防护
+
+一旦您保护了它们的不变性，类型化配置就变得可信赖。Zig 的错误集将验证失败转化为可操作的诊断信息，辅助函数保持报告一致性，无论您是记录日志还是向 CLI 提供反馈（参见 xref:04__errors-resource-cleanup.adoc[04] 和 link:https://github.com/ziglang/zig/tree/master/lib/std/debug.zig[debug.zig]）。
+
+[[config-validation-example]]
+=== 使用错误集编码不变性
+
+此验证器检查端口范围、TLS 先决条件和超时顺序。每个失败都映射到专用的错误标签，以便调用者可以相应地做出反应。
+
+[source,zig]
+----
+include::{sourcedir}/12__config-as-data/validate_config.zig[]
+----
+
+.Run
+[source,shell]
+----
+$ zig run chapters-data/code/12__config-as-data/validate_config.zig
+----
+
+.Output
+[source,shell]
+----
+production: ok
+insecure: error InsecureProduction
+misordered: error TimeoutOrdering
+missing_tls_material: error MissingTlsMaterial
+----
+
+xref:04__errors-resource-cleanup.adoc[]
+
+[[config-validation-reporting]]
+=== 报告有用的诊断信息
+
+在打印验证错误时使用 `@errorName`（或使用结构化枚举获取更丰富的数据），以便操作员看到确切失败的不变性。将其与共享的报告助手（如示例中的 `report`）配对，以统一测试、日志记录和 CLI 反馈的格式（参见 xref:03__data-fundamentals.adoc[03] 和 link:https://github.com/ziglang/zig/tree/master/lib/std/Io/Writer.zig[Writer.zig]）。
+
+[[error-message-format]]
+==== 错误消息格式化标准
+
+对于生产级诊断，遵循编译器的错误消息格式以提供一致、可解析的输出。标准格式符合用户对 Zig 工具的期望：
+
+|===
+| 组件 | 格式 | 描述
+
+| 位置
+| `:line:col:`
+| 行号和列号（从1开始）
+
+| 严重性
+| `error:` 或 `note:`
+| 消息严重性级别
+
+| 消息
+| 文本
+| 实际的错误或注释消息
+|===
+
+错误消息示例：
+
+----
+config.toml:12:8: error: port must be between 1024 and 65535
+config.toml:15:1: error: TLS enabled but cert_file not specified
+config.toml:15:1: note: set cert_file and key_file when tls = true
+----
+
+冒号分隔的格式允许工具解析错误位置以进行 IDE 集成，严重性级别（`error:` vs `note:`）帮助用户区分问题和有用的上下文。验证配置文件时，包括文件名、行号（如果解析器可用）以及不变性违规的清晰描述。这种一致性使您的配置错误感觉像是 Zig 生态系统原生的。
+
+[[config-validation-comptime]]
+=== 用于模式漂移的编译时辅助函数
+
+对于较大的系统，考虑将配置结构体包装在编译时函数中，该函数使用 `@hasField` 验证字段存在性或从默认值生成文档。这可以保持运行时代码较小，同时保证演进的模式与生成的配置文件保持同步（参见 xref:15__comptime-and-reflection.adoc[15]）。
+
+[[notes-caveats]]
+== 说明与注意事项
+
+* 为字符串设置保留不可变的 `[]const u8` 切片，以便它们可以安全地别名编译时常量而无需额外副本（参见 link:https://github.com/ziglang/zig/tree/master/lib/std/mem.zig[mem.zig]）。
+* 发出配置诊断后记得刷新缓冲写入器，特别是在将 stdout 与进程管道混合使用时。
+* 分层覆盖时，在突变前克隆可变子结构体（如分配器支持的列表），以避免跨层别名。xref:10__allocators-and-memory-management.adoc[10]
+
+[[exercises]]
+== 练习
+
+* 使用可选遥测端点（`?[]const u8`）扩展 `AppConfig`，并更新验证器以确保在启用检测时设置它。
+* 实现一个 `fromArgs` 助手，将键值命令行对解析为覆盖结构体，重用分层函数来应用它们。xref:05__project-tempconv-cli.adoc[05]
+* 通过在编译时迭代 `std.meta.fields(AppConfig)` 并将行写入缓冲写入器，生成一个总结默认值的 Markdown 表格。xref:11__project-dynamic-string-builder.adoc[11]
+
+[[caveats-alternatives-edge-cases]]
+== 替代方案与边缘情况
+
+* 对于大量配置，将 JSON/YAML 数据流式传输到竞技场支持的结构体中，而不是在栈上构建所有内容，以避免耗尽临时缓冲区（参见 xref:10__allocators-and-memory-management.adoc[10]）。
+* 如果需要动态键，将基于结构体的配置与 `std.StringHashMap` 查找配对，以便您可以保持类型化默认值，同时仍然尊重用户提供的额外内容（参见 link:https://github.com/ziglang/zig/tree/master/lib/std/hash_map.zig[hash_map.zig]）。
+* 在验证通过网络上传的文件时考虑 `std.io.Reader` 管道；这允许您在具体化整个配置之前短路（参见 xref:28__filesystem-and-io.adoc[28]）。

@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>性能分析、优化、加固</title>
+<subtitle>通过可重复的测量循环将实验代码转化为可靠工具链</subtitle>
+<date>2025-11-06</date>
+<copyright>
+<creativeCommons>
+<holder>zigbook</holder>
+</creativeCommons>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>上一章我们探索了语义内联和SIMD来塑造热点（参见<xref linkend="39__performance-and-inlining" xrefstyle="short">第39章</xref>）；这次我们亲自动手使用测量循环，告诉你这些调整是否真的得到了回报。我们将结合轻量级计时器、构建模式比较和加固错误防护，将实验代码转化为可靠工具链。每种技术都依赖于最近的CLI改进，例如<literal>zig build --time-report</literal>，以保持快速反馈（参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#web-interface-and-time-report">v0.15.2</link>）。
+</simpara>
+<simpara>到本章结束时，你将拥有一个可重复的配方：收集时间基线，选择发布策略（速度与大小），并在优化级别运行防护措施，以便在部署前发现回归。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用<literal>std.time.Timer</literal>检测热路径并解释相对增量（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/time.zig">time.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>比较ReleaseFast和ReleaseSmall构件，理解诊断和二进制大小之间的权衡（参见<link xl:href="https://ziglang.org/documentation/master/#releasefast">#releasefast</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>用在你每个优化设置下都适用的错误防护加固解析和节流代码（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/testing.zig">testing.zig</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="profiling-with-timers">
+<title>使用单调计时器进行性能分析基线</title>
+<simpara><literal>std.time.Timer</literal>采样单调时钟，使其成为快速"它更快吗？"实验的理想选择，无需接触全局状态。与确定性输入数据配对，当你在不同构建模式下重复运行时，它保持微基准测试的诚实。</simpara>
+<chapter xml:id="timer-sort-bench">
+<title>示例：在单个计时器工具下进行排序策略</title>
+<simpara>我们重用了三种算法的数据集——块排序、堆排序和插入排序——来说明时间比率如何指导进一步调查。为每次运行重新生成数据集，因此缓存效果保持一致（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/sort.zig">sort.zig</link>）。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 40__profiling-optimization-hardening.adoc - include::example$chapters-data/code/40__profiling-optimization-hardening/01_timer_probe.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig run 01_timer_probe.zig -OReleaseFast</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>optimize-mode=ReleaseFast
+block sort     : 43753 ns
+heap sort      : 75331 ns
+insertion sort : 149541 ns
+heap speedup over block: 0.58x
+insertion slowdown vs block: 3.42x</screen>
+<note>
+<simpara>当你需要归因于哈希或解析等较长阶段时，在同一模块上使用<literal>zig build --time-report -Doptimize=ReleaseFast</literal>进行跟进。</simpara>
+</note>
+</chapter>
+</chapter>
+<chapter xml:id="size-strategy">
+<title>用诊断换取二进制大小</title>
+<simpara>在ReleaseFast和ReleaseSmall之间切换不仅仅是编译器标志：ReleaseSmall剥离安全检查并积极地修剪代码以缩小最终二进制文件。当你在笔记本电脑上进行分析但在嵌入式设备上部署时，构建两个变体并确认差异证明丢失诊断是合理的。</simpara>
+<chapter xml:id="size-comparison">
+<title>示例：跟踪在ReleaseSmall中消失的跟踪逻辑</title>
+<simpara>仅当优化器保持安全检查完好无损时，跟踪才启用。测量二进制大小提供了ReleaseSmall正在完成其工作的有形信号。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 40__profiling-optimization-hardening.adoc - include::example$chapters-data/code/40__profiling-optimization-hardening/02_binary_size.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig build-exe 02_binary_size.zig -OReleaseFast -femit-bin=perf-releasefast
+$ zig build-exe 02_binary_size.zig -OReleaseSmall -femit-bin=perf-releasesmall
+$ ls -lh perf-releasefast perf-releasesmall</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>-rwxrwxr-x 1 zkevm zkevm 876K Nov  6 13:12 perf-releasefast
+-rwxrwxr-x 1 zkevm zkevm  11K Nov  6 13:12 perf-releasesmall</screen>
+<tip>
+<simpara>保留两个构件——ReleaseFast用于富含符号的性能分析会话，ReleaseSmall用于生产交接。通过<literal>zig build --artifact</literal>或包管理器哈希共享它们，以保持CI确定性。</simpara>
+</tip>
+</chapter>
+</chapter>
+<chapter xml:id="hardening-regressions">
+<title>跨优化模式加固</title>
+<simpara>调整性能和大小后，用跨构建模式断言防护轨道的测试包装管道。这至关重要，因为ReleaseFast和ReleaseSmall默认禁用运行时安全检查（参见<link xl:href="https://ziglang.org/documentation/master/#setruntimesafety">#setruntimesafety</link>）。在ReleaseSafe中运行相同的测试套件可确保在安全保持启用时诊断仍然触发。</simpara>
+<chapter xml:id="guarded-pipeline">
+<title>示例：验证每种模式下的输入解析和节流</title>
+<simpara>管道解析限制、限制工作负载并防御空输入。最终测试内联循环遍历值，反映真实应用程序路径，同时保持执行廉价。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 40__profiling-optimization-hardening.adoc - include::example$chapters-data/code/40__profiling-optimization-hardening/03_guarded_pipeline.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig test 03_guarded_pipeline.zig -OReleaseFast</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>All 4 tests passed.</screen>
+<note>
+<simpara>用<literal>-OReleaseSafe</literal>和普通<literal>zig test</literal>重复命令，以确保防护子句在安全开启的构建中同样有效。内联循环证明编译器仍然可以展开检查，而不会牺牲正确性。</simpara>
+</note>
+</chapter>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara>微基准测试时使用确定性数据，这样计时器噪声反映算法变化，而不是PRNG漂移（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Random.zig">Random.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>ReleaseSmall禁用错误返回跟踪和许多断言；在发货前将其与ReleaseFast烟雾测试配对，以捕获缺失的诊断。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.debug.assert</literal>在调试和ReleaseSafe中保持活动。如果ReleaseFast删除它，用集成测试或显式错误处理补偿（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/debug.zig">debug.zig</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<info>
+<title>练习</title>
+</info>
+<itemizedlist>
+<listitem>
+<simpara>添加<literal>--sort</literal>标志以在运行时选择算法，然后捕获每种选择的<literal>zig build --time-report</literal>快照。</simpara>
+</listitem>
+<listitem>
+<simpara>用<literal>--metrics</literal>标志扩展大小示例，重新打开跟踪；使用<literal>zig build-exe -fstrip</literal>记录二进制增量，以获得额外节省。</simpara>
+</listitem>
+<listitem>
+<simpara>参数化<literal>parseLimit</literal>以接受十六进制输入并收紧测试，使其在<literal>zig test -OReleaseSmall</literal>下运行而不会触发UB。<xref linkend="37__illegal-behavior-and-safety-modes" xrefstyle="short">第37章</xref>
+</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<info>
+<title>替代方案和边缘情况</title>
+</info>
+<itemizedlist>
+<listitem>
+<simpara>依赖<literal>std.debug.print</literal>的微基准测试会扭曲ReleaseSmall时间，因为调用被删除。考虑记录到环形缓冲区中。</simpara>
+</listitem>
+<listitem>
+<simpara>在检测迭代时使用<literal>zig build run --watch -fincremental</literal>。0.15.2中的线程代码生成即使在大型编辑后也能保持重建响应（参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#threaded-codegen">v0.15.2</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>如果你的测试在ReleaseFast中用未定义行为改变数据结构，在加固练习期间将风险代码隔离在<literal>@setRuntimeSafety(true)</literal>后面。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

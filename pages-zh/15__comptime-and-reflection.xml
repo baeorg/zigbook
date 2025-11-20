@@ -1,0 +1,357 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>编译时与反射</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>Zig允许您在编译时执行普通的Zig代码。这个简单而强大的想法解锁了许多可能性：生成查找表、基于类型或值专门化代码、在程序运行前验证不变量，以及无需宏或单独的元编程语言编写通用实用程序。反射完善了这一图景：通过<literal>@TypeOf</literal>、<literal>@typeInfo</literal>及其相关功能，代码可以检查类型并自适应地构建行为。</simpara>
+<simpara>本章是Zig 0.15.2中编译时执行和反射的实践之旅。我们将构建小型、自包含的示例，您可以直接运行。在此过程中，我们将讨论什么在何时运行（编译时vs运行时）、如何保持代码可读性和快速性，以及何时优先使用显式参数而非巧妙的反射。更多详细信息，请参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig">meta.zig</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用<literal>comptime</literal>表达式和块在构建时计算数据并在运行时展示。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>@TypeOf</literal>、<literal>@typeInfo</literal>和<literal>@typeName</literal>内省类型以实现健壮的通用助手。</simpara>
+</listitem>
+<listitem>
+<simpara>明智地应用<literal>inline fn</literal>和<literal>inline for/while</literal>，理解代码大小和性能权衡。<link xl:href="37__illegal-behavior-and-safety-modes.xml">37</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>@hasDecl</literal>、<literal>@hasField</literal>检测声明和字段，并使用<literal>@embedFile</literal>嵌入资源。<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="comptime-basics">
+<title>编译时基础：现在计算数据，稍后打印</title>
+<simpara>编译时工作只是更早执行的普通Zig代码。下面的示例：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>在编译时计算表达式。</simpara>
+</listitem>
+<listitem>
+<simpara>在运行时检查<literal>@inComptime()</literal>（它是<literal>false</literal>）。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>inline while</literal>和编译时索引在编译时构建小型平方查找表。</simpara>
+</listitem>
+</itemizedlist>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 15__comptime-and-reflection.adoc - include::example$chapters-data/code/15__comptime-and-reflection/comptime_basics.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/15__comptime-and-reflection/comptime_basics.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">a (comptime 2+3) = 5
+@inComptime() during runtime: false
+squares[0..8): 0,1,4,9,16,25,36,49</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>inline while</literal>要求条件在编译时已知。使用<literal>comptime var</literal>索引进行展开循环。除非有实测原因需要展开，否则优先使用普通循环。</simpara>
+</tip>
+<section xml:id="comptime-tracking">
+<title>编译器如何跟踪编译时值</title>
+<simpara>当您编写编译时代码时，编译器必须确定哪些分配和值在编译时完全已知。这种跟踪使用语义分析（Sema）中的一种机制，该机制监视对已分配内存的所有存储操作。</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "关键结构"
+        COMPTIMEALLOC["ComptimeAlloc&lt;br/&gt;val, is_const, alignment"]
+        MAYBECOMPTIMEALLOC["MaybeComptimeAlloc&lt;br/&gt;runtime_index, stores[]"]
+        BASEALLOC["base_allocs map&lt;br/&gt;derived ptr → base alloc"]
+    end
+
+    subgraph "生命周期"
+        RUNTIMEALLOC["运行时分配指令"]
+        STORES["存储操作跟踪"]
+        MAKEPTRCONST["make_ptr_const 指令"]
+        COMPTIMEVALUE["确定编译时值"]
+    end
+
+    subgraph "MaybeComptimeAlloc 跟踪"
+        STORELIST["stores: MultiArrayList&lt;br/&gt;inst, src"]
+        RUNTIMEINDEXFIELD["runtime_index&lt;br/&gt;分配点"]
+    end
+
+    subgraph "ComptimeAlloc 字段"
+        VAL["val: MutableValue&lt;br/&gt;当前值"]
+        ISCONST["is_const: bool&lt;br/&gt;初始化后不可变"]
+        ALIGNMENT["alignment&lt;br/&gt;指针对齐"]
+        RUNTIMEINDEXALLOC["runtime_index&lt;br/&gt;创建点"]
+    end
+
+    RUNTIMEALLOC --&gt; MAYBECOMPTIMEALLOC
+    MAYBECOMPTIMEALLOC --&gt; STORELIST
+    STORELIST --&gt; STORES
+    STORES --&gt; MAKEPTRCONST
+    MAKEPTRCONST --&gt; COMPTIMEVALUE
+    COMPTIMEVALUE --&gt; COMPTIMEALLOC
+
+    COMPTIMEALLOC --&gt; VAL
+    COMPTIMEALLOC --&gt; ISCONST
+    COMPTIMEALLOC --&gt; ALIGNMENT
+    COMPTIMEALLOC --&gt; RUNTIMEINDEXALLOC
+
+    BASEALLOC -.-&gt;|"跟踪"| RUNTIMEALLOC</literallayout>
+<simpara>当编译器在语义分析期间遇到分配时，它会创建一个<literal>MaybeComptimeAlloc</literal>条目来跟踪所有存储操作。如果任何存储操作依赖于运行时值或条件，则分配无法在编译时已知，该条目将被丢弃。当指针变为const时，如果所有存储操作在编译时已知，编译器会在编译时应用所有存储操作并创建一个包含最终值的<literal>ComptimeAlloc</literal>。这种机制使编译器能够在编译时评估复杂的初始化模式，同时确保正确性。有关实现细节，请参见<link xl:href="https://github.com/ziglang/zig/blob/master/src/Sema.zig">Sema.zig</link>。</simpara>
+</section>
+</chapter>
+<chapter xml:id="reflection-typeinfo">
+<title>反射：<literal>@TypeOf</literal>、<literal>@typeInfo</literal>及其相关功能</title>
+<simpara>反射让您可以编写"通用但精确"的代码。这里我们检查一个<literal>struct</literal>并打印其字段及其类型，然后以通常的方式构造一个值。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 15__comptime-and-reflection.adoc - include::example$chapters-data/code/15__comptime-and-reflection/type_info_introspect.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/15__comptime-and-reflection/type_info_introspect.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">type name: type_info_introspect.Person
+fields: 3
+  0. id: u32
+  1. name: []const u8
+  2. active: bool
+example: id=42 name=Zig active=true</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>在编译时使用<literal>@typeInfo(T)</literal>来派生实现（格式化器、序列化器、适配器）。将结果保存在局部<literal>const</literal>中以提高可读性。</simpara>
+</note>
+<section xml:id="type-decomposition">
+<title>使用<literal>std.meta</literal>进行类型分解</title>
+<simpara>除了<literal>@typeInfo</literal>，<literal>std.meta</literal>模块还提供了从复合类型中提取组件类型的专门函数。这些实用程序通过避免手动<literal>@typeInfo</literal>检查使通用代码更清晰。</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "类型提取器"
+        CHILD["Child(T)"]
+        ELEM["Elem(T)"]
+        SENTINEL["sentinel(T)"]
+        TAG["Tag(T)"]
+        ACTIVETAG["activeTag(union)"]
+    end
+
+    subgraph "输入类型"
+        ARRAY["array"]
+        VECTOR["vector"]
+        POINTER["pointer"]
+        OPTIONAL["optional"]
+        UNION["union"]
+        ENUM["enum"]
+    end
+
+    ARRAY --&gt; CHILD
+    VECTOR --&gt; CHILD
+    POINTER --&gt; CHILD
+    OPTIONAL --&gt; CHILD
+
+    ARRAY --&gt; ELEM
+    VECTOR --&gt; ELEM
+    POINTER --&gt; ELEM
+
+    ARRAY --&gt; SENTINEL
+    POINTER --&gt; SENTINEL
+
+    UNION --&gt; TAG
+    ENUM --&gt; TAG
+    UNION --&gt; ACTIVETAG</literallayout>
+<simpara>关键类型提取函数：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>Child(T)</literal>：从数组、向量、指针和可选类型中提取子类型——对于操作容器的通用函数很有用。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>Elem(T)</literal>：从内存跨度类型（数组、切片、指针）中获取元素类型——比手动<literal>@typeInfo</literal>字段访问更清晰。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>sentinel(T)</literal>：返回哨兵值（如果存在），启用对空终止数据的通用处理。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>Tag(T)</literal>：从枚举和联合体中获取标签类型，用于基于switch的分派。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>activeTag(u)</literal>：在运行时返回联合体值的活动标签。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>这些函数组合良好：<literal>std.meta.Child(std.meta.Child(T))</literal>从<literal>[][]u8</literal>中提取元素类型。使用它们编写适应类型结构的通用算法，而无需冗长的<literal>switch (@typeInfo(T))</literal>块。<link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/meta.zig">meta.zig</link></simpara>
+</section>
+<section xml:id="field-declaration-introspection">
+<title>字段和声明内省</title>
+<simpara>为了结构化访问容器内部，<literal>std.meta</literal>提供了比手动<literal>@typeInfo</literal>导航更高级的替代方案：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "容器内省"
+        FIELDS["fields(T)"]
+        FIELDINFO["fieldInfo(T, field)"]
+        FIELDNAMES["fieldNames(T)"]
+        TAGS["tags(T)"]
+        FIELDENUM["FieldEnum(T)"]
+    end
+
+    subgraph "声明内省"
+        DECLARATIONS["declarations(T)"]
+        DECLINFO["declarationInfo(T, name)"]
+        DECLENUM["DeclEnum(T)"]
+    end
+
+    subgraph "适用类型"
+        STRUCT["struct"]
+        UNION["union"]
+        ENUMP["enum"]
+        ERRORSET["error_set"]
+    end
+
+    STRUCT --&gt; FIELDS
+    UNION --&gt; FIELDS
+    ENUMP --&gt; FIELDS
+    ERRORSET --&gt; FIELDS
+
+    STRUCT --&gt; DECLARATIONS
+    UNION --&gt; DECLARATIONS
+    ENUMP --&gt; DECLARATIONS
+
+    FIELDS --&gt; FIELDINFO
+    FIELDS --&gt; FIELDNAMES
+    FIELDS --&gt; FIELDENUM
+    ENUMP --&gt; TAGS</literallayout>
+<simpara>内省API提供：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>fields(T)</literal>：返回任何结构体、联合体、枚举或错误集的编译时字段信息——使用<literal>inline for</literal>迭代处理每个字段。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>fieldInfo(T, field)</literal>：获取特定字段的详细信息（名称、类型、默认值、对齐方式）。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>FieldEnum(T)</literal>：为每个字段名称创建一个枚举变体，启用基于switch的字段分派。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>declarations(T)</literal>：返回类型中函数和常量的编译时声明信息——对于查找可选接口方法很有用。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>示例模式：<literal>inline for (std.meta.fields(MyStruct)) |field| { &#8230;&#8203; }</literal>让您可以编写通用序列化、格式化或比较函数，而无需手动编码字段访问。<literal>FieldEnum(T)</literal>助手对于字段名称的switch语句特别有用。<link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/meta.zig">meta.zig</link></simpara>
+</section>
+</chapter>
+<chapter xml:id="inline-and-unrolling">
+<title>内联函数和内联循环：能力与成本</title>
+<simpara><literal>inline fn</literal>强制内联，<literal>inline for</literal>展开编译时已知的迭代。两者都会增加代码大小。当您已经分析并确定热路径从展开或调用开销消除中受益时使用它们。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 15__comptime-and-reflection.adoc - include::example$chapters-data/code/15__comptime-and-reflection/inline_for_inline_fn.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/15__comptime-and-reflection/inline_for_inline_fn.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">acc=26</programlisting>
+</para>
+</formalpara>
+<caution>
+<simpara>内联不是性能作弊代码。它用指令缓存和二进制大小换取潜在的速度。在前后进行测量。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</caution>
+</chapter>
+<chapter xml:id="decl-field-embedfile">
+<title>能力检测：<literal>@hasDecl</literal>、<literal>@hasField</literal>和<literal>@embedFile</literal></title>
+<simpara>编译时能力测试让您可以适应类型而不会过度拟合API。资源嵌入将小型资源保持在代码附近，无需运行时I/O。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 15__comptime-and-reflection.adoc - include::example$chapters-data/code/15__comptime-and-reflection/has_decl_field_embedfile.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/15__comptime-and-reflection/has_decl_field_embedfile.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">has greet: true
+has field x: true
+message: compile-time constant
+embedded:
+Hello from @embedFile!
+This text is compiled into the binary at build time.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>将资源放在使用它们的源代码旁边，并在<literal>@embedFile</literal>中使用相对路径引用。对于较大的资源或用户提供的数据，优先使用运行时I/O。<link xl:href="28__filesystem-and-io.xml">28</link></simpara>
+</tip>
+</chapter>
+<chapter xml:id="anytype-generics">
+<title><literal>anytype</literal>和显式类型参数：实用的泛型</title>
+<simpara>Zig的泛型只是带有<literal>comptime</literal>参数的函数。为了清晰度使用显式类型参数；在转发类型的叶子助手函数中使用<literal>anytype</literal>。当您接受灵活输入时，反射（<literal>@TypeOf</literal>、<literal>@typeName</literal>）有助于诊断。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 15__comptime-and-reflection.adoc - include::example$chapters-data/code/15__comptime-and-reflection/anytype_and_generics.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/15__comptime-and-reflection/anytype_and_generics.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">sum(u32,[1,2,3,4]) = 10
+sum(u64,[10,20]) = 30
+value of type u8: 42
+value of type *const [5:0]u8: { 104, 101, 108, 108, 111 }</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>对于公共API优先使用显式的<literal>comptime T: type</literal>参数；将<literal>anytype</literal>限制在透明转发具体类型且不约束语义的助手函数中。</simpara>
+</important>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>编译时执行在编译器中运行；注意复杂度。将繁重的工作排除在紧密的增量循环之外，以保持快速重建。<link xl:href="38__zig-cli-deep-dive.xml">38</link></simpara>
+</listitem>
+<listitem>
+<simpara>内联循环需要编译时已知的边界。如有疑问，使用运行时循环并让优化器完成其工作。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</listitem>
+<listitem>
+<simpara>反射功能强大但可能模糊控制流。为了清晰度优先使用直接参数，仅在人体工程学证明合理的地方使用反射。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>编写一个使用<literal>@typeInfo</literal>打印任何结构体字段名称和值的<literal>formatFields</literal>助手。尝试使用嵌套结构体和切片。<link xl:href="45__text-formatting-and-unicode.xml">47</link></simpara>
+</listitem>
+<listitem>
+<simpara>为整数角度构建一个编译时计算的<literal>sin</literal>/<literal>cos</literal>查找表，并在紧密循环中与<literal>std.math</literal>调用进行基准测试。测量代码大小和运行时。<link xl:href="50__random-and-math.xml">50</link></simpara>
+</listitem>
+<listitem>
+<simpara>添加一个<literal>hasToString</literal>检查：如果类型<literal>T</literal>有<literal>format</literal>方法，使用<literal>{f}</literal>打印，否则使用<literal>{any}</literal>打印。在简短的文档注释中澄清行为。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>@inComptime()</literal>仅在编译时上下文中为<literal>true</literal>；不要依赖它进行运行时行为切换。将此类切换保持在值/参数中。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>@embedFile</literal>会增加二进制大小；避免嵌入大型资源。对于配置/徽标，它很棒。对于数据集，从磁盘或网络流式传输。<link xl:href="28__filesystem-and-io.xml">28</link></simpara>
+</listitem>
+<listitem>
+<simpara>避免在大型函数上使用<literal>inline fn</literal>；它可能会使代码膨胀。在叶子算术助手或非常小的组合器上使用它，其中性能分析显示有收益。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

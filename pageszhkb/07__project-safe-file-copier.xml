@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<article xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目：安全文件复制器</title>
+<date>2025-11-03</date>
+<author>
+<personname>
+<firstname>Zig</firstname>
+<surname>文档团队</surname>
+</personname>
+<email>zig@example.com</email>
+</author>
+<authorinitials>ZT</authorinitials>
+<revhistory>
+<revision>
+<revnumber>1</revnumber>
+<date>2025-11-03</date>
+<authorinitials>ZT</authorinitials>
+</revision>
+</revhistory>
+<keywordset>
+<keyword>cli</keyword>
+<keyword>filesystem</keyword>
+<keyword>copy</keyword>
+<keyword>atomic</keyword>
+<keyword>errdefer</keyword>
+</keywordset>
+</info>
+
+<section xml:id="overview">
+<title>概览</title>
+<simpara>我们的第三个项目将文件I/O提升一个档次：构建一个默认安全、发出清晰诊断信息并能自我清理的小型健壮文件复制器。我们将把第4章的 <literal>defer</literal>/<literal>errdefer</literal> 模式连接到现实世界的错误处理，同时展示标准库的原子复制助手；参见 <link xl:href="04__errors-resource-cleanup.xml">第04章</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/Dir.zig">Dir.zig</link>。</simpara>
+<simpara>两种方法说明了权衡：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>高级：单次调用 <literal>std.fs.Dir.copyFile</literal> 执行原子复制并保留文件模式。</simpara>
+</listitem>
+<listitem>
+<simpara>手动流式：使用 <literal>defer</literal> 和 <literal>errdefer</literal> 打开、读取和写入，如果任何操作失败则删除部分输出，如 <link xl:href="https://ziglang.org/documentation/master/#defer-and-errdefer">#defer and errdefer</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/File.zig">File.zig</link> 中所述。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>设计一个CLI，除非显式强制，否则拒绝覆盖现有文件，如 <link xl:href="https://ziglang.org/documentation/master/#Command-line-flags">#Command-line-flags</link> 中所述。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>defer</literal>/<literal>errdefer</literal> 保证资源清理并在失败时删除部分文件。</simpara>
+</listitem>
+<listitem>
+<simpara>在 <literal>Dir.copyFile</literal> 的原子便利性和手动流式处理的细粒度控制之间进行选择。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="section-1">
+<title>正确性优先：默认安全的CLI</title>
+<simpara>覆盖用户的数据是不可原谅的。这个工具采用保守立场：除非提供 <literal>--force</literal>，否则现有目标会中止复制。我们还验证源是常规文件，并保持stdout在成功时静默，以便脚本可以将"无输出"视为好迹象，如 <link xl:href="https://ziglang.org/documentation/master/#Error-Handling">#Error-Handling</link> 中所述。</simpara>
+
+<section xml:id="section-1-sub-a">
+<title>在现有目标上中止</title>
+<simpara>我们首先探测目标路径。如果存在且缺少 <literal>--force</literal>，我们会打印单行诊断信息并以非零状态退出。这反映了常见的Unix工具，并使失败明确无误。</simpara>
+</section>
+</section>
+
+<section xml:id="section-2">
+<title>单次调用的原子复制</title>
+<simpara>尽可能利用标准库。<literal>Dir.copyFile</literal> 使用临时文件并将其重命名到位，这意味着调用者即使在进程崩溃中复制时也不会观察到部分写入的目标。默认情况下保留文件模式；如果你需要它们，时间戳由 <literal>updateFile</literal> 处理，我们在下面提到。</simpara>
+
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 07__project-safe-file-copier.adoc - include::example$chapters-data/code/07__project-safe-file-copier/safe_copy.zig[]</programlisting>
+
+<para>运行</para>
+<screen><prompt>$</prompt> <userinput>printf 'hello, copier!\n' &gt; from.txt</userinput></screen>
+<screen><prompt>$</prompt> <userinput>zig run safe_copy.zig -- from.txt to.txt</userinput></screen>
+
+<para>输出</para>
+<screen>(no output)</screen>
+
+<tip><simpara><literal>copyFile</literal> 覆盖现有文件。我们的包装器首先检查是否存在，并要求 <literal>--force</literal> 来覆盖。如果你还想保留atime/mtime，请选择 <literal>Dir.updateFile</literal>。</simpara></tip>
+
+<section xml:id="workflow-1">
+<title>有意图的覆盖</title>
+<simpara>当输出已存在时，演示显式覆盖：</simpara>
+
+<screen><prompt>$</prompt> <userinput>printf 'v1\n' &gt; from.txt</userinput></screen>
+<screen><prompt>$</prompt> <userinput>printf 'old\n' &gt; to.txt</userinput></screen>
+<screen><prompt>$</prompt> <userinput>zig run safe_copy.zig -- from.txt to.txt</userinput></screen>
+<screen><prompt>$</prompt> <userinput>error: destination exists; pass --force to overwrite</userinput></screen>
+<screen><prompt>$</prompt> <userinput>zig run safe_copy.zig -- --force from.txt to.txt</userinput></screen>
+
+<para>输出</para>
+<screen>error: destination exists; pass --force to overwrite
+(no output)</screen>
+
+<note><simpara>成功按设计保持静默；结合 <literal>echo $?</literal> 在脚本中使用状态码。</simpara></note>
+</section>
+</section>
+
+<section xml:id="section-3">
+<title>使用defer/errdefer的手动流式处理</title>
+<simpara>为了细粒度控制（或作为学习练习），将 <literal>Reader</literal> 连接到 <literal>Writer</literal> 并自己流式传输字节。关键部分是 <literal>errdefer</literal> 在创建后如果任何操作出错则删除目标——这防止留下截断的文件。</simpara>
+
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 07__project-safe-file-copier.adoc - include::example$chapters-data/code/07__project-safe-file-copier/copy_stream.zig[]</programlisting>
+
+<para>运行</para>
+<screen><prompt>$</prompt> <userinput>printf 'stream me\n' &gt; src.txt</userinput></screen>
+<screen><prompt>$</prompt> <userinput>zig run copy_stream.zig -- src.txt dst.txt</userinput></screen>
+
+<para>输出</para>
+<screen>(no output)</screen>
+
+<important><simpara>当使用 <literal>.exclusive = true</literal> 创建目标时，如果文件已存在，打开会失败。加上 <literal>errdefer deleteFile</literal>，在典型的单进程场景中提供了强大的安全保证，避免了竞争条件。</simpara></important>
+</section>
+
+<section xml:id="notes-caveats">
+<title>说明与注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">原子语义</emphasis>：<literal>Dir.copyFile</literal> 创建临时文件并将其重命名到位，避免其他进程观察到部分读取。在较旧的Linux内核上，断电可能会留下临时文件；有关详细信息，请参见函数的文档注释。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">保留时间戳</emphasis>：当你需要atime/mtime与源匹配时，请选择 <literal>Dir.updateFile</literal>，除了内容和模式。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">性能提示</emphasis>：<literal>Writer</literal> 接口在可用时使用平台加速（<literal>sendfile</literal>、<literal>copy_file_range</literal> 或 <literal>fcopyfile</literal>），回退到缓冲循环；参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/posix.zig">posix.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">CLI生命周期</emphasis>：在释放它们之前复制 <literal>args</literal> 字符串以避免悬空的 <literal>[]u8</literal> 切片（两个例子都使用 <literal>allocator.dupe</literal>）；参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/process.zig">process.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">健全性检查</emphasis>：首先打开源，然后 <literal>stat()</literal> 它并要求 <literal>kind == .file</literal> 以拒绝目录和特殊文件。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>添加一个 <literal>--no-clobber</literal> 标志，即使同时存在 <literal>--force</literal> 时也强制出错——然后发出一条有用的消息，建议删除哪一个。</simpara>
+</listitem>
+<listitem>
+<simpara>通过切换到 <literal>Dir.updateFile</literal> 并使用 <literal>stat</literal> 验证时间戳匹配来实现 <literal>--preserve-times</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>CopyFileOptions.override_mode</literal> 从数字模式覆盖（例如，<literal>--mode=0644</literal>）来教授工具复制文件权限。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="caveats-alternatives-edge-cases">
+<title>替代方案和边缘情况：</title>
+<itemizedlist>
+<listitem>
+<simpara>复制特殊文件（目录、fifo、设备）在这些例子中有意被拒绝；显式处理它们或跳过。</simpara>
+</listitem>
+<listitem>
+<simpara>跨文件系统移动：当设备不同时，复制加 <literal>deleteFile</literal> 比 <literal>rename</literal> 更安全；给定内容复制时，Zig的助手会做正确的事情。</simpara>
+</listitem>
+<listitem>
+<simpara>非常大的文件：首先选择高级复制；如果你不使用 <literal>Writer</literal> 接口，手动循环应该仔细分块读取并处理短写入。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+</article>
+</book>

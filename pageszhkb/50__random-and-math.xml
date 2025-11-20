@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<article xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>随机和数学</title>
+<date>2025-11-06</date>
+<author>
+<personname>
+<firstname>Zig</firstname>
+<surname>文档</surname>
+</personname>
+</author>
+<copyright>
+<year>2025</year>
+<holder>zigbook</holder>
+</copyright>
+</info>
+
+<section xml:id="overview">
+<title>概述</title>
+<simpara>有了来自<xref linkend="49__compression-and-archives" xrefstyle="short">上一章</xref>的压缩管道，我们现在聚焦于为这些工作流提供动力的数值引擎：确定性伪随机数生成器、表现良好的数学助手以及在速度和安全性之间取得平衡的哈希原语。Zig 0.15.2将这些组件保持模块化——<literal>std.Random</literal>构建可重现序列，<literal>std.math</literal>提供仔细的容差和常量，而标准库将哈希分为非加密和加密系列，因此您可以为每个工作负载选择合适的工具。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/math.zig">math.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/hash/wyhash.zig">wyhash.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/crypto/sha2.zig">sha2.zig</link></simpara>
+</section>
+
+<section xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>在采样常见分布时，对<literal>std.Random</literal>生成器进行种子化、推进和重现。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Random/Xoshiro256.zig">Xoshiro256.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>应用<literal>std.math</literal>工具——常量、钳位、容差和几何助手——以保持数值代码稳定。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/math/hypot.zig">hypot.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>区分像Wyhash这样的快速哈希器与SHA-256这样的加密摘要，并负责任地将两者都接入文件处理作业。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="random-foundations">
+<title>随机数基础</title>
+<simpara>Zig将伪随机生成器公开为一等值：您为引擎播种，向其请求整数、浮点数或索引，您的代码拥有状态转换。这种透明度让您可以控制模糊器、模拟和确定性测试。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Random.zig">Random.zig</link></simpara>
+
+<section xml:id="random-foundations-prngs">
+<title>具有可重现序列的确定性生成器</title>
+<simpara><literal>std.Random.DefaultPrng</literal>包装了<literal>Xoshiro256++</literal>，当您调用<literal>init(seed)</literal>时，它通过SplitMix64为自己播种。从那里，您获得一个<literal>Random</literal>外观，公开高级助手——范围、洗牌、浮点数——同时保持底层状态私有。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 50__random-and-math.adoc - include::example$chapters-data/code/50__random-and-math/prng_sequences.zig[]</programlisting>
+<simpara>运行</simpara>
+<screen>$ zig run prng_sequences.zig</screen>
+<simpara>输出</simpara>
+<screen>seed=0x00067B20
+d6 roll -> 5
+coin flip -> tails
+shuffled ladder -> { 0, 4, 3, 2, 5, 1 }
+unit float -> 0.742435
+first three u32 -> { 2135551917, 3874178402, 2563214192 }</screen>
+<tip>
+<simpara><literal>uintLessThan</literal>的公平性保证依赖于生成器的统一输出；当恒定时间行为比完美分布更重要时，请退回到<literal>uintLessThanBiased</literal>。</simpara>
+</tip>
+</section>
+
+<section xml:id="random-foundations-distributions">
+<title>使用分布和采样启发式方法</title>
+<simpara>除了统一抽取外，<literal>Random.floatNorm</literal>和<literal>Random.floatExp</literal>公开了Ziggurat支持的正态和指数样本——非常适合合成工作负载或噪声注入。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Random/ziggurat.zig">ziggurat.zig</link>加权选择来自<literal>weightedIndex</literal>，而Xoshiro引擎上的<literal>.jump()</literal>通过2^128步确定性地向前跳跃，以在线程之间划分流而不重叠。<xref linkend="29__threads-and-atomics" xrefstyle="short">29</xref>对于加密用途，请切换到<literal>std.crypto.random</literal>或<literal>std.Random.DefaultCsprng</literal>以继承基于ChaCha的熵，而不是快速但可预测的PRNG。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/crypto/tlcsprng.zig">tlcsprng.zig</link></simpara>
+</section>
+</section>
+
+<section xml:id="math-utilities">
+<title>实用数学工具</title>
+<simpara><literal>std.math</literal>命名空间将基本常量与测量工具相结合：钳位、近似相等和几何助手都在CPU目标之间共享一致的语义。</simpara>
+
+<section xml:id="math-utilities-toolkit">
+<title>数值卫生工具包</title>
+<simpara>结合少数助手——<literal>sqrt</literal>、<literal>clamp</literal>、近似相等和金比例常量——让报告代码可读且可移植。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/math/sqrt.zig">sqrt.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 50__random-and-math.adoc - include::example$chapters-data/code/50__random-and-math/math_inspector.zig[]</programlisting>
+<simpara>运行</simpara>
+<screen>$ zig run math_inspector.zig</screen>
+<simpara>输出</simpara>
+<screen>sample count -> 6
+min/max -> 0.87 / 1.11
+mean -> 0.997
+rms -> 1.000
+normalized mean -> 0.328
+72deg in rad -> 1.256637
+close to right angle? -> no
+hypot(3,4) -> 5.0
+phi constant -> 1.618033989</screen>
+<note>
+<simpara>对于大幅度比较，优先选择<literal>approxEqRel</literal>，在零附近选择<literal>approxEqAbs</literal>；两者都尊重IEEE-754边缘情况，而不会触发NaN。</simpara>
+</note>
+</section>
+
+<section xml:id="math-utilities-scaling">
+<title>容差、缩放和导出量</title>
+<simpara>角度转换使用<literal>rad_per_deg</literal>/<literal>deg_per_rad</literal>，而<literal>hypot</literal>通过避免灾难性抵消来保持勾股计算中的精度。在链接变换时，即使您的公共API使用较窄的浮点数，也要将中间结果保持在<literal>f64</literal>中——<literal>std.math</literal>中的混合类型重载做正确的事情，并避免编译器警告。<xref linkend="39__performance-and-inlining" xrefstyle="short">39</xref></simpara>
+</section>
+</section>
+
+<section xml:id="hashing-integrity">
+<title>哈希：可重现性与完整性</title>
+<simpara>Zig鲜明地分割哈希策略：<literal>std.hash</literal>系列针对内存桶的速度和低冲突率，而<literal>std.crypto.hash.sha2</literal>则为完整性检查或签名管道提供标准化摘要。</simpara>
+
+<section xml:id="hashing-integrity-noncrypto">
+<title>桶的非加密哈希</title>
+<simpara><literal>std.hash.Wyhash.hash</literal>产生一个64位值，您可以随意播种，非常适合哈希映射或布隆过滤器，其中雪崩属性比对抗对手的抵抗力更重要。如果您需要具有编译时类型感知的结构化哈希，<literal>std.hash.autoHash</literal>会递归地遍历您的字段，并将它们馈送到可配置的后端。<xref linkend="44__collections-and-algorithms" xrefstyle="short">44</xref> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/hash/auto_hash.zig">auto_hash.zig</link></simpara>
+</section>
+
+<section xml:id="hashing-integrity-sha256">
+<title>具有实用防护措施的SHA-256摘要管道</title>
+<simpara>即使当您的CLI只需要校验和时，也要将SHA-256视为完整性原语——而不是真实性保证——并为用户记录这种差异。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 50__random-and-math.adoc - include::example$chapters-data/code/50__random-and-math/hash_digest_tool.zig[]</programlisting>
+<simpara>运行</simpara>
+<screen>$ zig run hash_digest_tool.zig -- chapters-data/code/50__random-and-math/payload.txt</screen>
+<simpara>输出</simpara>
+<screen>wyhash(seed=0) payload preview -> 0x30297ecbb2bd0c02
+sha256(chapters-data/code/50__random-and-math/payload.txt) ->
+  0498ca2116fb55b7a502d0bf3ad5d0e0b3f4e23ad919bdc0f9f151ca3637a6fa
+(remember: sha256 certifies integrity, not authenticity.)</screen>
+<tip>
+<simpara>在哈希大文件时，流式传输通过可重用缓冲区，并为参数解析重用单个arena分配器，以避免搅动通用分配器。<xref linkend="10__allocators-and-memory-management" xrefstyle="short">10</xref> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link></simpara>
+</tip>
+</section>
+</section>
+
+<section xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>Random</literal>结构不是线程安全的；为每个worker分割不同的生成器或使用原子保护访问，以避免共享状态竞争。<xref linkend="29__threads-and-atomics" xrefstyle="short">29</xref></simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.math</literal>函数尊重IEEE-754 NaN传播——在没有显式检查的情况下，永远不要依赖无效操作后的比较。</simpara>
+</listitem>
+<listitem>
+<simpara>加密摘要应与签名检查、HMAC或受信任的分发配对；单独的SHA-256检测损坏，而不是篡改。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/crypto/hash_composition.zig">hash_composition.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>在第一个示例中用<literal>std.Random.DefaultCsprng</literal>替换<literal>DefaultPrng</literal>，并测量跨构建模式的性能差异。<xref linkend="39__performance-and-inlining" xrefstyle="short">39</xref> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Random/ChaCha.zig">ChaCha.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>扩展<literal>math_inspector.zig</literal>以使用<literal>approxEqRel</literal>计算置信区间，以标记延迟报告中的异常值。<xref linkend="47__time-logging-and-progress" xrefstyle="short">47</xref></simpara>
+</listitem>
+<listitem>
+<simpara>修改<literal>hash_digest_tool.zig</literal>，为<xref linkend="49__compression-and-archives" xrefstyle="short">第49章</xref>中TAR归档内的每个文件计算并存储SHA-256摘要，在归档旁边发出清单。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/tar.zig">tar.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+<section xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案、边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>Xoshiro上的跳跃函数不可逆转地改变状态；如果您需要稍后倒带，请在调用<literal>jump()</literal>之前快照您的生成器。</simpara>
+</listitem>
+<listitem>
+<simpara>避免在巨大文件的流式输出上使用<literal>bytesToHex</literal>——优先选择增量编码器以避免大型堆栈分配。</simpara>
+</listitem>
+<listitem>
+<simpara>巨大文件（&gt;4 GiB）的SHA-256摘要必须考虑平台特定的路径编码；在管道中尽早标准化UTF-8/UTF-16，以避免哈希不同的字节流。<xref linkend="45__text-formatting-and-unicode" xrefstyle="short">45</xref></simpara>
+</listitem>
+</itemizedlist>
+</section>
+
+</article>
+</book>

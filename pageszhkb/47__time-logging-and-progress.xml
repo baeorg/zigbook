@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<article xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>时间、日志和进度</title>
+<date>2025-11-06</date>
+<author>
+<personname>zigbook</personname>
+</author>
+<copyright>
+<year>2025</year>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<section xml:id="introduction">
+<title>介绍</title>
+<simpara>本章完善Zig中的日常操作工具：精确时间测量（<code>std.time</code>）、结构化日志记录（<code>std.log</code>）和终端友好的进度报告（<code>std.Progress</code>）。在这里，我们使管道可观察、可测量和用户友好。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/time.zig">time.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/log.zig">log.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Progress.zig">Progress.zig</link></simpara>
+<simpara>我们将专注于在Zig 0.15.2下跨平台工作的确定性片段，重点介绍陷阱、性能说明和最佳实践。</simpara>
+</section>
+<section xml:id="timekeeping-with-std-time">
+<title>使用std.time进行时间记录</title>
+<simpara>Zig的<code>std.time</code>提供：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>日历时间戳：<code>timestamp()</code>、<code>milliTimestamp()</code>、<code>microTimestamp()</code>、<code>nanoTimestamp()</code>。</simpara>
+</listitem>
+<listitem>
+<simpara>持续时间/单位：如<code>ns_per_ms</code>、<code>ns_per_s</code>、<code>s_per_min</code>等常量用于转换。</simpara>
+</listitem>
+<listitem>
+<simpara>高精度计时器：<code>Instant</code>（快速，不严格单调）和<code>Timer</code>（通过饱和实现单调行为）。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>通常，对于测量经过的时间，更喜欢使用<code>Timer</code>。只有当你需要更快的采样并且可以容忍来自古怪OS/固件环境的偶尔非单调性时，才使用<code>Instant</code>。</simpara>
+<section xml:id="measuring-elapsed-time-timer">
+<title>测量经过时间（Timer）</title>
+<simpara><code>Timer</code>产生单调读数（在回归时饱和），非常适合基准测试和超时。<xref linkend="39__performance-and-inlining" xrefstyle="short"/></simpara>
+<informalexample>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 47__time-logging-and-progress.adoc - include::example$chapters-data/code/47__time-logging-and-progress/time_timer_sleep.zig[]</programlisting>
+<para>运行</para>
+<screen><prompt>$</prompt> zig run time_timer_sleep.zig</screen>
+<para>预期输出</para>
+<listing>Timer OK</listing>
+</informalexample>
+<note>
+<simpara>睡眠使用<code>std.Thread.sleep(ns)</code>。在大多数操作系统上，粒度约为1毫秒或更差；计时器与底层时钟允许的精度一样高。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Thread.zig">Thread.zig</link></simpara>
+</note>
+</section>
+<section xml:id="instant-sampling-and-ordering">
+<title>即时采样和排序</title>
+<simpara><code>Instant.now()</code>为当前进程提供快速、高精度的时间戳。它尝试在挂起期间前进，可以进行比较或求差。它不保证在任何地方都严格单调。当你需要强制执行该属性时，请使用<code>Timer</code>。</simpara>
+<informalexample>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 47__time-logging-and-progress.adoc - include::example$chapters-data/code/47__time-logging-and-progress/time_instant_order.zig[]</programlisting>
+<para>运行</para>
+<screen><prompt>$</prompt> zig run time_instant_order.zig</screen>
+<para>预期输出</para>
+<listing>Instant OK</listing>
+</informalexample>
+</section>
+<section xml:id="time-unit-conversions">
+<title>时间单位转换</title>
+<simpara>更喜欢使用提供的单位常量，而不是手工数学。它们提高了清晰度，并防止混合单位中的错误。</simpara>
+<informalexample>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 47__time-logging-and-progress.adoc - include::example$chapters-data/code/47__time-logging-and-progress/time_units.zig[]</programlisting>
+<para>运行</para>
+<screen><prompt>$</prompt> zig run time_units.zig</screen>
+<para>预期输出</para>
+<listing>2 min = 120 s
+1 h = 3600000000000 ns</listing>
+</informalexample>
+<tip>
+<simpara>对于日历计算（年、月、日），请参阅<code>std.time.epoch</code>助手；对于文件时间戳元数据，请参阅<code>std.fs.File</code> API。<xref linkend="28__filesystem-and-io" xrefstyle="short"/>，<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/time/epoch.zig">epoch.zig</link>，<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/File.zig">File.zig</link></simpara>
+</tip>
+</section>
+</section>
+<section xml:id="logging-with-std-log">
+<title>使用std.log进行日志记录</title>
+<simpara><code>std.log</code>是一个小型、可组合的日志记录外观。你可以：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>通过<code>std_options</code>控制日志级别（默认值取决于构建模式）。</simpara>
+</listitem>
+<listitem>
+<simpara>使用作用域（命名空间）对消息进行分类。</simpara>
+</listitem>
+<listitem>
+<simpara>提供自定义的<code>logFn</code>以更改格式化或重定向。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>下面，我们设置<code>.log_level = .info</code>，以便调试日志被抑制，并演示默认和作用域日志记录。</simpara>
+<informalexample>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 47__time-logging-and-progress.adoc - include::example$chapters-data/code/47__time-logging-and-progress/logging_basic.zig[]</programlisting>
+<para>运行</para>
+<screen><prompt>$</prompt> zig run logging_basic.zig 2&gt;&amp;1 | cat</screen>
+<para>预期输出</para>
+<listing>info: starting
+warning: high temperature
+info(app): running</listing>
+</informalexample>
+<note>
+<simpara>默认记录器写入stderr，因此我们在上面使用<code>2&gt;&amp;1</code>以在本书中内联显示。在调试版本中，默认级别是<code>.debug</code>。通过<code>std_options</code>覆盖，以使示例在优化模式下保持稳定。</simpara>
+</note>
+</section>
+<section xml:id="progress-reporting-with-std-progress">
+<title>使用std.Progress进行进度报告</title>
+<simpara><code>std.Progress</code>将任务的小树绘制到终端，定期从另一个线程更新。它是非分配的，旨在跨终端和Windows控制台移植。使用它来指示长时间运行的工作，如构建、下载或分析过程。</simpara>
+<simpara>以下演示在练习API（根节点、子节点、<code>completeOne</code>、<code>end</code>）时禁用打印以获得确定性输出。在实际工具中，省略<code>disable_printing</code>以渲染动态进度视图。</simpara>
+<informalexample>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 47__time-logging-and-progress.adoc - include::example$chapters-data/code/47__time-logging-and-progress/progress_basic.zig[]</programlisting>
+<para>运行</para>
+<screen><prompt>$</prompt> zig run progress_basic.zig</screen>
+<para>预期输出</para>
+<listing>no output</listing>
+</informalexample>
+<tip>
+<simpara>使用<code>Options.estimated_total_items</code>显示计数（"[3/10] compile"）；使用<code>setName</code>更新名称；通过<code>std.Progress.setStatus</code>发出成功/失败信号。</simpara>
+</tip>
+</section>
+<section xml:id="notes-and-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara>计时器与即时：对于经过时间和单调行为，更喜欢使用<code>Timer</code>；当偶尔的非单调性可接受时，使用<code>Instant</code>进行快速采样。</simpara>
+</listitem>
+<listitem>
+<simpara>睡眠分辨率取决于操作系统。不要假设亚毫秒精度。</simpara>
+</listitem>
+<listitem>
+<simpara>日志记录过滤器按作用域应用。使用<code>scoped(.your_component)</code>干净地控制嘈杂的子系统。</simpara>
+</listitem>
+<listitem>
+<simpara><code>std.Progress</code>输出适应终端功能。在CI/非TTY或禁用打印上，不会写入任何内容。</simpara>
+</listitem>
+<listitem>
+<simpara>时区支持：stdlib在0.15.2中还没有稳定的<code>std.tz</code>模块。如果你需要时区数学，请使用平台API或库。[待定]</simpara>
+</listitem>
+</itemizedlist>
+</section>
+<section xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>使用<code>Timer</code>编写一个微基准测试，比较两个格式化例程。打印更快的一个以及快多少微秒。</simpara>
+</listitem>
+<listitem>
+<simpara>使用自定义的<code>logFn</code>包装<code>std.log</code>，该函数前缀来自<code>nanoTimestamp()</code>的时间戳。确保它保持非分配。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<code>std.Progress</code>创建一个显示三个阶段的小型构建模拟器。使第二阶段动态增加<code>estimated_total_items</code>。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+<section xml:id="open-questions">
+<title>开放问题</title>
+<itemizedlist>
+<listitem>
+<simpara>std中的时区助手：<code>std.tz</code>或等效项的状态和路线图？[待定]</simpara>
+</listitem>
+</itemizedlist>
+</section>
+</article>
+</book>

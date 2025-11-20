@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>附录B. 内建函数速查</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara><literal>@builtins</literal> 是编译器的“动词”：它们描述 Zig 对类型、指针与程序结构的思考方式，且无需导入即可在每个文件中可用。经历第三部分的编译期编程后，本附录总结最常用的内建函数、它们的意图，以及在阅读或编写“重度元编程”代码时应牢记的表层契约。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+<simpara>0.15.2 稳定了若干自省辅助（<literal>@typeInfo</literal>、<literal>@hasDecl</literal>、<literal>@field</literal>）并明确了新整数位宽的截断语义，使依赖本文总结的行为具备可实践性。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>在扫描代码库时分辨“反射内建”“算术辅助”“控制内建”。</simpara>
+</listitem>
+<listitem>
+<simpara>组合类型检查内建，构建可适配用户自定义类型的适配器。</simpara>
+</listitem>
+<listitem>
+<simpara>在范围边界与安全模式下验证数值转换的运行时行为。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="core-reflection">
+<title>核心反射内建</title>
+<simpara>反射内建提供关于用户类型的结构化信息，无需抓取原始指针或舍弃安全检查。<link xl:href="15__comptime-and-reflection.xml">15</link> 下例演示如何为任意 struct 形成带文档的摘要，包括 comptime 字段、可选载荷与嵌套数组。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 56__builtins-quick-reference.adoc - include::example$chapters-data/code/56__builtins-quick-reference/01_struct_introspection.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 01_struct_introspection.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>在内联循环中组合 <literal>@typeInfo</literal> 与 <literal>@field</literal>，让编译器在特化后仍能消除分支。<link xl:href="17__generic-apis-and-type-erasure.xml">17</link></simpara>
+</tip>
+</chapter>
+<chapter xml:id="value-extraction">
+<title>值提取辅助</title>
+<simpara>诸如 <literal>@field</literal>、<literal>@hasField</literal>、<literal>@fieldParentPtr</literal> 的内建让你在不违反 Zig 严格别名规则的前提下，将运行时数据映射回编译期声明。下例演示在保持 const 正确性的同时，如何暴露父指针。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig">meta.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 56__builtins-quick-reference.adoc - include::example$chapters-data/code/56__builtins-quick-reference/02_parent_ptr_lookup.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 02_parent_ptr_lookup.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>@fieldParentPtr</literal> 假设子指针有效且对齐正确；在调试构建中结合 <literal>std.debug.assert</literal> 以尽早捕获误用。<link xl:href="37__illegal-behavior-and-safety-modes.xml">37</link></simpara>
+</note>
+</chapter>
+<chapter xml:id="numeric-safety">
+<title>数值安全内建</title>
+<simpara>未定义行为常潜伏在数值转换里；Zig 通过 <literal>@intCast</literal>、<literal>@intFromFloat</literal>、<literal>@truncate</literal> 显式化截断，并遵守安全模式语义。<link xl:href="37__illegal-behavior-and-safety-modes.xml">37</link> 0.15.2 改进了这些内建在溢出时的诊断，使其在调试构建中可作为可靠护栏。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 56__builtins-quick-reference.adoc - include::example$chapters-data/code/56__builtins-quick-reference/03_numeric_conversions.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 03_numeric_conversions.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 3 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>将“有损转换”封装为小型辅助函数，以保持意图可读，并集中断言共享的位数逻辑。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</tip>
+</chapter>
+<chapter xml:id="comptime-control">
+<title>编译期控制与护栏</title>
+<simpara><literal>@compileError</literal>、<literal>@panic</literal>、<literal>@setEvalBranchQuota</literal>、<literal>@inComptime</literal> 为你提供编译期执行的直接控制；它们是让元编程保持确定性与透明性的“安全阀”。<link xl:href="15__comptime-and-reflection.xml">15</link> 简短示例在编译期保护向量宽度，并在分析时提高分支配额以计算小型斐波那契数。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 56__builtins-quick-reference.adoc - include::example$chapters-data/code/56__builtins-quick-reference/04_comptime_guards.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 04_comptime_guards.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<caution>
+<simpara><literal>@compileError</literal> 会立即终止当前编译单元；谨慎使用，并在运行时校验更便宜时优先返回错误。保留被注释掉的调用（如示例）以记录失败模式，同时不破坏构建。<link xl:href="12__config-as-data.xml">12</link></simpara>
+</caution>
+</chapter>
+<chapter xml:id="patterns">
+<title>交叉校验模式</title>
+<itemizedlist>
+<listitem>
+<simpara>在依赖用户类型的可选特性之前，先用 <literal>@hasDecl</literal> 与 <literal>@hasField</literal> 驱动重构；这与第17章引入的防御式风格一致。<link xl:href="17__generic-apis-and-type-erasure.xml">17</link></simpara>
+</listitem>
+<listitem>
+<simpara>组合 <literal>@TypeOf</literal>、<literal>@typeInfo</literal>、<literal>@fieldParentPtr</literal>，让校验代码中的诊断更清晰——三者便于在不变式失败时打印结构信息。</simpara>
+</listitem>
+<listitem>
+<simpara>记住部分内建（如 <literal>@This</literal>）依赖词法作用域；重排文件可能悄然改变其含义，因此每次大规模重排后都要重跑测试。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与告诫</title>
+<itemizedlist>
+<listitem>
+<simpara>与 allocator 互动的内建（<literal>@alignCast</literal>、<literal>@ptrCast</literal>）仍遵守 Zig 的别名规则；拿不准时依赖 <literal>std.mem</literal> 的辅助。<link xl:href="03__data-fundamentals.xml">3</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>@setEvalBranchQuota</literal> 作用于当前编译期执行上下文的全局；保持配额窄小，避免掩盖无限递归。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+<listitem>
+<simpara>部分实验性内建出现在 nightly，但不在 0.15.2 中——在采用新名称前固定你的工具链。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>构建一个诊断辅助：使用 <literal>@typeInfo.union</literal> 打印任意 union 的标签名。<link xl:href="17__generic-apis-and-type-erasure.xml">17</link></simpara>
+</listitem>
+<listitem>
+<simpara>扩展数值转换示例，输出截断前后位模式的人类可读差异。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>编写编译期护栏，拒绝缺少 <literal>name</literal> 字段的 struct，并将其整合进通用格式化管线。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>当某个内建与现有行为重复时，优先更高级的 std 辅助——标准库通常已为你封装边界情况。<link xl:href="43__stdlib-index.xml">43</link></simpara>
+</listitem>
+<listitem>
+<simpara>针对匿名 struct 的反射可能产生编译器生成的名称；若用户可见日志需要稳定性，可在自有元数据中缓存。<link xl:href="12__config-as-data.xml">12</link></simpara>
+</listitem>
+<listitem>
+<simpara>与 C 交互时注意部分内建（如 <literal>@ptrCast</literal>）可能影响调用约定；在发布前再次检查 ABI 章节。<link xl:href="33__c-interop-import-export-abi.xml">33</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

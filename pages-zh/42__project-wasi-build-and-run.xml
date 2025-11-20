@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>WASI 构建与运行</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>借助上一章的跨编译机制（见<link xl:href="41__cross-compilation-and-wasm.xml">41</link>），我们可使用单个<literal>build.zig</literal>组装一个完整的 WASI 项目，同时编译到原生与 WebAssembly 目标。本章构建一个小型日志分析 CLI：读取输入、处理并输出摘要统计——这些功能与 WASI 的文件与标准 I/O 能力紧密契合（见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/os/wasi.zig">wasi.zig</link>）。你将一次性编写应用，然后使用 Wasmtime 或 Wasmer 等运行时生成并测试 Linux 可执行与<literal>.wasm</literal>模块（见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>）。</simpara>
+<simpara>构建系统将定义多个目标，各自拥有制品；你还将接线运行步骤，使其基于目标自动选择正确的运行时（见<link xl:href="22__build-system-deep-dive.xml">22</link>）。最终，你将获得一个可用于发布便携命令行工具（原生二进制与 WASI 模块）的工作模板。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>将 Zig 项目组织为共享源码，干净编译至<literal>x86_64-linux</literal>与<literal>wasm32-wasi</literal>（见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Target.zig">Target.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>在<literal>build.zig</literal>中集成多个<literal>addExecutable</literal>目标，采用不同优化与命名策略（见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build.zig">Build.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>配置运行步骤，包含运行时检测（原生 vs Wasmtime/Wasmer），并将参数传递至最终二进制（见<link xl:href="22__build-system-deep-dive.xml">22</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>在原生与 WASI 环境中测试相同逻辑路径，验证跨平台行为（见<link xl:href="https://ziglang.org/documentation/master/#Command-line-flags">#Command-line-flags</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="project-structure">
+<title>项目结构</title>
+<simpara>我们将分析器组织为单包工作区，其中<literal>src/</literal>目录包含入口点与分析逻辑。<literal>build.zig</literal>将创建两个制品：<literal>log-analyzer-native</literal>与<literal>log-analyzer-wasi</literal>。</simpara>
+<section xml:id="directory-layout">
+<title>目录布局</title>
+<programlisting language="text" linenumbering="unnumbered">42-log-analyzer/
+├── build.zig
+├── build.zig.zon
+└── src/
+    ├── main.zig
+    └── analysis.zig</programlisting>
+<note>
+<simpara>由于无外部依赖，<literal>build.zig.zon</literal>保持最小化；它作为潜在后续打包的元数据（参见<link xl:href="21__zig-init-and-package-metadata.xml">21</link>）。</simpara>
+</note>
+</section>
+<section xml:id="build-zig-zon">
+<title>包元数据</title>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 42__project-wasi-build-and-run.adoc - include::example$chapters-data/code/42__project-wasi-build-and-run/build.zig.zon[]</programlisting>
+<tip>
+<simpara><literal>.minimum_zig_version</literal>字段可避免使用缺少 0.15.2 引入的 WASI 改进的旧编译器进行构建。</simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="build-system-setup">
+<title>构建系统设置</title>
+<simpara>我们的<literal>build.zig</literal>定义两个共享相同根源文件但面向不同平台的可执行文件。我们还为 WASI 二进制添加自定义运行步骤，检测可用运行时。</simpara>
+<section xml:id="build-zig-multi-target">
+<title>多目标构建脚本</title>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 42__project-wasi-build-and-run.adoc - include::example$chapters-data/code/42__project-wasi-build-and-run/build.zig[]</programlisting>
+<formalpara>
+<title>构建</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">(no output on success; artifacts installed to zig-out/bin/)</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>WASI 目标使用<literal>-OReleaseSmall</literal>以最小化模块大小，本机目标使用<literal>-OReleaseFast</literal>以提升运行速度——体现按制品粒度控制优化的能力。</simpara>
+</important>
+</section>
+</chapter>
+<chapter xml:id="analysis-logic">
+<title>分析逻辑</title>
+<simpara>分析器读取完整日志内容、按换行符拆分、统计严重级别关键字（ERROR、WARN、INFO）的出现次数，并打印摘要。解析逻辑被提取到<literal>analysis.zig</literal>中，以便独立于 I/O 进行单元测试。</simpara>
+<section xml:id="analysis-module">
+<title>核心分析模块</title>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 42__project-wasi-build-and-run.adoc - include::example$chapters-data/code/42__project-wasi-build-and-run/src/analysis.zig[]</programlisting>
+<note>
+<simpara>通过将内容作为切片接受，<literal>analyzeLog</literal>保持简单且可测试。<literal>main.zig</literal>处理文件读取，而函数仅处理文本（见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link>）。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="main-entry-point">
+<title>主入口</title>
+<simpara>入口负责解析命令行参数、读取整个文件内容（或标准输入）、委托<literal>analyzeLog</literal>并打印结果。原生与 WASI 构建共享同一代码路径；WASI 通过其虚拟化文件系统或标准输入进行文件访问。</simpara>
+<section xml:id="main-zig">
+<title>主源文件</title>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 42__project-wasi-build-and-run.adoc - include::example$chapters-data/code/42__project-wasi-build-and-run/src/main.zig[]</programlisting>
+<tip>
+<simpara><literal>--input</literal>参数允许以文件进行测试；省略则从标准输入读取，WASI 运行时可轻松管道传入。注意 WASI 的文件系统访问需要运行时显式授予能力（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/posix.zig">posix.zig</link>）。</simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="building-and-running">
+<title>构建与运行</title>
+<simpara>源码完成后，我们可以构建两个目标并并行运行它们以确认行为一致。</simpara>
+<section xml:id="native-build-run">
+<title>原生执行</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build
+$ echo -e "INFO startup\nERROR failed\nWARN retry\nINFO success" &gt; sample.log
+$ ./zig-out/bin/log-analyzer-native --input sample.log</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">analyzing: sample.log
+results: INFO=2 WARN=1 ERROR=1</programlisting>
+</para>
+</formalpara>
+</section>
+<section xml:id="wasi-build-run">
+<title>使用 Wasmer 的 WASI 执行（标准输入）</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build
+$ echo -e "INFO startup\nERROR failed\nWARN retry\nINFO success" | wasmer run zig-out/bin/log-analyzer-wasi.wasm</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">analyzing: stdin
+results: INFO=2 WARN=1 ERROR=1</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>WASI 标准输入管道在各运行时中可靠工作。使用<literal>--input</literal>的文件访问需要能力授予（<literal>--dir</literal>或<literal>--mapdir</literal>），这因运行时实现而异，在 preview1 中可能存在限制。</simpara>
+</important>
+</section>
+<section xml:id="wasi-run-with-wasmer">
+<title>用于对比的原生标准输入测试</title>
+<programlisting language="shell" linenumbering="unnumbered">$ echo -e "INFO startup\nERROR failed\nWARN retry\nINFO success" | ./zig-out/bin/log-analyzer-native</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">analyzing: stdin
+results: INFO=2 WARN=1 ERROR=1</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>原生与 WASI 从标准输入读取时产生相同输出，展示了命令行工具真正的源码级可移植性。</simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="zig-build-run-steps">
+<title>使用<literal>zig build</literal>运行步骤</title>
+<simpara><literal>build.zig</literal>为两个目标都定义了运行步骤。可直接调用：</simpara>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build run-native -- --input sample.log</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">analyzing: sample.log
+results: INFO=2 WARN=1 ERROR=1</programlisting>
+</para>
+</formalpara>
+<programlisting language="shell" linenumbering="unnumbered">$ echo -e "INFO test" | zig build run-wasi</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">analyzing: stdin
+results: INFO=1 WARN=0 ERROR=0</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>run-wasi</literal>步骤会自动选择已安装的 WASI 运行时（Wasmtime 或 Wasmer），若均不可用则报错。见<literal>build.zig</literal>中的<literal>detectWasiRuntime</literal>助手。</simpara>
+</note>
+</chapter>
+<chapter xml:id="size-comparison">
+<title>二进制体积比较</title>
+<simpara>使用<literal>-OReleaseSmall</literal>构建的 WASI 模块产生紧凑制品：</simpara>
+<programlisting language="shell" linenumbering="unnumbered">$ ls -lh zig-out/bin/log-analyzer-*</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">-rwxrwxr-x 1 user user 7.9M Nov  6 14:29 log-analyzer-native
+-rwxr--r-- 1 user user  18K Nov  6 14:29 log-analyzer-wasi.wasm</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>.wasm</literal>模块显著更小（18KB vs 7.9MB），因为它不包含原生 OS 集成，系统调用依赖宿主运行时，非常适合边缘部署或浏览器环境。</simpara>
+</tip>
+</chapter>
+<chapter xml:id="extending-the-project">
+<title>扩展项目</title>
+<simpara>此模板可作为面向 WASI 的更复杂 CLI 工具的基础：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">JSON 输出</emphasis>: 使用<literal>std.json.stringify</literal>发射结构化结果，使其他工具可进行下游处理（见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json.zig">json.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">标准输入流式处理</emphasis>: 当前实现已通过一次性读取所有内容高效处理标准输入，在当前限制下适用于高达 10MB 的日志（见<link xl:href="28__filesystem-and-io.xml">28</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">多格式支持</emphasis>: 接受不同日志格式（JSON、syslog、自定义）并根据内容模式自动检测它们。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">HTTP 前端</emphasis>: 打包 WASI 模块用于无服务器函数，通过 POST 接受日志并返回 JSON 摘要（见<link xl:href="31__networking-http-and-json.xml">31</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>WASI preview1（当前快照）缺乏网络、线程功能，且文件系统特性有限。标准输入/输出可靠工作，但文件访问需要运行时特定的能力授予。</simpara>
+</listitem>
+<listitem>
+<simpara>0.15.2 引入的<literal>zig libc</literal>工作在 musl 与 wasi-libc 之间共享实现，提升一致性，并使<literal>readToEndAlloc</literal>等特性可在各平台一致工作。</simpara>
+</listitem>
+<listitem>
+<simpara>WASI 运行时的权限模型各不相同。Wasmer 的<literal>--mapdir</literal>在测试中存在问题，而标准输入管道普遍工作。设计 CLI 工具时，面向 WASI 应优先使用标准输入。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>添加<literal>--format json</literal>标志，发射<literal>{"info": N, "warn": N, "error": N}</literal>而非纯文本摘要，然后通过管道传输至<literal>jq</literal>验证输出。</simpara>
+</listitem>
+<listitem>
+<simpara>扩展<literal>analysis.zig</literal>，添加单元测试验证大小写不敏感匹配（例如"info"与"INFO"均计数），展示<literal>std.ascii.eqlIgnoreCase</literal>（见<link xl:href="13__testing-and-leak-detection.xml">13</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>为<literal>wasm32-freestanding</literal>（无 WASI）创建第三个构建目标，将分析器作为可通过<literal>@export</literal>从 JavaScript 调用的导出函数暴露（见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/wasm.zig">wasm.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>使用大型日志文件（生成 10 万行）对原生与 WASI 执行时间进行基准测试，比较启动开销与吞吐量（见<link xl:href="40__profiling-optimization-hardening.xml">40</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>若需线程功能，WASI preview2（组件模型）引入实验性并发原语。请查阅上游 WASI 规范获取迁移路径。</simpara>
+</listitem>
+<listitem>
+<simpara>对于浏览器目标，切换至<literal>wasm32-freestanding</literal>并使用 JavaScript 互操作（<literal>@export</literal>/<literal>@extern</literal>）而非 WASI 系统调用（见<link xl:href="33__c-interop-import-export-abi.xml">33</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>某些 WASI 运行时（例如 Wasmedge）支持非标准扩展，如套接字或 GPU 访问。为获得最大可移植性请坚持使用 preview1，或清晰记录运行时特定依赖。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

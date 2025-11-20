@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<article xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>Zigbook</title>
+<date>2025-11-15</date>
+</info>
+<div class="landing-page">
+  <!-- Hero Section -->
+  <section class="hero-section">
+    <div class="hero-container">
+      <div class="zig-logo-container">
+        <img src="../../../zig-logo-dark.svg" alt="Zig Logo" class="zig-logo zig-logo-dark" />
+        <img src="../../../zig-logo-light.svg" alt="Zig Logo" class="zig-logo zig-logo-light" />
+      </div>
+
+      <h1 class="hero-title fade-in-up">
+        学习 Zig 不只是为简历新增一门语言。
+      </h1>
+
+      <p class="hero-subtitle fade-in-up delay-1">
+        它关乎从根本上改变你对软件的思考方式。
+      </p>
+
+      <div class="hero-cta fade-in-up delay-2">
+        <a href="00__zigbook_introduction.html" class="btn btn-primary">
+          开始旅程
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M7.5 15L12.5 10L7.5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </a>
+        <a href="00__zigbook_introduction.html#the-path-ahead" class="btn btn-secondary">
+          浏览章节
+        </a>
+      </div>
+
+      <div class="scroll-indicator">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <path d="M12 5V19M12 19L5 12M12 19L19 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- Interactive Code Demo -->
+  <section class="code-demo-section">
+    <div class="container">
+      <div class="tab-container">
+        <div class="tab-buttons">
+          <button class="tab-btn active" data-tab="day-one">Day One</button>
+          <button class="tab-btn" data-tab="understanding">Understanding Earned</button>
+        </div>
+
+        <div class="tab-content active" id="day-one">
+          <div class="code-block-demo">
+            <pre><code class="language-zig">const std = @import("std");
+
+pub fn main() void {
+    std.debug.print("Hello, world!\n", .{});
+}</code></pre>
+          </div>
+          <p class="code-caption">看似简单……还是在隐藏复杂？</p>
+        </div>
+
+        <div class="tab-content" id="understanding">
+          <div class="code-block-demo annotated">
+            <pre><code class="language-zig"><span class="annotation" data-note="模块解析——编译器搜索捆绑库">const std = @import("std");</span>
+
+<span class="annotation" data-note="由 std.start 发现——生成操作系统入口点">pub fn main() void {</span>
+    <span class="annotation" data-note="通过平台系统调用写入 stderr">std.debug.print("Hello, world!\n", .{});</span>
+<span class="annotation" data-note="显式返回——没有隐藏的控制流">}</span></code></pre>
+          </div>
+          <p class="code-caption">当你看见深度，简单才真正出现。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- The Journey -->
+  <section class="journey-section">
+    <div class="container">
+      <h2 class="section-title">旅程</h2>
+
+      <div class="journey-grid">
+        <div class="journey-card card-reveal">
+          <div class="journey-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h3>从简单开始</h3>
+          <p>Hello, world！Zig 的第一步。你在第一天遇到的简单。</p>
+        </div>
+
+        <div class="journey-card card-reveal delay-1">
+          <div class="journey-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+              <path d="M3 3L21 21M3 10.5C3 10.5 6 3 12 3C18 3 21 10.5 21 10.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3>穿越复杂</h3>
+          <p>61 章手工编写，交替讲解概念与构建真实项目。</p>
+        </div>
+
+        <div class="journey-card card-reveal delay-2">
+          <div class="journey-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h3>以掌握走出复杂</h3>
+          <p>以完整理解构建系统。复杂彼岸的简单。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- What Makes This Different -->
+  <section class="features-section">
+    <div class="container">
+      <h2 class="section-title">与众不同之处</h2>
+
+      <div class="features-grid">
+        <div class="feature-card card-reveal">
+          <div class="feature-icon">🚫</div>
+          <h3>无 AI 生成内容</h3>
+          <p>每一个字均由 <a href="https://github.com/zigbook" target="_blank">@zigbook</a> 手写。精心策划，持续更新。</p>
+        </div>
+
+        <div class="feature-card card-reveal delay-1">
+          <div class="feature-icon">🎯</div>
+          <h3>理解，而不只是用法</h3>
+          <p>学习“为什么”，不只是“怎么做”。理解每个特性的深度。</p>
+        </div>
+
+        <div class="feature-card card-reveal delay-2">
+          <div class="feature-icon">🔄</div>
+          <h3>社区驱动</h3>
+          <p>欢迎贡献。开源。由开发者为开发者而建。</p>
+        </div>
+
+        <div class="feature-card card-reveal delay-3">
+          <div class="feature-icon">🛠️</div>
+          <h3>项目导向学习</h3>
+          <p>构建真实系统。从 CLI 工具到 GPU 计算。动手掌握。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Parts Overview -->
+  <section class="parts-section">
+    <div class="container">
+      <h2 class="section-title">七大部分，六十一章。</h2>
+
+      <div class="parts-list">
+        <a href="01__boot-basics.html" class="part-item">
+          <span class="part-number">I</span>
+          <span class="part-name">基础</span>
+        </a>
+        <a href="08__user-types-structs-enums-unions.html" class="part-item">
+          <span class="part-number">II</span>
+          <span class="part-name">类型与内存</span>
+        </a>
+        <a href="15__comptime-and-reflection.html" class="part-item">
+          <span class="part-number">III</span>
+          <span class="part-name">编译期与泛型</span>
+        </a>
+        <a href="19__modules-and-imports-root-builtin-discovery.html" class="part-item">
+          <span class="part-number">IV</span>
+          <span class="part-name">模块、包与构建</span>
+        </a>
+        <a href="28__filesystem-and-io.html" class="part-item">
+          <span class="part-number">V</span>
+          <span class="part-name">系统与互操作</span>
+        </a>
+        <a href="36__style-and-best-practices.html" class="part-item">
+          <span class="part-number">VI</span>
+          <span class="part-name">健壮性与性能</span>
+        </a>
+        <a href="43__stdlib-index.html" class="part-item">
+          <span class="part-number">VII</span>
+          <span class="part-name">标准库导览</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Final CTA -->
+  <section class="final-cta-section">
+    <div class="container">
+      <blockquote class="final-quote">
+        "Zigbook 已终章，Zig 之旅仍未终止。"
+      </blockquote>
+
+      <a href="00__zigbook_introduction.html" class="btn btn-primary btn-large">
+        从第0章开始
+        <svg width="24" height="24" viewBox="0 0 20 20" fill="none">
+          <path d="M7.5 15L12.5 10L7.5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </a>
+
+      <p class="final-note">
+        由 <a href="https://github.com/zigbook" target="_blank">@zigbook</a> 用心手工打造<br/>
+        欢迎在 <a href="https://github.com/zigbook/zigbook" target="_blank">github.com/zigbook/zigbook</a> 贡献
+      </p>
+    </div>
+  </section>
+</div>
+
+<script src="../../../_/js/landing-page.js"></script>
+</article>

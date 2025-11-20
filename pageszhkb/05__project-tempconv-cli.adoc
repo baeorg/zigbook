@@ -1,0 +1,186 @@
+////
+changes: ["TempConv CLI项目章节初稿"]
+examples_compile: yes
+keywords: ["命令行","项目","温度"]
+last_updated: 2025-11-02
+last_verified: 2025-11-02
+next_chapter: "06__project-grep-lite"
+open_questions: []
+previous_chapter: "04__errors-resource-cleanup"
+status: draft
+xref_complete: true
+////
+
+= 项目：温度转换 CLI
+:chapter-number: 5
+:chapter-slug: project-tempconv-cli
+:copyright: zigbook
+:doctype: book
+:embedded:
+:experimental:
+:icons: font
+:partnums:
+:pygments-linenums-mode: inline
+:pygments-style: manni
+:safe-mode-level: 0
+:sectanchors:
+:sectids:
+:sectlinks:
+:source-highlighter: pygments
+:sourcedir: example$chapters-data/code
+:webfonts:
+:xrefstyle: short
+:zig-version: 0.15.2
+:linkcss:
+:stylesdir: styles
+:stylesheet: zigbook.css
+
+[[overview]]
+== 概览
+
+我们的第一个项目将第 1–4 章的语言基础转化为一个命令行小工具，在摄氏度、华氏度与开尔文之间转换温度。我们将参数解析、枚举与浮点运算组合为一个程序，同时为终端用户保持友好的诊断提示，详见 link:https://ziglang.org/documentation/master/#Command-line-flags[#命令行标志] 与 link:https://ziglang.org/documentation/master/#Floats[#浮点数]。
+
+同时，我们强化上一章的错误处理理念：校验输出人类可读的提示信息，进程以明确意图退出而非打印栈回溯；参见 link:https://ziglang.org/documentation/master/#Error-Handling[#错误处理]。
+
+[[learning-goals]]
+== 学习目标
+
+* 构建一个最小化的 CLI 框架，读取参数、处理 `--help`，并输出用法指导。
+* 用枚举表示温度单位，使用 `switch` 标准化转换，详见 link:https://ziglang.org/documentation/master/#switch[#switch]。
+* 呈现转换结果，并通过简洁诊断而非栈回溯来暴露校验失败。
+
+[[section-1]]
+== 塑造命令接口
+
+在涉及具体计算前，需要先制定可预测的契约：三个参数（`value`、`from-unit`、`to-unit`）与用于文档的 `--help`。程序应在第一时间解释错误，使调用者不至于看到 panic。
+
+[[section-1-sub-a-pre]]
+=== CLI 参数如何到达你的程序
+
+当你从命令行运行程序时，操作系统会在 `main()` 执行之前，通过明确定义的启动序列传递参数。理解这条路径可解释 `std.process.args()` 数据的来源：
+
+[mermaid]
+....
+graph TB
+    OS["Operating System"]
+    EXEC["execve() system call"]
+    KERNEL["Kernel loads ELF"]
+    STACK["Stack setup:<br/>argc, argv[], envp[]"]
+    
+    START["_start entry point<br/>(naked assembly)"]
+    POSIX["posixCallMainAndExit<br/>(argc_argv_ptr)"]
+    
+    PARSE["Parse stack layout:<br/>argc at [0]<br/>argv at [1..argc+1]<br/>envp after NULL"]
+    
+    GLOBALS["Set global state:<br/>std.os.argv = argv[0..argc]<br/>std.os.environ = envp"]
+    
+    CALLMAIN["callMainWithArgs<br/>(argc, argv, envp)"]
+    USERMAIN["Your main() function"]
+    ARGS["std.process.args()<br/>reads std.os.argv"]
+    
+    OS --> EXEC
+    EXEC --> KERNEL
+    KERNEL --> STACK
+    STACK --> START
+    START --> POSIX
+    POSIX --> PARSE
+    PARSE --> GLOBALS
+    GLOBALS --> CALLMAIN
+    CALLMAIN --> USERMAIN
+    USERMAIN --> ARGS
+....
+
+**要点：**
+
+* **操作系统准备**：在将控制权移交给程序前，操作系统将 `argc`（参数个数）与 `argv`（参数数组）放入栈中。
+* **汇编入口**：`_start` 符号（内联汇编）才是真正入口点，而非 `main()`。
+* **栈解析**：`posixCallMainAndExit` 读取栈布局以提取 `argc`、`argv` 与环境变量。
+* **全局状态**：在调用 `main()` 前，运行时用解析数据填充 `std.os.argv` 与 `std.os.environ`。
+* **用户访问**：`std.process.args()` 只是返回对已填充 `std.os.argv` 切片的迭代器。
+
+**为何这对 CLI 程序重要：**
+
+* 从 `main()` 运行开始参数即已可用——无需单独初始化。
+* 第一个参数（`argv[0]`）总是程序名。
+* 参数解析在启动时发生一次，而非每次访问都解析。
+* 无论 `zig run` 还是编译后二进制，该序列保持一致。
+
+有了这套基础设施，TempConv CLI 可立即开始解析参数，而无需关注其到达的底层细节。
+
+[[section-1-sub-a]]
+=== 用护栏解析参数
+
+入口点分配完整的参数向量，检查 `--help`，并校验参数数量。一旦违反规则，打印用法横幅并以失败码退出，依赖 `std.process.exit` 避免嘈杂的栈回溯。
+
+[[section-1-sub-b]]
+=== 单位与验证助手
+
+用枚举描述支持的单位，并提供 `parseUnit` 助手接受大小写标记。无效标记触发友好诊断并立即退出，使 CLI 在脚本中也能稳健运行，详见 link:https://ziglang.org/documentation/master/#enum[#枚举]。
+
+[[section-2]]
+== 转换与结果呈现
+
+接口就绪后，其余程序依赖确定性转换：先将所有值标准化为开尔文，再投射到目标单位；无论输入组合如何，结果都保持一致。
+
+[[workflow-1]]
+=== 完整的 TempConv 列表
+
+下面的列表包含参数解析、单位助手与转换逻辑。关注 CLI 结构如何让失败路径清晰，并保持正向路径简洁。
+
+[source,zig]
+----
+
+include::{sourcedir}/05__project-tempconv-cli/tempconv_cli.zig[]
+
+----
+
+.运行
+[source,shell]
+----
+$ zig run tempconv_cli.zig -- 32 F C
+----
+
+.输出
+[source,shell]
+----
+32.00 f -> 0.00 c
+----
+
+TIP: 程序一旦发现无效值或单位，会在退出前打印诊断，因此脚本可依赖非零退出码而无需解析栈回溯。
+
+[[workflow-2]]
+=== 练习额外转换
+
+对于开尔文或摄氏度输入，同一二进制均可运行——共享的转换助手保证对称性，因为所有转换都以开尔文为枢纽。
+
+[source,shell]
+----
+$ zig run tempconv_cli.zig -- 273.15 K C
+----
+
+.Output
+[source,shell]
+----
+273.15 k -> 0.00 c
+----
+
+[[notes-caveats]]
+== 说明与注意事项
+
+* 参数解析按设计保持最小；生产工具可在相同防护模式下添加长标志或更丰富的帮助文本。
+* 温度转换为线性，双精度浮点足够；若引入如兰金（Rankine）等特殊温标，请谨慎调整公式。
+* `std.debug.print` 写入 stderr，可保持脚本化管道安全——若需洁净的 stdout 输出，改用缓冲写出；参见 link:https://ziglang.org/documentation/master/#Debug[#调试]。
+
+[[exercises]]
+== 练习
+
+* 扩展 `parseUnit` 识别完整单词 `celsius`、`fahrenheit` 与 `kelvin`，并同时支持单字母缩写。
+* 添加切换标志，在舍入输出（`{d:.2}`）与完整精度间切换，参考 Zig 的格式化动词；见 link:https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig[fmt.zig]。
+* 引入 `--table` 模式，为一系列值打印转换，用 `for` 强化切片迭代，详见 link:https://ziglang.org/documentation/master/#for[#for]。
+
+[[caveats-alternatives-edge-cases]]
+== 替代方案与边缘情况：
+
+* 开尔文永不低于零；如需拒绝负开尔文输入，请添加防护而非接受数学值。
+* 国际受众有时期望逗号小数；如需此行为，将 `std.fmt.formatFloat` 与区域设置感知的后处理结合。
+* 若需脚本化使用而不调用 `zig run`，请用 `zig build-exe` 打包程序并将二进制放入你的 `PATH`。

@@ -1,0 +1,479 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>启动基础</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>Zig 将每个源文件视为带命名空间的模块，编译模型围绕使用 <literal>@import</literal> 显式地将这些单元连线展开，使依赖关系与程序边界一眼可辨，详见 <link xl:href="https://ziglang.org/documentation/master/#Compilation-Model">#Compilation Model</link>。本章构建这段旅程的第一里路：展示根模块、<literal>std</literal> 与 <literal>builtin</literal> 如何协作，在保留对目标与优化模式的显式控制的同时，从单文件生成一个可运行的程序。</simpara>
+<simpara>我们也会确立数据与执行的基本规则：<literal>const</literal> 和 <literal>var</literal> 如何引导可变性；诸如 <literal>void {}</literal> 这样的字面量为何对 API 设计重要；Zig 如何处理默认溢出；以及如何为任务选择合适的打印面板，详见 <link xl:href="https://ziglang.org/documentation/master/#Values">#Values</link>。同时，我们会预览你在后续章节会依赖的发布模式变体与缓冲输出辅助器；参见 <link xl:href="https://ziglang.org/documentation/master/#Build-Mode">#Build-Mode</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>解释 Zig 如何通过 <literal>@import</literal> 解析模块，以及根命名空间的角色。</simpara>
+</listitem>
+<listitem>
+<simpara>描述 <literal>std.start</literal> 如何发现 <literal>main</literal> 以及为何入口点通常返回 <literal>!void</literal>，详见 <link xl:href="https://ziglang.org/documentation/master/#Entry-Point">#Entry Point</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>const</literal>、<literal>var</literal> 与诸如 <literal>void {}</literal> 的字面量形式，表达关于可变性与单位值的意图。</simpara>
+</listitem>
+<listitem>
+<simpara>根据输出通道与性能需求，在 <literal>std.debug.print</literal>、无缓冲 writer 与缓冲 stdout 之间做出选择。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="section-1">
+<title>从单一源文件开始</title>
+<simpara>在 Zig 中把内容显示到屏幕上最快的方式是依赖默认的模块图：你编译的根文件成为规范命名空间，而 <literal>@import</literal> 让你触达从标准库到编译器元数据的一切。你会频繁地使用这些钩子来让运行时行为与构建时决策保持一致。</simpara>
+</chapter>
+<chapter xml:id="_entry_point_selection">
+<title>入口点选择</title>
+<simpara>Zig 编译器会基于目标平台、链接模式与用户声明导出不同的入口点符号。该选择在编译期发生，见 <link xl:href="">lib/std/start.zig:28-100</link>。</simpara>
+<section xml:id="_entry_point_symbol_table">
+<title>入口点符号表</title>
+<informaltable frame="all" rowsep="1" colsep="1">
+<tgroup cols="5">
+<colspec colname="col_1" colwidth="20*"/>
+<colspec colname="col_2" colwidth="20*"/>
+<colspec colname="col_3" colwidth="20*"/>
+<colspec colname="col_4" colwidth="20*"/>
+<colspec colname="col_5" colwidth="20*"/>
+<thead>
+<row>
+<entry align="left" valign="top">平台</entry>
+<entry align="left" valign="top">链接模式</entry>
+<entry align="left" valign="top">条件</entry>
+<entry align="left" valign="top">导出符号</entry>
+<entry align="left" valign="top">处理函数</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry align="left" valign="top"><simpara>POSIX/Linux</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行文件</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_start</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_start()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>POSIX/Linux</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行文件</simpara></entry>
+<entry align="left" valign="top"><simpara>链接 libc</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>main</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>main()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>Windows</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行文件</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>wWinMainCRTStartup</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>WinStartup()</literal> / <literal>wWinMainCRTStartup()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>Windows</simpara></entry>
+<entry align="left" valign="top"><simpara>动态库</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_DllMainCRTStartup</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_DllMainCRTStartup()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>UEFI</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行文件</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>EfiMain</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>EfiMain()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>WASI</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行（command）</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_start</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>wasi_start()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>WASI</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行（reactor）</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_initialize</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>wasi_start()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>WebAssembly</simpara></entry>
+<entry align="left" valign="top"><simpara>自由环境（Freestanding）</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_start</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>wasm_freestanding_start()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>WebAssembly</simpara></entry>
+<entry align="left" valign="top"><simpara>链接 libc</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>__main_argc_argv</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>mainWithoutEnv()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>OpenCL/Vulkan</simpara></entry>
+<entry align="left" valign="top"><simpara>Kernel</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>main</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>spirvMain2()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>MIPS</simpara></entry>
+<entry align="left" valign="top"><simpara>任意</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>__start</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>（等同 <literal>_start</literal>）</simpara></entry>
+</row>
+</tbody>
+</tgroup>
+</informaltable>
+</section>
+<section xml:id="_compile_time_entry_point_logic">
+<title>编译期入口点逻辑</title>
+<literallayout class="monospaced">graph TB
+    Start["comptime 块&lt;br/&gt;(start.zig:28)"]
+    CheckMode["检查 builtin.output_mode"]
+    CheckSimplified["简化逻辑？&lt;br/&gt;(stage2 后端)"]
+
+    CheckLinkC["link_libc 或&lt;br/&gt;object_format == .c?"]
+    CheckWindows["builtin.os == .windows?"]
+    CheckUEFI["builtin.os == .uefi?"]
+    CheckWASI["builtin.os == .wasi?"]
+    CheckWasm["arch.isWasm() 且&lt;br/&gt;os == .freestanding?"]
+
+    ExportMain["@export(&amp;main, 'main')"]
+    ExportWinMain["@export(&amp;WinStartup,&lt;br/&gt;'wWinMainCRTStartup')"]
+    ExportStart["@export(&amp;_start, '_start')"]
+    ExportEfi["@export(&amp;EfiMain, 'EfiMain')"]
+    ExportWasi["@export(&amp;wasi_start,&lt;br/&gt;wasm_start_sym)"]
+    ExportWasmStart["@export(&amp;wasm_freestanding_start,&lt;br/&gt;'_start')"]
+
+    Start --&gt; CheckMode
+    CheckMode --&gt;|".Exe 或 has main"| CheckSimplified
+    CheckSimplified --&gt;|"true"| Simple["简化逻辑&lt;br/&gt;(第33-51行)"]
+    CheckSimplified --&gt;|"false"| CheckLinkC
+
+    CheckLinkC --&gt;|"yes"| ExportMain
+    CheckLinkC --&gt;|"no"| CheckWindows
+    CheckWindows --&gt;|"yes"| ExportWinMain
+    CheckWindows --&gt;|"no"| CheckUEFI
+    CheckUEFI --&gt;|"yes"| ExportEfi
+    CheckUEFI --&gt;|"no"| CheckWASI
+    CheckWASI --&gt;|"yes"| ExportWasi
+    CheckWASI --&gt;|"no"| CheckWasm
+    CheckWasm --&gt;|"yes"| ExportWasmStart
+    CheckWasm --&gt;|"no"| ExportStart</literallayout>
+</section>
+<section xml:id="section-1-sub-a">
+<title>模块与导入</title>
+<simpara>根模块就是你的顶层文件，因此任何你标记为 <literal>pub</literal> 的声明都可立即通过 <literal>@import("root")</literal> 重新导入。再配合 <literal>@import("builtin")</literal> 来检查当前编译器调用所选择的目标，详见 <link xl:href="https://ziglang.org/documentation/master/#Builtin-Functions">#Builtin-Functions</link>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 01__boot-basics.adoc - include::example$chapters-data/code/01__boot-basics/imports.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run imports.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">app: Boot Basics Tour
+optimize mode: Debug
+target: x86_64-linux-gnu</programlisting>
+</para>
+</formalpara>
+<simpara>实际的目标标识取决于你的宿主三元组；关键在于看到 <literal>@tagName</literal> 如何暴露各枚举，以便你后续可以据此分支。</simpara>
+<simpara>由于缓冲的 stdout writer 会批量输出数据，退出前务必调用 <literal>flush()</literal>，以确保终端接收到最后一行。</simpara>
+<tip>
+<simpara>使用 <literal>@import("root")</literal> 来公开配置常量，而不把额外的全局变量烘焙进你的命名空间。</simpara>
+</tip>
+</section>
+<section xml:id="section-1-sub-b">
+<title>入口点与早期错误</title>
+<simpara>Zig 的运行时胶水（<literal>std.start</literal>）会寻找 <literal>pub fn main</literal>，转发命令行状态，并将错误返回视为携带诊断的中止信号。由于 <literal>main</literal> 常常执行 I/O，为其赋予 <literal>!void</literal> 返回类型可以让错误传播保持显式。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 01__boot-basics.adoc - include::example$chapters-data/code/01__boot-basics/entry_point.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run entry_point.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Zig entry point reporting in.</programlisting>
+</para>
+</formalpara>
+<simpara>在发布模式（<literal>zig run -OReleaseFast &#8230;&#8203;</literal>）下，会触发 <literal>ModeError.ReleaseOnly</literal> 分支，警告会在程序继续前浮现，这清晰地展示了 <literal>catch</literal> 如何将错误转换为面向用户的诊断，同时不阻止后续工作。</simpara>
+</section>
+<section xml:id="section-1-sub-b2">
+<title>如何处理 <literal>main()</literal> 的返回类型</title>
+<simpara>Zig 在 <literal>std.start</literal> 中的启动代码会在编译期检查你的 <literal>main()</literal> 返回类型，并生成相应的处理逻辑。这一弹性允许你选择最贴合程序需求的签名——无论是用 <literal>!void</literal> 获得简单的成功/失败语义、用 <literal>u8</literal> 明确退出码，还是用 <literal>noreturn</literal> 表示无限事件循环。<literal>callMain()</literal> 函数负责协调这类分派，确保错误被记录，退出码被正确传播到操作系统。</simpara>
+<section xml:id="_callmain_return_type_handling">
+<title>callMain 返回类型处理</title>
+<simpara><literal>callMain()</literal> 函数会处理用户 <literal>main()</literal> 的不同返回类型签名：</simpara>
+<literallayout class="monospaced">graph TB
+    Start["callMain()"]
+
+    GetRetType["ReturnType = @TypeOf(root.main)&lt;br/&gt;.return_type"]
+
+    CheckType["switch ReturnType"]
+
+    Void["void"]
+    CallVoid["root.main()&lt;br/&gt;return 0"]
+
+    NoReturn["noreturn"]
+    CallNoReturn["return root.main()"]
+
+    U8["u8"]
+    CallU8["return root.main()"]
+
+    ErrorUnion["error union"]
+
+    CheckInner["@TypeOf(result)?"]
+
+    InnerVoid["void"]
+    ReturnZero["return 0"]
+
+    InnerU8["u8"]
+    ReturnResult["return result"]
+
+    Invalid["@compileError"]
+
+    CallCatch["result = root.main()&lt;br/&gt;catch |err|"]
+
+    LogError["记录错误名&lt;br/&gt;与栈回溯&lt;br/&gt;(第707-712行)"]
+
+    ReturnOne["return 1"]
+
+    Start --&gt; GetRetType
+    GetRetType --&gt; CheckType
+    CheckType --&gt; Void
+    CheckType --&gt; NoReturn
+    CheckType --&gt; U8
+    CheckType --&gt; ErrorUnion
+    CheckType --&gt; Invalid
+
+    Void --&gt; CallVoid
+    NoReturn --&gt; CallNoReturn
+    U8 --&gt; CallU8
+
+    ErrorUnion --&gt; CallCatch
+    CallCatch --&gt; CheckInner
+    CallCatch --&gt; LogError
+    LogError --&gt; ReturnOne
+
+    CheckInner --&gt; InnerVoid
+    CheckInner --&gt; InnerU8
+    CheckInner --&gt; Invalid</literallayout>
+<simpara><literal>main()</literal> 的有效返回类型：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>void</literal> —— 返回退出码 0</simpara>
+</listitem>
+<listitem>
+<simpara><literal>noreturn</literal> —— 永不返回（无限循环或显式退出）</simpara>
+</listitem>
+<listitem>
+<simpara><literal>u8</literal> —— 直接返回退出码</simpara>
+</listitem>
+<listitem>
+<simpara><literal>!void</literal> —— 成功返回 0，错误返回 1（记录错误与栈回溯）</simpara>
+</listitem>
+<listitem>
+<simpara><literal>!u8</literal> —— 成功返回退出码，错误返回 1（记录错误与栈回溯）</simpara>
+</listitem>
+</itemizedlist>
+<simpara>示例中使用的 <literal>!void</literal> 提供了最佳平衡：显式错误处理，自动日志记录，并带有合适的退出码。</simpara>
+</section>
+</section>
+<section xml:id="section-1-sub-c">
+<title>命名与作用域预览</title>
+<simpara>变量遵循词法作用域：每个块都会引入一个新区域，你可以在其内遮蔽或扩展绑定；同时 <literal>const</literal> 与 <literal>var</literal> 分别表示不可变与可变，并帮助编译器推理安全性，详见 <link xl:href="https://ziglang.org/documentation/master/#Blocks">#Blocks</link>。Zig 将关于风格与遮蔽的深入讨论留到第38章，但请记住，顶层的审慎命名（通常通过 <literal>pub const</literal>）是跨文件共享配置的惯用方式；见 <link xl:href="https://ziglang.org/documentation/master/#Variables">#Variables</link>。</simpara>
+</section>
+</chapter>
+<chapter xml:id="section-2">
+<title>处理值与构建</title>
+<simpara>拥有入口点后，下一站是数据：数值类型以明确大小的风味出现（<literal>iN</literal>、<literal>uN</literal>、<literal>fN</literal>），字面量会从上下文推断类型，且 Zig 使用调试安全检查来陷阱溢出，除非你选择包裹或饱和运算符。构建模式（<literal>-O</literal> 标志）决定哪些检查保留、编译器的优化力度如何。</simpara>
+<section xml:id="section-2-sub-a">
+<title>优化模式</title>
+<simpara>Zig 提供四种优化模式，以控制代码速度、二进制体积与安全检查之间的权衡：</simpara>
+<informaltable frame="all" rowsep="1" colsep="1">
+<tgroup cols="6">
+<colspec colname="col_1" colwidth="16.6666*"/>
+<colspec colname="col_2" colwidth="16.6666*"/>
+<colspec colname="col_3" colwidth="16.6666*"/>
+<colspec colname="col_4" colwidth="16.6666*"/>
+<colspec colname="col_5" colwidth="16.6666*"/>
+<colspec colname="col_6" colwidth="16.667*"/>
+<thead>
+<row>
+<entry align="left" valign="top">模式</entry>
+<entry align="left" valign="top">优先级</entry>
+<entry align="left" valign="top">安全检查</entry>
+<entry align="left" valign="top">速度</entry>
+<entry align="left" valign="top">二进制体积</entry>
+<entry align="left" valign="top">使用场景</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry align="left" valign="top"><simpara><literal>Debug</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>安全 + 调试信息</simpara></entry>
+<entry align="left" valign="top"><simpara>✓ 全部启用</simpara></entry>
+<entry align="left" valign="top"><simpara>最慢</simpara></entry>
+<entry align="left" valign="top"><simpara>最大</simpara></entry>
+<entry align="left" valign="top"><simpara>开发与调试</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>ReleaseSafe</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>速度 + 安全</simpara></entry>
+<entry align="left" valign="top"><simpara>✓ 全部启用</simpara></entry>
+<entry align="left" valign="top"><simpara>快</simpara></entry>
+<entry align="left" valign="top"><simpara>大</simpara></entry>
+<entry align="left" valign="top"><simpara>带安全的生产环境</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>ReleaseFast</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>最大速度</simpara></entry>
+<entry align="left" valign="top"><simpara>✗ 禁用</simpara></entry>
+<entry align="left" valign="top"><simpara>最快</simpara></entry>
+<entry align="left" valign="top"><simpara>中等</simpara></entry>
+<entry align="left" valign="top"><simpara>性能关键的生产环境</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>ReleaseSmall</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>最小体积</simpara></entry>
+<entry align="left" valign="top"><simpara>✗ 禁用</simpara></entry>
+<entry align="left" valign="top"><simpara>快</simpara></entry>
+<entry align="left" valign="top"><simpara>最小</simpara></entry>
+<entry align="left" valign="top"><simpara>嵌入式、尺寸受限</simpara></entry>
+</row>
+</tbody>
+</tgroup>
+</informaltable>
+<simpara>优化模式通过 <literal>-O</literal> 标志指定，并影响：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>运行时安全检查（溢出、边界检查、空指针检查）</simpara>
+</listitem>
+<listitem>
+<simpara>栈回溯与调试信息生成</simpara>
+</listitem>
+<listitem>
+<simpara>LLVM 优化级别（使用 LLVM 后端时）</simpara>
+</listitem>
+<listitem>
+<simpara>内联启发与代码生成策略</simpara>
+</listitem>
+</itemizedlist>
+<literallayout class="monospaced">graph TB
+    subgraph "优化模式的影响"
+        OptMode["optimize_mode: OptimizeMode"]
+
+        OptMode --&gt; SafetyChecks["运行时安全检查"]
+        OptMode --&gt; DebugInfo["调试信息"]
+        OptMode --&gt; CodegenStrategy["代码生成策略"]
+        OptMode --&gt; LLVMOpt["LLVM 优化级别"]
+
+        SafetyChecks --&gt; Overflow["整数溢出检查"]
+        SafetyChecks --&gt; Bounds["边界检查"]
+        SafetyChecks --&gt; Null["空指针检查"]
+        SafetyChecks --&gt; Unreachable["不可达断言"]
+
+        DebugInfo --&gt; StackTraces["栈回溯"]
+        DebugInfo --&gt; DWARF["DWARF 调试信息"]
+        DebugInfo --&gt; LineInfo["源代码行信息"]
+
+        CodegenStrategy --&gt; Inlining["内联启发"]
+        CodegenStrategy --&gt; Unrolling["循环展开"]
+        CodegenStrategy --&gt; Vectorization["SIMD 向量化"]
+
+        LLVMOpt --&gt; O0["Debug: -O0"]
+        LLVMOpt --&gt; O2Safe["ReleaseSafe: -O2 + 安全"]
+        LLVMOpt --&gt; O3["ReleaseFast: -O3"]
+        LLVMOpt --&gt; Oz["ReleaseSmall: -Oz"]
+    end</literallayout>
+<simpara>本章中我们使用默认的 <literal>Debug</literal> 进行开发，并预览 <literal>ReleaseFast</literal>，以演示优化选择如何影响行为与二进制特征。</simpara>
+</section>
+<section xml:id="workflow-1">
+<title>值、字面量与调试打印</title>
+<simpara><literal>std.debug.print</literal> 写入到 stderr，非常适合早期试验；它可以接受你传入的任何值，从而揭示 <literal>@TypeOf</literal> 等如何对字面量进行反射。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 01__boot-basics.adoc - include::example$chapters-data/code/01__boot-basics/values_and_literals.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run values_and_literals.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">counter=3 ratio=0.5 safety=true
+newline byte=10 (ASCII)
+unit literal has type void</programlisting>
+</para>
+</formalpara>
+<simpara>将 <literal>void {}</literal> 视为一个具有表达力的字面量，表示"无需配置"；同时记住调试打印默认走 stderr，因此不会干扰 stdout 的管道。</simpara>
+</section>
+<section xml:id="workflow-2">
+<title>缓冲 stdout 与构建模式</title>
+<simpara>当你需要确定性的 stdout 且减少系统调用时，借用一个缓冲并在最后统一刷新——特别是在发布配置中吞吐量更重要的场景。下面的示例展示了如何围绕 <literal>std.fs.File.stdout()</literal> 设置一个缓冲 writer，并强调不同构建模式的差异。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 01__boot-basics.adoc - include::example$chapters-data/code/01__boot-basics/buffered_stdout.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe buffered_stdout.zig -OReleaseFast
+$
+$ ./buffered_stdout</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Buffering saves syscalls.
+Flush once at the end.</programlisting>
+</para>
+</formalpara>
+<simpara>使用缓冲 writer 与标准库自身的初始化模板相映成趣，并保持写入的凝聚性；退出前始终刷新，以确保操作系统能够看到你的最终消息。</simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>说明与注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>std.debug.print</literal> 目标为 stderr 并绕过 stdout 缓冲，因此即便在简单工具中也应将其保留用于诊断。</simpara>
+</listitem>
+<listitem>
+<simpara>包裹（<literal>+%</literal>）与饱和（<literal>+|</literal>）算术在你有意跳过溢出陷阱时可用；默认运算符在 Debug 模式仍会 panic，以便尽早捕获错误，详见 <link xl:href="https://ziglang.org/documentation/master/#Operators">#Operators</link>。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.fs.File.stdout().writer(&amp;buffer)</literal> 与 <literal>zig init</literal> 所用模式相呼应，并需要显式 <literal>flush()</literal> 将缓冲字节推下游。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展 <literal>imports.zig</literal>，打印由 <literal>@sizeOf(usize)</literal> 报告的指针大小，并通过在命令行切换 <literal>-Dtarget</literal> 值来比较各目标。</simpara>
+</listitem>
+<listitem>
+<simpara>重构 <literal>entry_point.zig</literal>，让 <literal>requireDebugSafety</literal> 返回一个描述性的错误联合（<literal>error{ReleaseOnly}![]const u8</literal>），并让 <literal>main</literal> 在重新抛出前将该消息写到 stdout。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>-OReleaseSafe</literal> 与 <literal>-OReleaseSmall</literal> 构建 <literal>buffered_stdout.zig</literal>，测量二进制体积，观察优化选择如何影响部署占用。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

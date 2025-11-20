@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>测试与泄漏检测</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>好的测试简短、精确且言简意赅。Zig的<literal>std.testing</literal>通过小巧、可组合的断言（<literal>expect</literal>、<literal>expectEqual</literal>、<literal>expectError</literal>）和默认检测泄漏的内置测试分配器使这变得容易。结合分配失败注入，你可以执行否则难以触发的错误路径，确保你的代码正确且确定性地释放资源；参见<link xl:href="10__allocators-and-memory-management.xml">10</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/testing.zig">testing.zig</link>。</simpara>
+<simpara>本章展示了如何编写表达性测试，如何解释测试运行器的泄漏诊断，以及如何使用<literal>std.testing.checkAllAllocationFailures</literal>来防弹代码对抗<literal>error.OutOfMemory</literal>，而无需编写数百个定制测试；参见<link xl:href="11__project-dynamic-string-builder.xml">11</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/heap.zig">heap.zig</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用<literal>test</literal>块和<literal>std.testing</literal>助手编写专注的单元测试。</simpara>
+</listitem>
+<listitem>
+<simpara>在测试中使用<literal>std.testing.allocator</literal>和<literal>defer</literal>检测和修复内存泄漏；参见<link xl:href="04__errors-resource-cleanup.xml">04</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>std.testing.checkAllAllocationFailures</literal>系统性地测试OOM行为；参见<link xl:href="10__allocators-and-memory-management.xml">10</link>。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="testing-basics">
+<title>使用std.testing进行测试基础</title>
+<simpara>Zig的测试运行器在你传递给<literal>zig test</literal>的任何文件中发现<literal>test</literal>块。断言是返回错误的普通函数，因此它们自然地与<literal>try</literal>/<literal>catch</literal>组合。</simpara>
+<section xml:id="testing-framework-structure">
+<title>std.testing 模块结构</title>
+<simpara>在深入了解具体断言之前，了解 <literal>std.testing</literal> 中可用的完整工具包是很有帮助的。该模块提供三类功能：断言函数、测试分配器和实用工具。</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "std.testing 模块"
+        MAIN["std.testing&lt;br/&gt;(lib/std/testing.zig)"]
+
+        subgraph "断言函数"
+            EXPECT["expect()"]
+            EXPECT_EQ["expectEqual()"]
+            EXPECT_ERR["expectError()"]
+            EXPECT_SLICES["expectEqualSlices()"]
+            EXPECT_STR["expectEqualStrings()"]
+            EXPECT_FMT["expectFmt()"]
+        end
+
+        subgraph "测试分配器"
+            TEST_ALLOC["allocator&lt;br/&gt;(GeneralPurposeAllocator)"]
+            FAIL_ALLOC["failing_allocator&lt;br/&gt;(FailingAllocator)"]
+        end
+
+        subgraph "实用工具"
+            RAND_SEED["random_seed"]
+            TMP_DIR["tmpDir()"]
+            LOG_LEVEL["log_level"]
+        end
+
+        MAIN --&gt; EXPECT
+        MAIN --&gt; EXPECT_EQ
+        MAIN --&gt; EXPECT_ERR
+        MAIN --&gt; EXPECT_SLICES
+        MAIN --&gt; EXPECT_STR
+        MAIN --&gt; EXPECT_FMT
+        MAIN --&gt; TEST_ALLOC
+        MAIN --&gt; FAIL_ALLOC
+        MAIN --&gt; RAND_SEED
+        MAIN --&gt; TMP_DIR
+        MAIN --&gt; LOG_LEVEL
+    end</literallayout>
+<simpara>本章重点介绍核心断言（<literal>expect</literal>、<literal>expectEqual</literal>、<literal>expectError</literal>）和用于泄漏检测的测试分配器。额外的断言函数如 <literal>expectEqualSlices</literal> 和 <literal>expectEqualStrings</literal> 提供专门的比较，而实用工具如 <literal>tmpDir()</literal> 帮助测试文件系统代码；参见 <link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/testing.zig">testing.zig</link>。</simpara>
+</section>
+<section xml:id="testing-basics-expect">
+<title>期望：布尔值、相等性和错误</title>
+<simpara>此示例涵盖布尔断言、值相等性、字符串相等性以及期望被测试函数返回错误。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 13__testing-and-leak-detection.adoc - include::example$chapters-data/code/13__testing-and-leak-detection/basic_tests.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test basic_tests.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 3 tests passed.</programlisting>
+</para>
+</formalpara>
+</section>
+</chapter>
+<chapter xml:id="leak-detection">
+<title>通过构造进行泄漏检测</title>
+<simpara>测试分配器（<literal>std.testing.allocator</literal>）是一个配置为跟踪分配并在测试完成时报告泄漏的 <literal>GeneralPurposeAllocator</literal>。这意味着如果你的测试忘记释放内存，它们就会失败；参见 <link xl:href="10__allocators-and-memory-management.xml">10</link>。</simpara>
+<section xml:id="test-allocator-architecture">
+<title>测试分配器如何工作</title>
+<simpara>测试模块提供两个分配器：用于一般测试并带有泄漏检测的 <literal>allocator</literal>，以及用于模拟分配失败的 <literal>failing_allocator</literal>。了解它们的架构有助于解释它们的不同行为。</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "lib/std/testing.zig 中的测试分配器"
+        ALLOC_INST["allocator_instance&lt;br/&gt;GeneralPurposeAllocator"]
+        ALLOC["allocator&lt;br/&gt;Allocator 接口"]
+
+        BASE_INST["base_allocator_instance&lt;br/&gt;FixedBufferAllocator"]
+        FAIL_INST["failing_allocator_instance&lt;br/&gt;FailingAllocator"]
+        FAIL["failing_allocator&lt;br/&gt;Allocator 接口"]
+
+        ALLOC_INST --&gt;|"allocator()"| ALLOC
+        BASE_INST --&gt;|"提供基础"| FAIL_INST
+        FAIL_INST --&gt;|"allocator()"| FAIL
+    end
+
+    subgraph "测试中的使用"
+        TEST["test 块"]
+        ALLOC_CALL["std.testing.allocator.alloc()"]
+        FAIL_CALL["std.testing.failing_allocator.alloc()"]
+
+        TEST --&gt; ALLOC_CALL
+        TEST --&gt; FAIL_CALL
+    end
+
+    ALLOC --&gt; ALLOC_CALL
+    FAIL --&gt; FAIL_CALL</literallayout>
+<simpara><literal>testing.allocator</literal> 包装了一个配置有堆栈跟踪和泄漏检测的 <literal>GeneralPurposeAllocator</literal>。<literal>failing_allocator</literal> 使用 <literal>FixedBufferAllocator</literal> 作为其基础，然后用失败注入逻辑包装它。两者都暴露标准的 <literal>Allocator</literal> 接口，使它们成为测试中生产分配器的即插即用替代品；参见 <link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/testing.zig">testing.zig</link>。</simpara>
+</section>
+<section xml:id="leak-detection-fail">
+<title>泄漏的样子</title>
+<simpara>下面的测试故意忘记 <literal>free</literal>。运行器报告泄漏的地址、分配调用点的堆栈跟踪，并以非零状态退出。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 13__testing-and-leak-detection.adoc - include::example$chapters-data/code/13__testing-and-leak-detection/leak_demo_fail.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test leak_demo_fail.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">[gpa] (err): memory address 0x… leaked:
+… leak_demo_fail.zig:1:36: … in test.leak detection catches a missing free (leak_demo_fail.zig)
+
+All 1 tests passed.
+1 errors were logged.
+1 tests leaked memory.
+error: the following test command failed with exit code 1:
+…/test --seed=0x…</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>"All N tests passed." 行仅断言测试逻辑；泄漏报告仍然导致整体运行失败。修复泄漏以使测试套件变为绿色。<link xl:href="04__errors-resource-cleanup.xml">04</link></simpara>
+</important>
+</section>
+<section xml:id="leak-detection-fix">
+<title>使用 defer 修复泄漏</title>
+<simpara>在成功分配后立即使用 <literal>defer allocator.free(buf)</literal> 来保证在所有路径上释放。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 13__testing-and-leak-detection.adoc - include::example$chapters-data/code/13__testing-and-leak-detection/leak_demo_fix.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test leak_demo_fix.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<simpara><link xl:href="04__errors-resource-cleanup.xml">04</link>, <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link></simpara>
+</section>
+<section xml:id="leak-detection-flow">
+<title>泄漏检测生命周期</title>
+<simpara>泄漏检测在每个测试结束时自动发生。理解这个时间线有助于解释为什么 <literal>defer</literal> 必须在测试完成前执行，以及为什么即使测试断言通过也会出现泄漏报告。</simpara>
+<literallayout class="monospaced">graph TB
+    TEST_START["测试开始"]
+    ALLOC_MEM["分配内存&lt;br/&gt;const data = try testing.allocator.alloc(T, n);"]
+    USE_MEM["使用内存"]
+    FREE_MEM["释放内存&lt;br/&gt;defer testing.allocator.free(data);"]
+    TEST_END["测试结束&lt;br/&gt;分配器检查泄漏"]
+
+    TEST_START --&gt; ALLOC_MEM
+    ALLOC_MEM --&gt; USE_MEM
+    USE_MEM --&gt; FREE_MEM
+    FREE_MEM --&gt; TEST_END
+
+    LEAK_CHECK["如果泄漏：测试失败&lt;br/&gt;分配堆栈跟踪"]
+    TEST_END -.-&gt;|"内存未释放"| LEAK_CHECK</literallayout>
+<simpara>当测试结束时，<literal>GeneralPurposeAllocator</literal> 验证所有分配的内存是否已被释放。如果任何分配仍然存在，它会打印堆栈跟踪显示泄漏内存被分配的位置（而不是应该被释放的位置）。这种自动检查消除了整个类别的错误，无需手动跟踪。关键是在成功分配后立即放置 <literal>defer allocator.free(&#8230;&#8203;)</literal>，以便它在所有代码路径上执行，包括提前返回和错误传播；参见 <link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/heap.zig">heap.zig</link>。</simpara>
+</section>
+</chapter>
+<chapter xml:id="oom-injection">
+<title>分配失败注入</title>
+<simpara>分配内存的代码即使在分配失败时也必须是正确的。<literal>std.testing.checkAllAllocationFailures</literal> 在每个分配点使用失败分配器重新运行你的函数，验证你清理了部分初始化的状态并正确传播 <literal>error.OutOfMemory</literal>；参见 <link xl:href="10__allocators-and-memory-management.xml">10</link>。</simpara>
+<section xml:id="oom-injection-good">
+<title>系统性地测试OOM安全性</title>
+<simpara>此示例使用 <literal>checkAllAllocationFailures</literal> 和一个执行两次分配并使用 <literal>defer</literal> 释放两者的小函数。该助手在每个分配点模拟失败；只有在没有泄漏发生且 <literal>error.OutOfMemory</literal> 被正确转发时，测试才会通过。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 13__testing-and-leak-detection.adoc - include::example$chapters-data/code/13__testing-and-leak-detection/oom_injection.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test oom_injection.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>在 <literal>checkAllAllocationFailures</literal> 下故意实现的"坏"实现将导致测试运行器记录泄漏的分配并使整体运行失败，即使你 <literal>expectError(error.MemoryLeakDetected, …)</literal>。在教学或调试时，将失败的示例隔离；参见 <link xl:href="10__allocators-and-memory-management.xml">10</link>。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>测试分配器仅在编译测试时可用。尝试在非测试代码中使用它会触发编译错误。</simpara>
+</listitem>
+<listitem>
+<simpara>泄漏检测依赖于确定性释放。优先在分配后立即使用 <literal>defer</literal>；避免跳过释放的隐藏控制流；参见 <link xl:href="04__errors-resource-cleanup.xml">04</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>对于需要大量分配的集成测试，使用竞技场分配器包装以提高速度，但仍通过测试分配器路由最终支持以保持泄漏检查；参见 <link xl:href="10__allocators-and-memory-management.xml">10</link>。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>编写一个函数，从输入字节构建 <literal>std.ArrayList(u8)</literal>，然后清除它。使用 <literal>checkAllAllocationFailures</literal> 验证OOM安全性；参见 <link xl:href="11__project-dynamic-string-builder.xml">11</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>在第一次分配后故意引入提前返回，观察泄漏检测器捕获缺失的 <literal>free</literal>；然后使用 <literal>defer</literal> 修复它。</simpara>
+</listitem>
+<listitem>
+<simpara>为在无效输入时返回错误的函数添加 <literal>expectError</literal> 测试；包括错误路径和成功路径。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>如果你需要运行故意演示泄漏的测试套件，将这些文件与通过的测试分开，以避免CI运行失败。或者，将它们放在构建标志后面，仅在本地选择加入；参见 <link xl:href="20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.xml">20</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>在测试之外，你可以在调试构建中启用 <literal>std.heap.GeneralPurposeAllocator</literal> 泄漏检测以在手动运行中捕获泄漏，但生产构建应禁用昂贵的检查以提高性能。</simpara>
+</listitem>
+<listitem>
+<simpara>分配失败注入对于小型、自包含的助手最有效。对于更高级的工作流，隔离测试关键组件以保持诱导的失败空间可管理；参见 <link xl:href="36__style-and-best-practices.xml">37</link>。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>附录C. 错误处理模式手册</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>第4章介绍了 Zig 的错误联合、<literal>try</literal>与<literal>errdefer</literal>的机制；本附录将这些理念转化为速查手册，供你在设计新 API 或重构现有 API 时参考。每个“菜谱”都强化领域错误词汇与最终呈现给用户的诊断消息之间的联系。</simpara>
+<simpara>Zig 0.15.2 改进了整数转换与分配器失败相关的诊断，使在 Debug 与 ReleaseSafe 构建中依赖精确的错误传播更容易。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>在标准 Zig I/O 失败之上分层特定领域错误集，而不丢失精度。</simpara>
+</listitem>
+<listitem>
+<simpara>用 <literal>errdefer</literal> 保护堆支持的转换，使每个退出路径都配对分配和释放。</simpara>
+</listitem>
+<listitem>
+<simpara>将内部错误联合转换为日志和用户界面的清晰、可操作消息。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>参考文献：见各章节末尾</simpara>
+</chapter>
+<chapter xml:id="layered-error-vocabularies">
+<title>分层错误词汇</title>
+<simpara>当某子系统引入其专有错误条件时，请细化错误词汇，而非将一切都塞进<literal>anyerror</literal>。下述模式将解析失败与模拟 I/O 错误组合为配置特定的联合，使调用方不会混淆<literal>NotFound</literal>与<literal>InvalidPort</literal>。<link xl:href="04__errors-resource-cleanup.xml">4</link> 采用<literal>catch |err| switch</literal>惯用法可确保映射准确，并与<literal>std.fmt.parseInt</literal>呈现解析问题的方式保持一致。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 57__error-handling-patterns-cookbook.adoc - include::example$chapters-data/code/57__error-handling-patterns-cookbook/01_layered_error_sets.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 01_layered_error_sets.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 3 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>将原始错误名称一直保留到你的 API 边界——调用者可以显式分支到 <literal>LoadError.PermissionDenied</literal>，这比字符串匹配或哨兵值更稳健。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</tip>
+</chapter>
+<chapter xml:id="errdefer-patterns">
+<title>用 errdefer 实现均衡清理</title>
+<simpara>字符串组装和 JSON 整形经常分配临时缓冲；当验证步骤失败时忘记释放它们会直接导致泄漏。通过将 <literal>std.ArrayListUnmanaged</literal> 与 <literal>errdefer</literal> 配对，下一个菜谱确保成功和失败路径都正确清理，同时仍返回方便的拥有切片。<link xl:href="13__testing-and-leak-detection.xml">13</link> 这里使用的每个分配辅助函数都在标准库中提供，因此相同结构可扩展到更复杂的构建器。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/array_list.zig">array_list.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 57__error-handling-patterns-cookbook.adoc - include::example$chapters-data/code/57__error-handling-patterns-cookbook/02_errdefer_join_upper.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 02_errdefer_join_upper.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>由于标准测试分配器会自动抓到泄漏，同时覆盖成功与错误分支可兼作后续编辑的回归保障。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</note>
+</chapter>
+<chapter xml:id="reporting-bridges">
+<title>为用户翻译错误</title>
+<simpara>即使最精心制作的错误集也需要以富有同理心的语言呈现。最后一个模式演示如何为程序化调用者保持原始 <literal>ApiError</literal>，同时为日志或 UI 文本生成人类可读的叙述。<link xl:href="36__style-and-best-practices.xml">36</link> <literal>std.io.fixedBufferStream</literal> 使输出对测试具有确定性，专用格式化器将消息传递与控制流隔离。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/log.zig">log.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 57__error-handling-patterns-cookbook.adoc - include::example$chapters-data/code/57__error-handling-patterns-cookbook/03_error_reporting_bridge.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 03_error_reporting_bridge.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>保持桥接函数纯净——它只应依赖于错误有效负载和写入器——以便消费者可以交换日志后端或在测试期间在内存中捕获诊断。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</tip>
+</chapter>
+<chapter xml:id="patterns">
+<title>随手可用的模式</title>
+<itemizedlist>
+<listitem>
+<simpara>将低级错误逐字冒泡到最后一个负责边界，然后在一个地方转换它们以保持不变量明显。<link xl:href="04__errors-resource-cleanup.xml">4</link></simpara>
+</listitem>
+<listitem>
+<simpara>将 <literal>errdefer</literal> 视为握手：每个分配或文件打开都应在同一作用域内有匹配的清理。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs.zig">fs.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>为每个公共错误联合提供专用格式化器，使文档和用户消息永不偏离。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>使用 <literal>||</literal> 合并错误集会保留标签但不保留有效负载数据；若你需要结构化有效负载，应转向带标签的联合体。</simpara>
+</listitem>
+<listitem>
+<simpara>分配器支持的辅助函数应直接暴露 <literal>std.mem.Allocator.Error</literal>——调用者期望像标准库容器一样 <literal>try</literal> 分配。</simpara>
+</listitem>
+<listitem>
+<simpara>此处“菜谱”假定在 debug 或 release-safe 构建下使用；在 release-fast 下，你可能需要为本应触发<literal>unreachable</literal>的分支添加额外日志。<link xl:href="37__illegal-behavior-and-safety-modes.xml">37</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展 <literal>loadPort</literal> 使其返回包含主机和端口的结构化配置对象，然后枚举生成的复合错误集。<link xl:href="04__errors-resource-cleanup.xml">4</link></simpara>
+</listitem>
+<listitem>
+<simpara>添加 <literal>joinUpperSnippets</literal> 的流式变体，写入用户提供的写入器而非分配，并比较其人体工程学。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io.zig">Io.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>教导 <literal>runAndReport</literal> 通过注入格式化器回调在记录前脱敏标识符——用单元测试验证成功和失败路径都尊重钩子。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>对于长期运行的服务，考虑用指数退避和抖动包装重试循环；第 29 章重新讨论了并发含义。<link xl:href="29__threads-and-atomics.xml">29</link></simpara>
+</listitem>
+<listitem>
+<simpara>若你的错误桥需要本地化，将消息ID与错误标签一起存储，并让更高层格式化最终字符串。</simpara>
+</listitem>
+<listitem>
+<simpara>Embedded targets with tiny allocators may prefer stack-based buffers or fixed <literal>std.BoundedArray</literal> instances over heap-backed arrays to avoid <literal>OutOfMemory</literal>.<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

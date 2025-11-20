@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>引言</title>
+<subtitle>旅程开始</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<preface>
+<title></title>
+<blockquote>
+<attribution>
+Edsger W. Dijkstra
+</attribution>
+<simpara>抽象的目的不是含糊其辞，而是创建一个新的语义层次，在其中人们可以做到绝对精确。</simpara>
+</blockquote>
+</preface>
+<chapter xml:id="welcome">
+<title>欢迎来到Zig</title>
+<simpara>大多数编程语言都会向你隐藏复杂性——它们抽象掉内存管理，用隐式操作掩盖控制流，并将你与底层机器隔离开来。起初这感觉很简便，但最终你会遇到瓶颈。你需要理解<emphasis role="strong">为什么</emphasis>某些东西很慢，<emphasis role="strong">在哪里</emphasis>发生了崩溃，或者<emphasis role="strong">如何</emphasis>从硬件中榨取每一分性能。突然间，那些帮助你入门的抽象现在反而成了障碍。</simpara>
+<simpara>Zig选择了不同的道路。它揭示复杂性——然后给你掌握它的工具。</simpara>
+<simpara>本书将带你从<literal>Hello, world!</literal>开始，直到构建能够交叉编译到任何平台、以手术精度管理内存并在编译时生成代码的系统。你不仅将学习<emphasis role="strong">如何</emphasis>使用Zig，还将理解<emphasis role="strong">为什么</emphasis>它以这种方式工作。每一次分配都将显式可见。每一条控制路径都将清晰可见。每一个抽象都将精确而非模糊。</simpara>
+<simpara>在完成这六十一章的学习后，你将不仅仅是了解Zig。你将在系统编程层面达到一种境界，让其他语言感觉像是在向你隐藏某些东西。因为它们确实如此。</simpara>
+<simpara>这段旅程从简单开始——那种你在第一天遇到的简单。到最后，你将发现一种不同的简单：那种通过攀登复杂性并在另一端带着完全理解而获得的简单。</simpara>
+<simpara>欢迎来到Zigbook。你的转变现在开始。</simpara>
+</chapter>
+<chapter xml:id="what-youll-become">
+<title>你将变成什么样</title>
+<simpara>学习Zig不仅仅是往简历上添加一门语言。它是关于从根本上改变你对软件的思考方式。</simpara>
+<simpara>当你完成本书时，你将能够：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">完全理解你的程序。</emphasis>你将知道内存中每个字节的位置，编译器何时执行你的代码，以及你的抽象编译成什么机器指令。没有隐藏的分配。没有神秘的性能开销。没有意外。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">控制整个技术栈。</emphasis>从裸机嵌入式系统到浏览器中的WebAssembly，从内核模块到网络服务——你将拥有一个工具链，一门语言，并完全控制你的代码在任何地方的运行方式。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">自信地调试。</emphasis>当出现问题时，你不会猜测。你将读取堆栈跟踪，检查内存布局，验证分配器行为，并使用构建Zig编译器本身的相同工具来精确定位问题。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">构建可靠的系统。</emphasis>通过显式错误处理、资源清理保证以及在开发期间捕获错误而不牺牲发布性能的安全模式，你将交付可以信任的代码。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">为未来做贡献。</emphasis>Zig年轻、不断发展，并且渴望贡献者。你将拥有基础来提出功能、修复错误、编写库，并帮助塑造一门重视清晰度和正确性的语言。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>你将变成这样的开发者：看着垃圾收集器并思考"我能做得更好"。毫无畏惧地阅读汇编语言。无需安装单独工具链就能交叉编译到新架构。不仅理解<emphasis role="strong">什么</emphasis>有效，还理解<emphasis role="strong">为什么</emphasis>有效。</simpara>
+<simpara>这不是关于记忆语法。这是关于获得精通。</simpara>
+</chapter>
+<chapter xml:id="what-is-the-zigbook">
+<title>关于本书</title>
+<important>
+<simpara>Zigbook特意<emphasis role="strong">不包含</emphasis>AI生成的内容——它是手工编写、精心策划并持续更新的，以反映最新的语言特性和最佳实践。</simpara>
+</important>
+<simpara><emphasis role="strong">作者简短说明：</emphasis></simpara>
+<blockquote>
+<attribution>
+<link xl:href="https://github.com/zigbook">@zigbook</link>
+</attribution>
+<simpara>你好，读者！</simpara>
+<simpara>感谢你选择Zigbook作为学习Zig的指南。我正式邀请Zig社区为Zigbook做贡献。无论你发现拼写错误、想要改进解释，还是有更好的方式来演示概念，你的贡献都将帮助所有从本书学习的人。</simpara>
+<simpara>你可以通过在此处<link xl:href="https://github.com/zigbook/zigbook">提交问题或拉取请求</link>来贡献。</simpara>
+<simpara><emphasis role="strong">请注意：</emphasis>我会亲自审查每个提交，以确保准确性和清晰度。我们可以一起让这个资源对未来的Zig开发者更好。</simpara>
+</blockquote>
+<simpara>Zigbook最初由<link xl:href="https://github.com/zigbook">@zigbook</link>编写，他是一位经验丰富的系统程序员和Zig社区成员，目的是填补现有资源的空白，并与他人分享这些知识。</simpara>
+<simpara>它已经发展成一份全面的Zig编程语言指南，结构化为从基础到高级系统编程的旅程。它专为那些想要<emphasis role="strong">理解</emphasis>而不仅仅是使用的开发者设计；他们重视透明度胜过魔法，重视精确度胜过便利性。</simpara>
+<tip>
+<simpara>Zigbook通过提供深入的解释、实际项目和精心策划的学习路径来补充官方文档。当语言参考告诉你<emphasis role="strong">什么</emphasis>功能时，本书向你展示<emphasis role="strong">何时</emphasis>使用它，<emphasis role="strong">为什么</emphasis>它重要，以及<emphasis role="strong">如何</emphasis>将其融入实际代码。</simpara>
+</tip>
+<simpara><emphasis role="strong">结构：</emphasis>Zigbook组织成七个部分，交替安排概念章节（教学）和项目章节（应用）。早期章节有意推迟深入探讨，直到你有了理解它们的基础。后期章节假设你已经内化了早期材料。这是一条路径，而不是参考手册：第一次阅读时按顺序阅读，然后将其用作参考。</simpara>
+<simpara><emphasis role="strong">先决条件：</emphasis>你应该至少熟悉一门编程语言和基本的命令行操作。有C、C++或Rust的经验将帮助你进行比较，但不是必需的。如果你愿意深入参与概念，Zig可以是你的第一门系统语言。</simpara>
+</chapter>
+<chapter xml:id="what-is-zig">
+<title>什么是Zig？</title>
+<simpara>Zig是一门系统编程语言，专为需要完全控制、效率和简单性而不牺牲安全性或性能的开发者设计。它将自己定位为"无意外"工具链：每条控制路径、每次分配和每个优化决策都是你可以追踪、修改或选择退出的。</simpara>
+<simpara>Zig反映了C语言的直接性，同时加入了现代标准库、更好的编译时保证和一流交叉编译支持。该语言有意避免"魔法"特性——没有隐藏的控制流，没有垃圾收集器，没有强制运行时——因此你可以审计二进制文件并准确理解你的代码编译成什么。</simpara>
+<section xml:id="_core_philosophy">
+<title>核心哲学</title>
+<simpara>Zig的使命围绕清晰度和机械同情心展开。编译器信任你做出正确决策，同时在开发期间提供安全网。调试构建捕获溢出、释放后使用和其他错误。发布构建移除这些检查以获得最大性能。你通过构建模式明确选择权衡，而不是通过语言级妥协。</simpara>
+<simpara>标准库采用直接的构建块：文件作为模块，显式分配器和类型化错误。新手可以在不记忆庞大框架的情况下推理代码。这种简单性扩展到工具——<literal>zig build</literal>、<literal>zig test</literal>和<literal>zig run</literal>处理大多数工作流，而<literal>build.zig</literal>脚本只是Zig代码，不是单独的配置语言。<link xl:href="22__build-system-deep-dive.xml">22</link></simpara>
+</section>
+<section xml:id="_how_zig_compares">
+<title>Zig与其他语言的比较</title>
+<simpara><emphasis role="strong">Zig与C：</emphasis>Zig尊重C的"你负责"哲学，同时移除未定义行为的陷阱。检查算术、标记联合、可选值和显式错误处理取代了C的静默失败。你获得相同级别的控制，但使用现代语法和更好的诊断。</simpara>
+<simpara><emphasis role="strong">Zig与Rust：</emphasis>Rust通过在编译时进行借用检查来强制执行安全性，而Zig提供手动控制，带有可选的运行时检查。你决定何时生命周期重要，何时性能胜过静态强制执行。Zig的学习曲线更平缓——需要掌握的语言特性更少，尽管你承担更多责任。<link xl:href="17__generic-apis-and-type-erasure.xml">17</link></simpara>
+<simpara><emphasis role="strong">Zig与Go/Python：</emphasis>与垃圾收集语言相比，Zig给你对内存和性能的细粒度控制。它的简单性和显式分配器使其成为嵌入式系统、内核和性能关键路径的理想选择。但Zig的范围超越了传统系统编程——开发者将其用于CLI工具、游戏开发、WebAssembly模块和高性能网络服务。<link xl:href="41__cross-compilation-and-wasm.xml">41</link></simpara>
+<simpara>Zig不试图成为所有人的一切。它选择透明度胜过便利性，显式性胜过推断，理解胜过抽象。如果你重视确切知道你的代码在做什么，Zig就是你的语言。</simpara>
+</section>
+</chapter>
+<chapter xml:id="key-capabilities">
+<title>Zig提供给你的能力</title>
+<simpara>四个能力定义了Zig体验，并在本书中贯穿出现：<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+<orderedlist numeration="arabic">
+<listitem>
+<simpara><emphasis role="strong">没有隐藏的控制流。</emphasis>编译器从不注入分配器、goroutine或隐式析构函数。机器代码直接对应你编写的内容。当你阅读Zig时，你确切知道什么将执行。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">带防护栏的手动内存管理。</emphasis>分配器API是一等参数，不是隐藏的运行时机制。调试和ReleaseSafe模式在开发期间捕获双重释放、释放后使用和缓冲区溢出。ReleaseFast为生产移除这些检查。你控制权衡。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">编译时执行。</emphasis>任何函数都可以在<literal>comptime</literal>运行，将编译器变成元编程引擎。生成查找表、验证模式或定制泛型API，所有这些都在二进制文件发布之前完成。零运行时成本，完全语言访问。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">轻松的交叉编译。</emphasis>捆绑的工具链通过单个命令定位数十个操作系统/架构对。没有单独的工具链，没有交叉编译SDK，没有配置文件——只需<literal>-target</literal>即可开始。<link xl:href="41__cross-compilation-and-wasm.xml">41</link></simpara>
+</listitem>
+</orderedlist>
+<simpara>这些不是营销幻灯片上的要点——它们是塑造你编写、调试和部署Zig代码方式的原则。你将在每一章中遇到它们，从<literal>Hello, world!</literal>到构建你自己的分配器。</simpara>
+</chapter>
+<chapter xml:id="getting-started">
+<title>快速开始</title>
+<simpara>从下载到执行Zig代码只需要几个步骤。本书的其他内容都假设你的<literal>PATH</literal>中有工具链。官方<link xl:href="https://ziglang.org/download/">下载页面</link>提供Linux、macOS和Windows的发布二进制文件。像Homebrew这样的包管理器和流行的Linux发行版跟踪最新的稳定版本，但直接获取tarball或zip可以保证与本书示例的版本一致性。解压后，确认你的安装：</simpara>
+<programlisting language="shell" linenumbering="unnumbered">$ zig version
+0.15.X</programlisting>
+<caution>
+<simpara>如果<literal>zig version</literal>报告较早的版本，请重新访问下载步骤，以便后续章节中的示例与<link xl:href="https://ziglang.org/download/0.15.0/release-notes.html">v0.15.2+</link>中引入的安全模式行为保持一致。</simpara>
+</caution>
+<section xml:id="getting-started-first-program">
+<title>你的第一个程序</title>
+<simpara>编译并运行你的第一个<literal>main</literal>函数，以验证工具链和标准库按预期工作。创建一个名为<literal>hello_world.zig</literal>的文件，内容如下：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 00__zigbook_introduction.adoc - include::example$chapters-data/code/00__zigbook-introduction/hello_world.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run hello_world.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Hello, world!</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>std.debug.print</literal>写入stderr。当你关心输出通道和系统调用时，第1章探讨缓冲的stdout写入器。<link xl:href="01__boot-basics.xml">1</link></simpara>
+</note>
+</section>
+<section xml:id="getting-started-runner">
+<title>探索工具表面</title>
+<simpara>即使这个最小示例也展示了Zig统一的工具故事：相同的<literal>zig run</literal>命令处理编译、链接和执行，而<literal>zig test</literal>和<literal>zig build</literal>在不改变语言的情况下扩展工作流。<link xl:href="22__build-system-deep-dive.xml">22</link>将你的代码保存在<literal>main.zig</literal>或你传递给CLI的任何文件名中；根模块就是你调用的任何文件。</simpara>
+</section>
+</chapter>
+<chapter xml:id="interactive-example">
+<title>交互式循环</title>
+<simpara>一旦"Hello, world!"工作正常，将程序扩展为一个简单循环，以见证Zig的显式控制流和格式化语法，如<link xl:href="https://ziglang.org/documentation/master/#while">#While</link>中所述。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 00__zigbook_introduction.adoc - include::example$chapters-data/code/00__zigbook-introduction/squares_demo.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run squares_demo.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">1 squared is 1
+2 squared is 4
+3 squared is 9
+4 squared is 16
+5 squared is 25
+6 squared is 36
+7 squared is 49
+8 squared is 64
+9 squared is 81
+10 squared is 100</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>Zig的<literal>while</literal>循环允许内联递增子句，<literal>while (cond) : (update)</literal>，使得在不引入隐藏迭代器的情况下轻松移植C风格循环。</simpara>
+</tip>
+</chapter>
+<chapter xml:id="the-path-ahead">
+<title>前方的道路</title>
+<simpara>你现在有了一个可工作的Zig工具链和两个小程序。这是基础。接下来的一切都建立在这个时刻之上——你第一次编译Zig代码并看到它运行的时刻。</simpara>
+<simpara><link xl:href="01__boot-basics.xml">下一章</link>介绍Zig如何将源文件视为模块，入口点如何传播错误，以及构建模式如何将相同的代码转换为不同的安全性和性能配置文件。你将学习到<literal>main</literal>不是魔法：它由<literal>std.start</literal>发现，如果需要，你可以绕过它。</simpara>
+<simpara>到<link xl:href="61__the-simplicity-you-earned.xml">第61章</link>时，你将不仅仅是了解Zig；你将深入理解它，足以教导他人，为生态系统做贡献，并构建反映你完全掌握的系统。</simpara>
+<simpara>这段旅程从简单开始。它以不同的简单结束：那种通过理解而获得的简单。</simpara>
+<simpara><emphasis role="strong">你的转变现在开始。翻开下一页。</emphasis></simpara>
+</chapter>
+</book>

@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>附录D. 将 C/Rust 惯用法映射为 Zig 结构</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>C 与 Rust 形成了许多 Zig 开发者带来的心智模型：手动<literal>malloc</literal>/<literal>free</literal>、RAII 析构、<literal>Option&lt;T&gt;</literal>、<literal>Result&lt;T, E&gt;</literal>与 trait 对象。本附录将这些习惯转换为地道的 Zig，以便你无需与语言“搏斗”就能移植真实代码库。</simpara>
+<simpara>Zig 收紧的指针对齐规则（<literal>@alignCast</literal>）与更好的分配器诊断在包装外部 API 时频繁出现。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>用 <literal>defer</literal>/<literal>errdefer</literal> 交换手动资源清理，同时保留你从 C 期望的控制。</simpara>
+</listitem>
+<listitem>
+<simpara>以可组合的方式用 Zig 可选值和错误联合表达受 Rust 启发的 <literal>Option</literal>/<literal>Result</literal> 逻辑。</simpara>
+</listitem>
+<listitem>
+<simpara>将基于回调或 trait 的多态性适配到 Zig 的 <literal>comptime</literal> 泛型和指针垫片。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="c-resource-lifetimes">
+<title>翻译 C 的资源生命周期</title>
+<simpara>C 程序员习惯性地将每个 <literal>malloc</literal> 与匹配的 <literal>free</literal> 配对。Zig 让你用 <literal>errdefer</literal> 和结构化错误集编码相同意图，使缓冲即使在验证失败时也从不泄漏。<link xl:href="04__errors-resource-cleanup.xml">4</link> 下面的示例对比了直接翻译与 Zig 优先的自动释放内存辅助函数，突出显示分配器错误如何与域错误组合。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 58__mapping-c-rust-idioms.adoc - include::example$chapters-data/code/58__mapping-c-rust-idioms/01_c_style_cleanup.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 01_c_style_cleanup.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>显式的<literal>NormalizeError</literal>联合同时跟踪分配器失败与校验失败，这一模式在<link xl:href="10__allocators-and-memory-management.xml">第 10 章的分配器巡礼</link>中被广泛推荐。</simpara>
+</tip>
+</chapter>
+<chapter xml:id="rust-option-result">
+<title>映射 Rust 的 Option 与 Result 类型</title>
+<simpara>Rust&#8217;s <literal>Option&lt;T&gt;</literal> maps cleanly to Zig&#8217;s <literal>?T</literal>, while <literal>Result&lt;T, E&gt;</literal> becomes an error union (<literal>E!T</literal>) with rich tags instead of stringly typed messages. <link xl:href="04__errors-resource-cleanup.xml">4</link> This recipe pulls a configuration value from newline-separated text, first with an optional search and then with a domain-specific error union that converts parsing failures into caller-friendly diagnostics. <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 58__mapping-c-rust-idioms.adoc - include::example$chapters-data/code/58__mapping-c-rust-idioms/02_rust_option_result.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 02_rust_option_result.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>由于 Zig 将“是否存在”的发现与错误传播分离，你可以复用<literal>findPortLine</literal>进行快速路径检查，同时让<literal>parsePort</literal>处理较慢且可能失败的工作——这对应于 Rust 将<literal>Option::map</literal>与<literal>Result::map_err</literal>分开的惯例。<link xl:href="17__generic-apis-and-type-erasure.xml">17</link></simpara>
+</note>
+</chapter>
+<chapter xml:id="callback-bridges">
+<title>桥接 Trait 与函数指针</title>
+<simpara>C 和 Rust 都依赖回调——带有上下文有效负载的原始函数指针或带有显式 <literal>self</literal> 参数的 trait 对象。Zig 用 <literal>*anyopaque</literal> 垫片加上 <literal>comptime</literal> 适配器建模相同的抽象，因此你可以保持类型安全和零成本间接寻址。<link xl:href="33__c-interop-import-export-abi.xml">33</link> 下面的示例展示了一个 C 风格回调和一个类似 trait 的 <literal>handle</literal> 方法，通过相同的传统桥接复用，依赖于 Zig 的指针转换和对齐断言。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 58__mapping-c-rust-idioms.adoc - include::example$chapters-data/code/58__mapping-c-rust-idioms/03_callback_bridge.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 03_callback_bridge.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>额外的<literal>@alignCast</literal>调用反映了 0.15.2 的“地雷”——指针转换现在会断言对齐，因此在包装来自 C 库的<literal>*anyopaque</literal>句柄时请保留这些断言。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+</tip>
+</chapter>
+<chapter xml:id="patterns">
+<title>随手可用的模式</title>
+<itemizedlist>
+<listitem>
+<simpara>用 <literal>errdefer</literal> 将分配器清理保持在局部，同时暴露类型化结果，使 C 端口保持无泄漏，而无需扩展的 <literal>goto</literal> 块。<link xl:href="04__errors-resource-cleanup.xml">4</link></simpara>
+</listitem>
+<listitem>
+<simpara>尽早将外部枚举转换为 Zig 错误联合，然后在你的模块边界重新导出专注的错误集。<link xl:href="57__error-handling-patterns-cookbook.xml">57</link></simpara>
+</listitem>
+<listitem>
+<simpara>用暴露小接口的 <literal>comptime</literal> 结构体（<literal>handle</literal>、<literal>format</literal> 等）实现 trait 风格行为，让优化器内联调用点。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>手动分配辅助函数应显式暴露 <literal>std.mem.Allocator.Error</literal>，使调用者能够透明地继续传播失败。</simpara>
+</listitem>
+<listitem>
+<simpara>移植依赖 drop 语义的 Rust crate 时，请审查每个分支的<literal>return</literal>与<literal>break</literal>表达式——Zig 不会自动调用析构。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+<listitem>
+<simpara>函数指针垫片必须遵守调用约定；若 C API 期望 <literal>extern fn</literal>，请在发布前相应地为你的垫片添加注释。<link xl:href="33__c-interop-import-export-abi.xml">33</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展规范化辅助函数以接受下划线，方法是将它们转换为连字符，并添加涵盖成功和失败情况的测试。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+<listitem>
+<simpara>修改 <literal>parsePort</literal> 以返回包含主机和端口的结构体，然后记录组合错误联合如何扩展。<link xl:href="57__error-handling-patterns-cookbook.xml">57</link></simpara>
+</listitem>
+<listitem>
+<simpara>泛化 <literal>dispatchWithContext</literal> 使其接受处理器的编译期列表，镜像 Rust 的 trait 对象虚表。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>一些 C 库期望你使用其自定义函数分配——将这些分配器包装在实现 <literal>std.mem.Allocator</literal> 接口的垫片中，使你其余的 Zig 代码保持一致。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+<listitem>
+<simpara>移植持有堆数据的 Rust<literal>Option&lt;T&gt;</literal>时，可考虑返回“切片 + 长度哨兵”，而非复制所有权语义。<link xl:href="03__data-fundamentals.xml">3</link></simpara>
+</listitem>
+<listitem>
+<simpara>若你的回调桥跨越线程，请在改变共享状态前添加第 29 章的同步原语。<link xl:href="29__threads-and-atomics.xml">29</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

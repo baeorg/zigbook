@@ -1,0 +1,352 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>模块解析与发现（深入概念）</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>本章聚焦于包注册模块<emphasis role="strong">之后</emphasis>发生的事情——名称如何成为具体导入、编译器何时打开文件以及哪些钩子控制发现（参见<link xl:href="https://github.com/ziglang/zig/blob/master/lib/compiler/build_runner.zig">build_runner.zig</link>）。我们将建模模块图，阐明文件系统路径和注册命名空间之间的区别，并展示如何保护可选助手而无需散布脆弱的<literal>#ifdef</literal>样式逻辑。</simpara>
+<simpara>在此过程中，我们将探索编译时导入、测试特定发现以及使用<literal>@hasDecl</literal>的安全探测，强化Zig 0.15.2中引入的writer API更改，使每个示例都成为正确stdout用法的参考（参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#">v0.15.2</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/File.zig">File.zig</link>）。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>跟踪构建运行器如何将注册的模块名称扩展为依赖感知的模块图。<link xl:href="24__zig-package-manager-deep.xml">24</link></simpara>
+</listitem>
+<listitem>
+<simpara>区分文件系统相对导入和构建注册模块，并预测在模糊情况下哪个会获胜（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build.zig">Build.zig</link>和<link xl:href="22__build-system-deep-dive.xml">22</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>识别触发模块发现的每个机制：直接导入、<literal>comptime</literal>块、<literal>test</literal>声明、导出和入口点探测（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/start.zig">start.zig</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/testing.zig">testing.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>应用编译时防护，使可选工具从发布构件中消失，同时保持调试构建的丰富检测（参见<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>@hasDecl</literal>和相关反射助手来检测能力，而不依赖有损的字符串比较或未经检查的假设（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig">meta.zig</link>和<link xl:href="15__comptime-and-reflection.xml">15</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>记录和测试发现策略，以便协作者理解构建图何时会包含额外模块。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="module-graph-mapping">
+<title>模块图映射</title>
+<simpara>编译器将每个翻译单元转换为类似结构体的命名空间。导入对应于该图中的边，构建运行器为其提供预注册命名空间列表，因此即使磁盘上不存在具有该名称的文件，模块也能确定性解析。</simpara>
+<simpara>在底层，这些命名空间与内部池、文件和分析工作队列一起存在于<literal>Zcu</literal>编译状态中：</simpara>
+<literallayout class="monospaced">graph TB
+	ZCU["Zcu"]
+
+	subgraph "Compilation State"
+		INTERNPOOL["intern_pool: InternPool"]
+		FILES["files: MultiArrayList(File)"]
+		NAMESPACES["namespaces: MultiArrayList(Namespace)"]
+	end
+
+	subgraph "Source Tracking"
+		ASTGEN["astgen_work_queue"]
+		SEMA["sema_work_queue"]
+		CODEGEN["codegen_work_queue"]
+	end
+
+	subgraph "Threading"
+		WORKERS["comp.thread_pool"]
+		PERTHREAD["per_thread: []PerThread"]
+	end
+
+	subgraph "Symbol Management"
+		NAVS["Navigation Values (Navs)"]
+		UAVS["Unbound Anon Values (Uavs)"]
+		EXPORTS["single_exports / multi_exports"]
+	end
+
+	ZCU --&gt; INTERNPOOL
+	ZCU --&gt; FILES
+	ZCU --&gt; NAMESPACES
+	ZCU --&gt; ASTGEN
+	ZCU --&gt; SEMA
+	ZCU --&gt; CODEGEN
+	ZCU --&gt; WORKERS
+	ZCU --&gt; PERTHREAD
+	ZCU --&gt; NAVS
+	ZCU --&gt; UAVS
+	ZCU --&gt; EXPORTS</literallayout>
+<simpara>模块解析在评估<literal>@import</literal>边时遍历此命名空间图，使用与增量编译和符号解析相同的<literal>Zcu</literal>和<literal>InternPool</literal>机制。</simpara>
+<section xml:id="root-std-builtin">
+<title>Root, <literal>std</literal>, and <literal>builtin</literal> namespaces</title>
+<simpara>根模块是编译器视为入口点的任何文件。从该根模块，你可以通过<literal>@import("root")</literal>检查自身，通过<literal>@import("std")</literal>访问捆绑的标准库，并通过<literal>@import("builtin")</literal>访问编译器提供的元数据。以下探测打印每个命名空间暴露的内容，并演示基于文件系统的导入（<literal>extras.zig</literal>）参与相同的图。<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 25__module-resolution-and-discovery-deep.adoc - include::example$chapters-data/code/25__module-resolution-and-discovery-deep/01_root_namespace.zig[]</programlisting>
+<formalpara><title>Run</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 01_root_namespace.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">root has main(): true
+root has helperSymbol(): true
+std namespace type: type
+current build mode: Debug
+extras.greet(): extras namespace discovered via file path</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>对<literal>std.fs.File.stdout().writer(&amp;buffer)</literal>的调用反映了0.15.2的writer API：我们缓冲、打印和刷新以避免截断输出，同时保持无分配器。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+</note>
+</section>
+<section xml:id="name-registration">
+<title>Names registered by the 构建图</title>
+<simpara>当你调用<literal>b.createModule</literal>或<literal>exe.addModule</literal>时，你注册一个<emphasis role="strong">命名空间名称</emphasis>（例如<literal>"logging"</literal>）和一个根源文件。该构建图中的任何<literal>@import("logging")</literal>都指向已注册的模块，即使<literal>logging.zig</literal>文件位于调用者旁边。只有当找不到已注册的命名空间时，编译器才会回退到相对于导入文件的基于路径的解析。这就是通过<literal>build.zig.zon</literal>获取的依赖项如何暴露其模块的方式：构建脚本在用户代码执行之前很久就构建了图。<link xl:href="24__zig-package-manager-deep.xml">24</link></simpara>
+<simpara>编译器强制要求给定文件恰好属于一个模块。编译错误测试套件包含一个情况，其中同一文件既作为已注册模块又作为直接文件路径导入，这会被拒绝：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">const case = ctx.obj("file in multiple modules", b.graph.host);
+case.addDepModule("foo", "foo.zig");
+
+case.addError(
+	\\comptime {
+	\\    _ = @import("foo");
+	\\    _ = @import("foo.zig");
+	\\}
+, &amp;[_][]const u8{
+	":1:1: error: file exists in modules 'foo' and 'root'",
+	":1:1: note: files must belong to only one module",
+	":1:1: note: file is the root of module 'foo'",
+	":3:17: note: file is imported here by the root of module 'root'",
+});</programlisting>
+<simpara>这演示了一个文件可以是已注册模块的根，也可以通过基于路径的导入成为根模块的一部分，但不能同时两者兼得。</simpara>
+</section>
+</chapter>
+<chapter xml:id="discovery-triggers">
+<title>发现触发器和时机</title>
+<simpara>模块发现从导入字符串在编译时已知的那一刻开始。编译器以波的形式解析依赖图，一旦在<literal>comptime</literal>上下文中评估导入，就排队新模块。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+<section xml:id="comptime-imports">
+<title>导入、<literal>comptime</literal>和评估顺序</title>
+<simpara><literal>comptime</literal>块在语义分析期间运行。如果它包含<literal>_ = @import("tooling.zig");</literal>，构建运行器会立即解析和解析该模块——即使运行时从不引用它。使用显式策略（标志、优化模式或构建选项），使此类导入可预测而非令人惊讶。</simpara>
+<tip>
+<simpara>抵制在<literal>@import</literal>内联字符串连接的诱惑；Zig无论如何都需要导入目标是编译时已知的字符串，因此首选记录意图的单个常量。</simpara>
+</tip>
+</section>
+<section xml:id="tests-and-entries">
+<title>测试、导出和入口探测</title>
+<simpara><literal>test</literal>块和<literal>pub export</literal>声明也会触发发现。当你运行<literal>zig test</literal>时，编译器导入每个包含测试的模块，注入一个合成主函数，并调用<literal>std.testing</literal>测试框架助手。类似地，<literal>std.start</literal>检查根模块的<literal>main</literal>、<literal>_start</literal>和平台特定的入口点，沿途拉入这些声明引用的任何模块。这就是为什么即使是休眠的测试助手也必须位于<literal>comptime</literal>防护之后；否则它们会仅仅因为存在<literal>test</literal>声明而泄漏到生产构件中。<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link></simpara>
+<simpara><emphasis>在Zig编译器自身的构建中，从测试声明通过<literal>std.testing</literal>到测试运行器和<literal>zig test</literal>命令的路径如下所示：</emphasis></simpara>
+<literallayout class="monospaced">graph TB
+	subgraph "Test Declaration Layer"
+		TESTDECL["test declarations&lt;br/&gt;test keyword"]
+		DOCTEST["doctests&lt;br/&gt;named tests"]
+		ANON["anonymous tests&lt;br/&gt;unnamed tests"]
+
+		TESTDECL --&gt; DOCTEST
+		TESTDECL --&gt; ANON
+	end
+
+	subgraph "std.testing Namespace"
+		EXPECT["expect()&lt;br/&gt;expectEqual()&lt;br/&gt;expectError()"]
+		ALLOCATOR["testing.allocator&lt;br/&gt;leak detection"]
+		FAILING["failing_allocator&lt;br/&gt;OOM simulation"]
+		UTILS["expectEqualSlices()&lt;br/&gt;expectEqualStrings()"]
+
+		EXPECT --&gt; ALLOCATOR
+		ALLOCATOR --&gt; FAILING
+	end
+
+	subgraph "Test Runner"
+		RUNNER["test_runner.zig&lt;br/&gt;default runner"]
+		STDERR["stderr output"]
+		SUMMARY["test summary&lt;br/&gt;pass/fail/skip counts"]
+
+		RUNNER --&gt; STDERR
+		RUNNER --&gt; SUMMARY
+	end
+
+	subgraph "Execution"
+		ZIGTEST["zig test command"]
+		BUILD["test build"]
+		EXEC["execute tests"]
+		REPORT["report results"]
+
+		ZIGTEST --&gt; BUILD
+		BUILD --&gt; EXEC
+		EXEC --&gt; REPORT
+	end
+
+	TESTDECL --&gt; EXPECT
+	EXPECT --&gt; RUNNER
+	RUNNER --&gt; ZIGTEST
+
+	style EXPECT fill:#f9f9f9
+	style RUNNER fill:#f9f9f9
+	style TESTDECL fill:#f9f9f9</literallayout>
+<simpara><emphasis>这清楚地表明，添加<literal>test</literal>声明不仅会拉入<literal>std.testing</literal>，还会将你的模块连接到由<literal>zig test</literal>驱动的测试构建和执行管道中。</emphasis></simpara>
+</section>
+</chapter>
+<chapter xml:id="conditional-discovery">
+<title>条件发现模式</title>
+<simpara>可选工具不应要求单独的代码库分支。相反，应从编译时数据驱动发现，并通过反射命名空间来决定激活什么。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+<section xml:id="opt-mode-gating">
+<title>使用优化模式门控模块</title>
+<simpara>优化模式内置于<literal>builtin.mode</literal>中。使用它仅在构建Debug时导入昂贵的诊断工具。下面的示例在Debug构建期间连接<literal>debug_tools.zig</literal>，在ReleaseFast时跳过它，同时演示Zig 0.15.2所需的缓冲写入器模式。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 25__module-resolution-and-discovery-deep.adoc - include::example$chapters-data/code/25__module-resolution-and-discovery-deep/02_conditional_import.zig[]</programlisting>
+<formalpara><title>运行（Debug）</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 02_conditional_import.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">build mode: Debug
+debug tooling wired at comptime</programlisting>
+</para>
+</formalpara>
+<formalpara><title>运行（ReleaseFast）</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run -OReleaseFast 02_conditional_import.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">build mode: ReleaseFast
+no debug tooling imported</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>因为<literal>@import("debug_tools.zig")</literal>位于<literal>comptime</literal>条件之后，ReleaseFast二进制文件甚至不会解析助手，保护构建不会意外依赖于仅调试的全局变量。</simpara>
+</note>
+</section>
+<section xml:id="safe-probing">
+<title>使用<literal>@hasDecl</literal>进行安全探测</title>
+<simpara>与其假设模块导出特定函数，不如探测它。这里我们暴露一个<literal>plugins</literal>命名空间，它要么转发到<literal>plugins_enabled.zig</literal>，要么返回空结构体。<literal>@hasDecl</literal>在编译时告诉我们可选的<literal>install</literal>钩子是否存在，启用一个在每个构建模式下都能工作的安全运行时分支。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 25__module-resolution-and-discovery-deep.adoc - include::example$chapters-data/code/25__module-resolution-and-discovery-deep/03_safe_probe.zig[]</programlisting>
+<formalpara><title>运行（Debug）</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 03_safe_probe.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">plugin discovered: Diagnostics overlay instrumentation active</programlisting>
+</para>
+</formalpara>
+<formalpara><title>运行（ReleaseFast）</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run -OReleaseFast 03_safe_probe.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">no plugin available; continuing safely</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>注意我们在命名空间类型本身（<literal>plugins.namespace</literal>）上测试声明。这使根模块对插件的内部结构不可知，并避免基于字符串类型的特性切换。<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link></simpara>
+</note>
+</section>
+<section xml:id="namespace-hygiene">
+<title>命名空间卫生检查清单</title>
+<itemizedlist>
+<listitem>
+<simpara>记录构建注册了哪些模块以及原因；将此列表视为公共API的一部分，以便使用者知道哪些<literal>@import</literal>调用是稳定的。<link xl:href="22__build-system-deep-dive.xml">22</link></simpara>
+</listitem>
+<listitem>
+<simpara>优先重新导出小型、类型化的结构体，而不是将整个助手模块转储到根命名空间中；这使<literal>@hasDecl</literal>探测快速且可预测。</simpara>
+</listitem>
+<listitem>
+<simpara>当混合文件系统和注册导入时，选择不同的名称，以便调用者永远不会疑惑他们获得的是哪个模块。<link xl:href="24__zig-package-manager-deep.xml">24</link></simpara>
+</listitem>
+</itemizedlist>
+<sidebar>
+<title>命名空间依赖内部机制</title>
+<simpara>在内部，编译器将整个命名空间和单个名称的依赖关系作为单独的依赖项进行跟踪。这就是为什么在命名空间中添加或重命名声明即使它们的源文件没有更改也会使下游模块失效：</simpara>
+<literallayout class="monospaced">graph LR
+	subgraph "Namespace Dependencies"
+		NSFULL["Full Namespace&lt;br/&gt;TrackedInst.Index&lt;br/&gt;namespace_deps"]
+		NSNAME["Namespace Name&lt;br/&gt;NamespaceNameKey&lt;br/&gt;namespace_name_deps"]
+	end
+
+	subgraph "Memoized State"
+		MEMO["Memoized Fields&lt;br/&gt;panic_messages, etc."]
+	end</literallayout>
+<simpara>每个依赖项类别都有自己的失效规则——例如，<literal>namespace_deps</literal>在命名空间中的任何名称更改时失效，而<literal>namespace_name_deps</literal>跟踪特定符号的存在。</simpara>
+</sidebar>
+</section>
+</chapter>
+<chapter xml:id="operational-guidance">
+<title>操作指南</title>
+<itemizedlist>
+<listitem>
+<simpara>在CI流水线中包含发现测试：编译Debug和Release构建，确保可选工具正好切换一次。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+<listitem>
+<simpara>在运行实验之前使用<literal>zig build --fetch</literal>（来自第24章），以便依赖图完全缓存且确定性。<link xl:href="24__zig-package-manager-deep.xml">24</link></simpara>
+</listitem>
+<listitem>
+<simpara>避免由环境变量或时间戳驱动的<literal>comptime</literal>导入；它们破坏了可重现性，因为依赖图现在依赖于可变的主机状态。</simpara>
+</listitem>
+<listitem>
+<simpara>如有疑问，通过反射（<literal>@typeInfo(@import("root"))</literal>）在专用调试实用程序中打印模块图，以便团队成员可以检查当前的命名空间表面。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>std.fs.File.stdout().writer(&amp;buffer)</literal>是Zig 0.15.2中发出文本的规范方式；忘记刷新将在此示例和你自己的工具中截断输出。</simpara>
+</listitem>
+<listitem>
+<simpara>注册的模块名称优先于相对文件。为vendored代码选择唯一名称，以便本地助手不会意外遮蔽依赖项。<link xl:href="24__zig-package-manager-deep.xml">24</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>@hasDecl</literal>和<literal>@hasField</literal>纯粹在编译时操作；它们不检查运行时状态。将它们与显式策略（标志、选项）结合使用，以避免在钩子在其他地方被门控时出现误导性的"特性存在"横幅。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展<literal>01_root_namespace.zig</literal>，使其迭代<literal>@typeInfo(@import("root")).Struct.decls</literal>，打印一个排序的符号表以及每个符号所在的模块。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+<listitem>
+<simpara>修改<literal>02_conditional_import.zig</literal>，将调试工具门控在构建选项布尔值之后（例如<literal>-Ddev-inspect=true</literal>），并记录构建脚本如何通过第22章中的<literal>b.addOptions</literal>来传递该选项。<link xl:href="22__build-system-deep-dive.xml">22</link></simpara>
+</listitem>
+<listitem>
+<simpara>创建一个兄弟模块，仅在<literal>builtin.mode == .Debug</literal>时使用<literal>comptime { _ = @import("helper.zig"); }</literal>，然后编写一个测试，断言助手在ReleaseFast中永远不会编译。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案和边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>在多包工作区中，模块名称必须保持全局唯一；考虑使用包名称作为前缀，以避免两个依赖项注册<literal>@import("log")</literal>时发生冲突。<link xl:href="23__project-library-and-executable-workspace.xml">23</link></simpara>
+</listitem>
+<listitem>
+<simpara>当针对没有文件系统的独立环境时，配置构建运行器通过<literal>b.addAnonymousModule</literal>提供合成模块；否则基于路径的导入将失败。</simpara>
+</listitem>
+<listitem>
+<simpara>禁用<literal>std.start</literal>会移除对<literal>main</literal>的自动搜索；准备手动导出<literal>_start</literal>并自行处理参数解码。<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="summary">
+<title>总结</title>
+<itemizedlist>
+<listitem>
+<simpara>模块解析是确定性的：注册的命名空间获胜，文件系统路径作为回退，每个导入都在编译时发生。</simpara>
+</listitem>
+<listitem>
+<simpara>发现触发器扩展到普通导入之外——<literal>comptime</literal>块、测试、导出和入口探测都会影响哪些模块加入图。<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link></simpara>
+</listitem>
+<listitem>
+<simpara>编译时防护（<literal>builtin.mode</literal>、构建选项）和反射助手（<literal>@hasDecl</literal>）让你可以提供丰富的调试工具而不会污染发布二进制文件。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

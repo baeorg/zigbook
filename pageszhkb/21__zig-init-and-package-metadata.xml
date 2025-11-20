@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>Zig Init 和包元数据</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>第20章确定了区分模块、程序、包和库的词汇；本章展示<literal>zig init</literal>如何将该词汇引导到实际文件中，以及<literal>build.zig.zon</literal>如何编纂包标识、版本约束和依赖元数据，以便构建系统和包管理器可以可靠地解析导入。参见<link xl:href="20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.xml">20</link>和<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>。</simpara>
+<simpara>我们专注于构建图编写之前的包元数据结构，确保你了解<literal>build.zig.zon</literal>中的每个字段控制什么，以及为什么Zig的指纹机制取代了早期的基于UUID的方案。参见<link xl:href="22__build-system-deep-dive.xml">22</link>、<link xl:href="https://github.com/ziglang/zig/blob/master/lib/init/build.zig.zon">build.zig.zon</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build.zig">Build.zig</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用<literal>zig init</literal>和<literal>zig init --minimal</literal>用适当的样板文件搭建新项目，用于模块、可执行文件和测试。</simpara>
+</listitem>
+<listitem>
+<simpara>解释<literal>build.zig.zon</literal>中的每个字段：名称、版本、指纹、最低Zig版本、依赖项和路径。</simpara>
+</listitem>
+<listitem>
+<simpara>区分远程依赖项（URL + 哈希）、本地依赖项（路径）和延迟依赖项（延迟获取）。</simpara>
+</listitem>
+<listitem>
+<simpara>解释指纹如何提供全局唯一的包标识，以及它们如何防止恶意分叉混淆。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="zig-init-basics">
+<title>用<literal>zig init</literal>搭建项目</title>
+<simpara>Zig 0.15.2更新了默认的<literal>zig init</literal>模板，以鼓励将可重用模块与可执行入口点分离，解决了一个常见的新手困惑，即库代码被不必要地编译为静态存档，而不是作为纯Zig模块暴露。参见<link xl:href="https://github.com/ziglang/zig/blob/master/lib/init/build.zig">build.zig</link>。</simpara>
+<section xml:id="default-template">
+<title>默认模板：模块 + 可执行文件</title>
+<simpara>在空目录中运行<literal>zig init</literal>会生成四个文件，演示推荐的模式，适用于想要可重用模块和CLI工具的项目：</simpara>
+<programlisting language="shell" linenumbering="unnumbered">$ mkdir myproject &amp;&amp; cd myproject
+$ zig init
+info: created build.zig
+info: created build.zig.zon
+info: created src/main.zig
+info: created src/root.zig
+info: see `zig build --help` for a menu of options</programlisting>
+<simpara>生成的结构分离关注点：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>src/root.zig</literal>：可重用模块暴露公共API（例如，<literal>bufferedPrint</literal>、<literal>add</literal>）</simpara>
+</listitem>
+<listitem>
+<simpara><literal>src/main.zig</literal>：导入根模块并提供CLI入口点的薄可执行文件</simpara>
+</listitem>
+<listitem>
+<simpara><literal>build.zig</literal>：声明两个产物：一个库（根模块）和一个可执行文件</simpara>
+</listitem>
+<listitem>
+<simpara><literal>build.zig.zon</literal>：包元数据，包括指纹和依赖项</simpara>
+</listitem>
+</itemizedlist>
+<simpara>这种分离使下游项目可以通过<literal>@import("myproject")</literal>使用你的逻辑，而不会拉入CLI前端，遵循最小惊讶原则。</simpara>
+</section>
+</chapter>
+<chapter xml:id="build-zig-zon-deep-dive">
+<title>build.zig.zon 字段详解</title>
+<simpara><literal>build.zig.zon</literal>文件是包的身份证。每个字段都有特定的用途，用于确保兼容性并提供依赖项解析的提示。</simpara>
+<section xml:id="zon-fields">
+<title>每个字段的作用</title>
+<simpara><literal>build_zig_zon_explained.zig</literal>内省一个典型的<literal>build.zig.zon</literal>文件并解释每个字段如何影响构建系统：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 21__zig-init-and-package-metadata.adoc - include::example$chapters-data/code/21__zig-init-and-package-metadata/build_zig_zon_explained.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run build_zig_zon_explained.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">== build.zig.zon 字段 ==
+名称：项目的逻辑名称
+版本：语义版本（major.minor.patch）
+指纹：内容寻址哈希（防篡改）
+minimum_zig_version：最低编译器版本
+依赖项：嵌套的包引用
+路径：本地源目录</programlisting>
+</para>
+</formalpara>
+<simpara>关键洞察：指纹作为内容寻址标识符，确保一旦发布，包就不能在不被检测到的情况下被修改。这可以防止供应链攻击，恶意行为者试图用有害版本替换合法包。</simpara>
+</section>
+</chapter>
+<chapter xml:id="dependency-types">
+<title>依赖项类型：远程、本地、延迟</title>
+<simpara>Zig的包管理器支持多种依赖项样式，每种样式适用于不同的用例：</simpara>
+<section xml:id="dependency-examples">
+<title>每种依赖项样式的示例</title>
+<simpara><literal>dependency_types_demo.zig</literal>展示了如何声明和使用不同类型的依赖项：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 21__zig-init-and-package-metadata.adoc - include::example$chapters-data/code/21__zig-init-and-package-metadata/dependency_types_demo.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run dependency_types_demo.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">== 依赖项类型 ==
+远程：从URL + 哈希获取
+本地：从文件系统路径导入
+延迟：按需获取（用于大型/可选依赖项）</programlisting>
+</para>
+</formalpara>
+<simpara>专业提示：对大型或很少使用的依赖项使用延迟依赖项，以避免不必要的下载。这在CI环境中特别有用，因为构建时间很重要。</simpara>
+</section>
+</chapter>
+<chapter xml:id="minimal-init">
+<title>最小项目与zig init --minimal</title>
+<simpara>对于不需要完整模块分离的快速脚本或小型实用程序，<literal>zig init --minimal</literal>创建一个更简单的结构：</simpara>
+<section xml:id="minimal-example">
+<title>何时使用--minimal</title>
+<simpara><literal>minimal_vs_full.zig</literal>比较了最小模板和完整模板，帮助你根据项目需求选择：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 21__zig-init-and-package-metadata.adoc - include::example$chapters-data/code/21__zig-init-and-package-metadata/minimal_vs_full.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run minimal_vs_full.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">== 模板比较 ==
+最小：单文件，无模块分离
+完整：根模块 + 可执行文件 + 测试</programlisting>
+</para>
+</formalpara>
+<simpara>使用<literal>--minimal</literal>进行快速原型设计、一次性脚本，或当你确定不需要库接口时。对于任何可能增长或需要测试的项目，更喜欢完整的模板。</simpara>
+</section>
+</chapter>
+<chapter xml:id="fingerprint-security">
+<title>指纹安全和全局唯一性</title>
+<simpara>指纹机制是Zig包安全模型的基石。理解它有助于你理解为什么依赖哈希不是任意的。</simpara>
+<section xml:id="fingerprint-explained">
+<title>指纹如何工作</title>
+<simpara><literal>fingerprint_explained.zig</literal>演示了指纹计算并解释了其安全属性：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 21__zig-init-and-package-metadata.adoc - include::example$chapters-data/code/21__zig-init-and-package-metadata/fingerprint_explained.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run fingerprint_explained.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">== 指纹安全 ==
+哈希覆盖：所有源文件 + build.zig.zon
+防篡改：任何更改都会更改指纹
+全局唯一：相同内容 = 相同指纹</programlisting>
+</para>
+</formalpara>
+<simpara>重要：指纹覆盖包的所有源文件和<literal>build.zig.zon</literal>本身。这创建了一个防篡改密封——对包的任何修改，无论多么小，都会产生不同的指纹，使检测恶意更改变得容易。</simpara>
+</section>
+</chapter>
+<chapter xml:id="best-practices">
+<title>包元数据最佳实践</title>
+<simpara>遵循这些准则创建健壮、可维护的包：</simpara>
+<section xml:id="practice-guidelines">
+<title>创建良好包的指南</title>
+<itemizedlist>
+<listitem>
+<simpara>使用语义版本控制（semver）并记录重大更改</simpara>
+</listitem>
+<listitem>
+<simpara>设置现实的<literal>minimum_zig_version</literal>要求</simpara>
+</listitem>
+<listitem>
+<simpara>记录所有公共API并包含使用示例</simpara>
+</listitem>
+<listitem>
+<simpara>在<literal>build.zig.zon</literal>注释中记录依赖项</simpara>
+</listitem>
+<listitem>
+<simpara>在发布前测试使用<literal>--fetch</literal>的依赖项解析</simpara>
+</listitem>
+<listitem>
+<simpara>保持包小且专注——更喜欢组合而不是单体</simpara>
+</listitem>
+</itemizedlist>
+<simpara>记住：<literal>build.zig.zon</literal>是包的契约。清晰、准确的元数据使生态系统对每个人都更好。</simpara>
+</section>
+</chapter>
+<chapter xml:id="next-steps">
+<title>下一步：构建图编写</title>
+<simpara>现在我们理解了包元数据，准备深入构建图本身。<link xl:href="22__build-system-deep-dive.xml">第22章</link>将展示如何编写自定义构建步骤、管理复杂的依赖关系，并创建适合我们项目需求的构建工作流。</simpara>
+<simpara>关键要点：<literal>build.zig.zon</literal>是包标识、依赖项管理和构建系统集成的支柱。正确掌握它可以实现可靠的、可重现的构建。</simpara>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>创建一个新项目并比较<literal>zig init</literal>与<literal>zig init --minimal</literal>的输出。记录差异并解释何时选择每个项目。</simpara>
+</listitem>
+<listitem>
+<simpara>修改现有的<literal>build.zig.zon</literal>以添加具有特定版本约束的依赖项。测试依赖项解析。</simpara>
+</listitem>
+<listitem>
+<simpara>解释指纹如何提供比传统语义版本控制更好的安全保证。</simpara>
+</listitem>
+<listitem>
+<simpara>设计一个具有清晰模块边界的包结构，用于多组件项目。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

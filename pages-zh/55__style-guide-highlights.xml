@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>附录A. 风格指南要点</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>当团队的命名、注释与模块布局遵循可预测的节奏时，协作更敏捷。本附录提炼“家规”风格为速查，便于在评审 PR 或搭建新模块时随手翻阅。</simpara>
+<simpara>Zig 0.15.2 收紧格式化输出、稳定文档注释处理并明确测试体验；采用这些默认值意味着更少的约定协商时间与更多的行为验证时间。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>通过扫描文档注释、类型、函数和测试的规范排序，快速审查模块。</simpara>
+</listitem>
+<listitem>
+<simpara>阐述 Zig 中"紧凑错误词汇"的含义，以及何时应优先选择定制错误集而非 <literal>anyerror</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara>将确定性测试与所记录的代码并排放置，同时不牺牲大文件的可读性。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>参考文献：见各章节末尾</simpara>
+</chapter>
+<chapter xml:id="voice-naming">
+<title>语气与命名速览</title>
+<simpara>可读代码始于叙述与标识符的契合：文档注释应使用与导出符号实现相同的名词，而辅助函数则保持动词简短有力。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link> 遵循此模式使评审者能专注于语义而非争论措辞选择。</simpara>
+<section xml:id="naming-comments">
+<title>命名、注释与 Writer</title>
+<simpara>该示例将模块级叙述与聚焦的文档注释配合使用，并采用固定缓冲 writer，使测试不触及分配器。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io.zig">Io.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 55__style-guide-highlights.adoc - include::example$chapters-data/code/55__style-guide-highlights/01_naming_and_comments.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 01_naming_and_comments.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>在代码前格式化描述性句子鼓励读者一并浏览类型签名与测试；使术语与文档注释保持一致体现了第 36 章的建议。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</tip>
+</section>
+<section xml:id="error-vocabulary">
+<title>紧凑的错误词汇</title>
+<simpara>精确的错误集在兼顾调用者体验与轻量级控制流间取得平衡；我们不返回 <literal>anyerror</literal>，而是精确列出解析器可达的状态，并将其提升为公共 API 表面。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/math.zig">math.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 55__style-guide-highlights.adoc - include::example$chapters-data/code/55__style-guide-highlights/02_error_vocabulary.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 02_error_vocabulary.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>测试套件证明各分支均可到达，防止“死字符串”，并教会使用者无需阅读实现即可知道应在何处对名称进行<literal>switch</literal>。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</note>
+</section>
+<section xml:id="module-layout">
+<title>模块布局清单</title>
+<simpara>当文件导出配置助手时，请将公共接口置于前部、将私有校验器收纳其后，并以表驱动测试收尾，使其可读性如同文档。<link xl:href="12__config-as-data.xml">12</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 55__style-guide-highlights.adoc - include::example$chapters-data/code/55__style-guide-highlights/03_module_layout.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 03_module_layout.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>将错误集置于顶部可保持类型图的清晰，并映射 <literal>std.testing</literal> 在依赖代码旁物化不变量的方式。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/testing.zig">testing.zig</link></simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="patterns">
+<title>随手可用的模式</title>
+<itemizedlist>
+<listitem>
+<simpara>为模块级叙述保留 <literal>//!</literal>，为 API 文档保留 <literal>///</literal>，使生成的引用在各包间保持一致的语调。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+<listitem>
+<simpara>为每个公开的辅助函数配对专注的测试块；Zig 的测试运行器使并置测试零成本，它们同时也是可执行的使用示例。</simpara>
+</listitem>
+<listitem>
+<simpara>当格式化器重排签名时，请接受其裁决——编辑器与 CI 间的一致性是 0.15.x 的重要体验改进之一。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>不要抑制来自 <literal>zig fmt</literal> 的警告；而应调整代码使默认设置成功，并在贡献指南中记录任何不可避免的偏离。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+<listitem>
+<simpara>保持项目本地的 lint 脚本与上游 Zig 版本同步，以便在工具链升级期间将琐事开销降至最低。</simpara>
+</listitem>
+<listitem>
+<simpara>若你的 API 发出来自 <literal>std</literal> 的容器类型，请在文档注释中引用其确切字段名——调用者可直接跳转到 <literal>zig/lib/std</literal> 确认语义。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/hash_map.zig">hash_map.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>重写你最近的某个模块，按上面显示的顺序将常量、类型、函数和测试分组，然后运行 <literal>zig fmt</literal> 确认结构保持稳定。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+<listitem>
+<simpara>扩展 <literal>parseCount</literal> 以接受下划线提高可读性，同时保持严格的错误词汇；为新分支添加针对性测试。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>zig build doc</literal> 为项目生成 HTML 文档，并审查 <literal>//!</literal> 和 <literal>///</literal> 注释如何呈现——调整叙述直到输出流畅可读。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>一些团队偏好完全分离的测试文件；若你这样做，采用相同的命名和文档注释模式使搜索结果保持可预测性。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+<listitem>
+<simpara>对于公开编译时密集 API 的模块，包含一个 <literal>test "comptime"</literal> 块，使这些指导原则仍能提供可运行覆盖。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+<listitem>
+<simpara>引入第三方代码时，请用简短 README 注明与本风格的差异，使评审者知悉该偏离是有意为之。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build.zig">Build.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

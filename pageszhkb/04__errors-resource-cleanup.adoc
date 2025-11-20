@@ -1,0 +1,401 @@
+////
+changes: ["错误处理与资源清理章节初稿"]
+examples_compile: yes
+keywords: ["错误处理", "延迟执行", "资源清理"]
+last_updated: 2025-11-02
+last_verified: 2025-11-02
+next_chapter: "05__project-tempconv-cli"
+open_questions: []
+previous_chapter: "03__data-fundamentals"
+status: reviewed
+xref_complete: true
+////
+
+= 错误和资源清理
+:chapter-number: 4
+:chapter-slug: errors-resource-cleanup
+:copyright: zigbook
+:doctype: book
+:embedded:
+:experimental:
+:icons: font
+:partnums:
+:pygments-linenums-mode: inline
+:pygments-style: manni
+:safe-mode-level: 0
+:sectanchors:
+:sectids:
+:sectlinks:
+:source-highlighter: pygments
+:sourcedir: example$chapters-data/code
+:webfonts:
+:xrefstyle: short
+:zig-version: 0.15.2
+:linkcss:
+:stylesdir: styles
+:stylesheet: zigbook.css
+
+[[overview]]
+== 概览
+
+第3章给了我们塑造数据的工具；现在我们需要严格的方式来报告操作何时失败，并可预测地清理资源。Zig 的错误联合让你定义精确的失败词汇，用 `try` 传播它们，并在不依赖异常的情况下提供信息性错误名，详见 link:https://ziglang.org/documentation/master/#Error-Set-Type[#错误集类型] 与 link:https://ziglang.org/documentation/master/#try[#try]。
+
+我们还探索 `defer` 与 `errdefer` 这对语句，使清理紧邻获取；当错误迫使提前返回时，不会丢失文件句柄、缓冲区或其他稀缺资源的跟踪；参见 link:https://ziglang.org/documentation/master/#defer[#defer] 与 link:https://ziglang.org/documentation/master/#errdefer[#errdefer]。
+
+[[learning-goals]]
+== 学习目标
+
+* 声明专用错误集，按需合并，并用 `try` 传播失败，使调用者显式承认可能出错之处。
+* 使用 `catch` 将错误转化为可恢复状态，包括日志记录、回退值与结构化控制流退出，详见 link:https://ziglang.org/documentation/master/#catch[#catch]。
+* 配对 `defer` 与 `errdefer` 以保证确定性清理，即使使用 `catch unreachable` 等结构有意静默错误；参见 link:https://ziglang.org/documentation/master/#unreachable[#unreachable]。
+
+[[section-1]]
+== 错误集与传播
+
+Zig 中错误感知的 API 采用显式联合：可能失败的函数返回 `E!T`，它调用的每个助手都使用 `try` 向上冒泡错误，直到某处决定如何恢复。这样既使控制流可观察，又让成功路径保持简洁，详见 link:https://ziglang.org/documentation/master/#Error-Handling[#错误处理]。
+
+[[section-1-sub-a]]
+=== 声明错误集并用 try 传播
+
+通过命名函数可能返回的确切错误，调用者获得编译时的详尽性与可读诊断。一句 `try` 自动转发错误，避免样板代码，同时如实表达失败模式。
+
+[source,zig]
+----
+
+include::{sourcedir}/04__errors-resource-cleanup/propagation_basics.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run propagation_basics.zig
+----
+
+.Output
+[source,shell]
+----
+input "27" -> 27
+input "9x" failed with InvalidDigit
+input "120" failed with Overflow
+----
+
+TIP: 循环能够继续，是因为每个 `catch` 分支都清楚表达意图——报告并继续——这与生产代码跳过畸形记录同时保留其名称的做法一致。
+
+==== 错误集在内部如何工作
+
+在 Zig 中声明错误集时，实际上是在创建编译器维护的全局错误注册表的子集。理解这种架构有助于阐明为什么错误操作是快速的以及错误集合并如何工作：
+
+[mermaid]
+....
+graph LR
+    subgraph "Global Error Set"
+        GES["global_error_set"]
+        NAMES["Error name strings<br/>Index 0 = empty"]
+
+        GES --> NAMES
+
+        NAMES --> ERR1["Index 1: 'OutOfMemory'"]
+        NAMES --> ERR2["Index 2: 'FileNotFound'"]
+        NAMES --> ERR3["Index 3: 'AccessDenied'"]
+        NAMES --> ERRN["Index N: 'CustomError'"]
+    end
+
+    subgraph "Error Value"
+        ERRVAL["Value{<br/>  err: {name: Index}<br/>}"]
+
+        ERRVAL -->|"name = 1"| ERR1
+    end
+
+    subgraph "Error Set Type"
+        ERRSET["Type{<br/>  error_set_type: {<br/>    names: [1,2,3]<br/>  }<br/>}"]
+
+        ERRSET --> ERR1
+        ERRSET --> ERR2
+        ERRSET --> ERR3
+    end
+....
+
+**关键见解：**
+
+* **全局注册表**：程序中的所有错误名称存储在一个带唯一索引的全局注册表中。
+* **轻量级值**：错误值只是指向该注册表的 `u16` 标签——比较错误与比较整数一样快。
+* **错误集类型**：编写 `error{InvalidDigit, Overflow}` 即创建引用全局注册表子集的类型。
+* **合并很简单**：`||` 运算符通过索引并集创建新类型来组合错误集——无需字符串处理。
+* **唯一性保证**：错误名称全局唯一，`error.InvalidDigit` 始终引用同一注册项。
+
+这种设计使 Zig 中的错误处理极其高效，同时为调试保留了信息丰富的错误名称。基于标签的表示意味着与纯值相比，错误联合只增加最小的开销。
+
+[[section-1-sub-b]]
+=== 用 catch 塑造恢复
+
+`catch` 可针对特定错误分支、选择回退值，或决定失败是否结束当前迭代。为循环加标签可明确在处理超时与断连后恢复的控制路径。
+
+[source,zig]
+----
+
+include::{sourcedir}/04__errors-resource-cleanup/catch_and_recover.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run catch_and_recover.zig
+----
+
+.Output
+[source,shell]
+----
+probe 0 -> 42
+probe 1 timed out; using fallback 200
+probe 1 -> 200
+probe 2 disconnected; skipping sample
+probe 3 -> 88
+aggregate total = 330
+----
+
+TIP: 超时降级为缓存数值，断连则直接舍弃样本——代码中明确了两种不同的恢复策略。
+
+[[section-1-sub-c]]
+=== 将错误集合并为稳定 API
+
+当可复用助手来自不同领域（解析、网络、存储），可用 `||` 合并其错误集，发布单一契约，同时让内部代码对每步使用 `try`。保持合并集足够窄，能让下游仅处理你有意暴露的失败。
+
+==== 推断错误集
+
+很多时候无需显式列出函数可能返回的每个错误。Zig 支持使用 `!T` 语法的**推断错误集**，编译器通过分析函数体自动确定可能返回的错误：
+
+[mermaid]
+....
+graph TB
+    subgraph "Inferred Error Set Structure"
+        IES["InferredErrorSet"]
+        FUNC["func: Index<br/>Owning function"]
+        ERRORS["errors: NameMap<br/>Direct errors"]
+        INFERREDSETS["inferred_error_sets<br/>Dependent IES"]
+        RESOLVED["resolved: Index<br/>Final error set"]
+    end
+
+    subgraph "Error Sources"
+        DIRECTRET["return error.Foo<br/>Direct error returns"]
+        FUNCALL["foo() catch<br/>Called function errors"]
+        IESCALL["bar() catch<br/>IES function call"]
+    end
+
+    subgraph "Resolution Process"
+        BODYANAL["Analyze function body"]
+        COLLECTERRS["Collect all errors"]
+        RESOLVEDEPS["Resolve dependent IES"]
+        CREATESET["Create error set type"]
+    end
+
+    DIRECTRET --> ERRORS
+    FUNCALL --> ERRORS
+    IESCALL --> INFERREDSETS
+
+    BODYANAL --> COLLECTERRS
+    COLLECTERRS --> ERRORS
+    COLLECTERRS --> INFERREDSETS
+    RESOLVEDEPS --> CREATESET
+    CREATESET --> RESOLVED
+
+    FUNC --> BODYANAL
+    ERRORS --> COLLECTERRS
+    INFERREDSETS --> RESOLVEDEPS
+....
+
+**工作原理：**
+
+1. **分析期间**：编译器分析函数体时：
+   - 每个 `return error.Name` 添加到直接 `errors` 集合
+   - 调用具有推断错误集的函数会添加对 `inferred_error_sets` 的依赖
+   - 调用显式错误集的函数会将这些错误添加到 `errors`
+
+2. **体分析之后**：函数体完全分析后：
+   - 从 `errors` 收集所有直接错误
+   - 递归解析依赖的推断错误集
+   - 创建最终错误集类型，组合所有可能错误
+   - 该类型存入 `resolved`，成为函数的错误集
+
+3. **特殊情况**：
+   - 内联与编译期调用使用“临时”推断错误集，不绑定具体函数
+   - 早前章节中的 `!void` 返回类型使用该机制
+
+**为何使用推断错误集？**
+
+* **维护更少**：添加 `try` 调用时错误自动传播
+* **重构友好**：新增返回错误的调用无需更新签名
+* **仍具类型安全**：调用者通过类型推断看到完整错误集
+
+当你需要对 API 契约进行显式控制时，请声明错误集。当内部实现细节应该决定错误时，请使用 `!T` 并让编译器推断它们。
+
+[[section-2]]
+== 使用 defer 的确定性清理
+
+资源生命周期的清晰来自将获取、使用与释放放在同一词法块中。`defer` 保证释放按注册的相反顺序执行；当错误中断进度时，`errdefer` 用于回滚部分初始化序列。
+
+[[workflow-1]]
+=== defer 让释放紧邻获取
+
+在获取资源后立即使用 `defer` 能记录所有权，并保证在成功与失败路径上都进行清理；对可能早退的可失败任务尤为重要。
+
+[source,zig]
+----
+
+include::{sourcedir}/04__errors-resource-cleanup/defer_cleanup.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run defer_cleanup.zig
+----
+
+.Output
+[source,shell]
+----
+-- cycle alpha --
+acquiring alpha
+working with alpha
+job alpha succeeded
+release alpha
+-- cycle beta --
+acquiring beta
+working with beta
+job beta failed
+release beta
+beta bubbled up CalibrateFailed
+----
+
+NOTE: 即使在失败的任务中也会触发释放，证明 defer 会在错误到达调用者前执行。
+
+==== defer 的执行顺序如何工作
+
+理解 `defer` 和 `errdefer` 语句的执行顺序对于编写正确的清理代码至关重要。Zig 以 **LIFO（后进先出）** 顺序执行这些语句——与其注册顺序相反：
+
+[mermaid]
+....
+graph TB
+    subgraph "Function Execution"
+        ENTER["Function Entry"]
+        ACQUIRE1["Step 1: Acquire Resource A<br/>defer cleanup_A()"]
+        ACQUIRE2["Step 2: Acquire Resource B<br/>defer cleanup_B()"]
+        ACQUIRE3["Step 3: Acquire Resource C<br/>errdefer cleanup_C()"]
+        WORK["Step 4: Do work (may error)"]
+        EXIT["Function Exit"]
+    end
+    
+    subgraph "Success Path"
+        SUCCESS["Work succeeds"]
+        DEFER_C["Step 3: Run cleanup_C()"]
+        DEFER_B["Step 2: Run cleanup_B()"]
+        DEFER_A["Step 1: Run cleanup_A()"]
+        RETURN_OK["Return success"]
+    end
+    
+    subgraph "Error Path"
+        ERROR["Work errors"]
+        ERRDEFER_C["Step 3: Run cleanup_C() via errdefer"]
+        ERRDEFER_B["Step 2: Run cleanup_B() via defer"]
+        ERRDEFER_A["Step 1: Run cleanup_A() via defer"]
+        RETURN_ERR["Return error"]
+    end
+    
+    ENTER --> ACQUIRE1
+    ACQUIRE1 --> ACQUIRE2
+    ACQUIRE2 --> ACQUIRE3
+    ACQUIRE3 --> WORK
+    
+    WORK -->|"success"| SUCCESS
+    WORK -->|"error"| ERROR
+    
+    SUCCESS --> DEFER_C
+    DEFER_C --> DEFER_B
+    DEFER_B --> DEFER_A
+    DEFER_A --> RETURN_OK
+    
+    ERROR --> ERRDEFER_C
+    ERRDEFER_C --> ERRDEFER_B
+    ERRDEFER_B --> ERRDEFER_A
+    ERRDEFER_A --> RETURN_ERR
+    
+    RETURN_OK --> EXIT
+    RETURN_ERR --> EXIT
+....
+
+**关键执行规则：**
+
+* **LIFO 顺序**：defer 以相反的注册顺序执行——最后注册的最先运行。
+* **镜像设置**：自然镜像初始化顺序，因此清理按获取的反向发生。
+* **`defer` 始终运行**：常规 `defer` 在成功与错误路径上都会执行。
+* **`errdefer` 具条件性**：仅在作用域以错误退出时执行。
+* **基于作用域**：defer 绑定到其封闭作用域（函数、块等）。
+
+这种 LIFO 保证确保资源以获取的相反顺序被清理。当资源相互依赖时，这尤其重要，因为它可以防止清理过程中的释放后使用场景。
+
+[[workflow-2]]
+=== errdefer 回滚部分初始化
+
+`errdefer` 非常适合分阶段设置：仅在周围作用域以错误退出时运行，集中撤销失败前已成功的步骤。
+
+[source,zig]
+----
+
+include::{sourcedir}/04__errors-resource-cleanup/errdefer_recovery.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run errdefer_recovery.zig
+----
+
+.Output
+[source,shell]
+----
+-- success path --
+opening "primary"
+registering "primary"
+-- register failure --
+opening "backup"
+registering "backup"
+rollback "backup"
+closing "backup"
+setup failed with RegisterFailed
+-- open failure --
+opening ""
+setup failed with OpenFailed
+deregister "primary"
+closing "primary"
+----
+
+NOTE: 暂存函数只清理部分初始化的 `backup` 通道，而保留未受影响的空名称，并将成功的 `primary` 的真正拆除延迟到调用者退出时。
+
+[[section-2-sub-c]]
+=== 有意地忽略错误
+
+有时你会认为某个错误不可能发生——也许你已提前验证输入——因而写下 `try foo() catch unreachable;`，一旦不变量被破坏便立即崩溃。谨慎使用：在 Debug 与 ReleaseSafe 构建中，`unreachable` 会触发陷阱，从而在运行时响亮地重验这些假设。
+
+[[notes-caveats]]
+== 说明与注意事项
+
+* 倾向于小而描述清晰的错误集，让 API 使用者读到类型即可迅速把握需处理的失败分支。
+* 记住 defer 以相反顺序执行；把最基础的清理放在最后，使关停与初始化镜像。
+* 将 `catch unreachable` 视作调试断言——而非压制合法失败的手段——因为安全模式会将其变为运行时陷阱。
+
+[[exercises]]
+== 练习
+
+* 扩展 `propagation_basics.zig`，在乘法前检查溢出，让 `accumulate` 接受任意长度输入，并新增“数字过多”的错误变体。
+* 增强 `catch_and_recover.zig`，引入结构体记录发生的超时次数，并从 `main` 返回以便测试断言恢复策略。
+* 修改 `errdefer_recovery.zig`，注入一个由自身 `defer` 保护的额外配置步骤，观察中途停止初始化时 `defer` 与 `errdefer` 的协作。
+
+[[caveats-alternatives-edge-cases]]
+== 备选方案与边界情况
+
+* 与 C 互操作时，在边界将外部错误码翻译为 Zig 错误集，以便内部代码维持更丰富的类型。
+* 若清理过程本身可能失败，优先在 `defer` 内记录日志并保留原始错误为主，否则调用者可能将清理失败误认为根因。
+* 针对延迟分配，考虑使用 arena 或“所有权缓冲”：它们与 `defer` 协同一次性释放资源，减少单独清理语句数量。

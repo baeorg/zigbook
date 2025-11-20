@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>表格生成器</subtitle>
+<date>2025-11-15</date>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>在本项目中，我们将<link xl:href="15__comptime-and-reflection.xml">15</link>中的想法转化为实际工作流：在编译时生成小型查找表，并在运行时以零开销使用它们。这种技术从热循环中移除分支，用常量数据替换重复工作，并保持代码简单。我们将采用"先测量"的心态，展示表格何时有帮助以及何时不值得二进制大小。</simpara>
+<simpara>我们将实现三个自包含的演示：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>ASCII分类表：常量时间字符分类（数字/字母/空格/标点）</simpara>
+</listitem>
+<listitem>
+<simpara>Popcount表：字节的快速位计数，可组合用于更大的聚合</simpara>
+</listitem>
+<listitem>
+<simpara>乘法表：紧凑渲染的参数化N×N矩阵</simpara>
+</listitem>
+</itemizedlist>
+<simpara>每个示例都使用Zig的现代stdout写入器（参见Writergate更改），并在直接运行时打印可见结果。参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/ascii.zig">ascii.zig</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>设计简单、可读且快速的编译时表格构建器。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+<listitem>
+<simpara>权衡取舍：代码大小与速度，灵活性与"固化"常量。<link xl:href="39__performance-and-inlining.xml">41</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>std.Io.Writer</literal>以最小分配干净地格式化和呈现表格。<link xl:href="45__text-formatting-and-unicode.xml">47</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="ascii-class-table">
+<title>ASCII分类表</title>
+<simpara>我们构建一个256个条目的表格，将字节映射到数字/字母/空格/标点的位掩码。在运行时，我们对输入字符串进行汇总。"标点"集合派生自<literal>isPrint &amp;&amp; !isAlphanumeric &amp;&amp; !isWhitespace</literal>（对于ASCII足够）。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 16__project-table-generator.adoc - include::example$chapters-data/code/16__project-table-generator/ascii_class_table.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run ascii_class_table.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">input: Hello, Zig 0.15.2!
+
+digits=4 letters=8 spaces=6 punct=4</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>像这样的表格可以移除内循环中的重复分支。保持推导逻辑易于审查，并尽可能优先使用<literal>std.ascii</literal>助手。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</tip>
+</chapter>
+<chapter xml:id="popcount-table">
+<title>字节的Popcount表</title>
+<simpara>与其为每个字节调用位操作例程，我们烘焙一个256个条目的popcount表并在输入上进行归约。这可以从玩具示例扩展到"计算缓冲区中设置位"的原语。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 16__project-table-generator.adoc - include::example$chapters-data/code/16__project-table-generator/popcount_table.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run popcount_table.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">bytes: 0x00 0x0F 0xF0 0xAA 0xFF -&gt; total set bits = 20</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>在许多工作负载中，CPU的POPCNT指令（或<literal>std.math.popCount</literal>）已经很快。仅当您的性能分析显示它有助于您的数据访问模式和平台时，才优先使用表格。<link xl:href="50__random-and-math.xml">52</link></simpara>
+</note>
+</chapter>
+<chapter xml:id="times-table">
+<title>参数化乘法表 (N×N)</title>
+<simpara>这里表格维度是一个<literal>comptime</literal>参数，因此编译器展开生成并存储紧凑的<literal>[N][N]u16</literal>。我们格式化一个12×12的"乘法表"，并且只打印子集以保持输出可读。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 16__project-table-generator.adoc - include::example$chapters-data/code/16__project-table-generator/mult_table.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run mult_table.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">12x12 multiplication table (partial):
+   1   2   3   4   5   6   7   8   9  10  11  12
+   2   4   6   8  10  12  14  16  18  20  22  24
+   3   6   9  12  15  18  21  24  27  30  33  36
+   4   8  12  16  20  24  28  32  36  40  44  48
+   5  10  15  20  25  30  35  40  45  50  55  60
+   6  12  18  24  30  36  42  48  54  60  66  72</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara><literal>inline while/for</literal>构造需要编译时已知的边界；将它们与<literal>comptime var</literal>索引配对使意图明确。除非有展开的理由，否则选择普通循环。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</important>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>二进制大小与速度：表格占用内存。当它们从热路径中移除有意义的工作并且您的二进制预算允许时使用它们。<link xl:href="39__performance-and-inlining.xml">41</link></simpara>
+</listitem>
+<listitem>
+<simpara>可移植性：ASCII分类是直接的；Unicode需要不同的策略（范围/页面的表格或库）。<link xl:href="45__text-formatting-and-unicode.xml">47</link></simpara>
+</listitem>
+<listitem>
+<simpara>I/O：示例使用Zig 0.15.2的<literal>std.Io.Writer</literal>接口，接口中带有缓冲区——不要忘记调用<literal>flush()</literal>。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>使用额外的类（十六进制数字、控制字符）扩展ASCII表，并为任意输入文件打印直方图。</simpara>
+</listitem>
+<listitem>
+<simpara>在编译时生成<literal>crc32</literal>或<literal>crc16</literal>表，并在运行时针对已知测试向量进行验证（作为小型端到端演示）。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+<listitem>
+<simpara>参数化乘法表的单元格格式化器以在不同宽度下对齐；测量对可读性和代码大小的影响。<link xl:href="45__text-formatting-and-unicode.xml">47</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>表格失效：如果输入改变形状（例如，从ASCII切换到UTF-8代码点），显著记录假设并引入编译时断言以早期捕获误用。<link xl:href="36__style-and-best-practices.xml">37</link></simpara>
+</listitem>
+<listitem>
+<simpara>微架构效应：取决于缓存行为，分支例程可能优于表格遍历；使用真实数据进行性能分析。<link xl:href="40__profiling-optimization-hardening.xml">42</link></simpara>
+</listitem>
+<listitem>
+<simpara>对于比CPU缓存大得多的表格，考虑按需生成、分块或从磁盘加载预计算资源，而不是嵌入二进制文件中。<link xl:href="28__filesystem-and-io.xml">28</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

@@ -1,0 +1,290 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>跨编译与 WASM</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>通过性能分析与护栏收紧反馈回路后（<link xl:href="40__profiling-optimization-hardening.xml">40</link>），我们已准备将二进制交付到其他平台。本章将介绍目标发现、原生跨编译以及发射 WASI 模块的要点，沿用先前依赖的 CLI 插桩。<link xl:href="ZIG_DEEP_WIKI.md#entry-points-and-command-structure">#entry points and command structure</link></simpara>
+<simpara>下一章将把这些机制变为完整的 WASI 项目，因此可将本章视为动手的预飞检查。<link xl:href="42__project-wasi-build-and-run.xml">42</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>解释目标三元组并查询 Zig 的内置元数据以获取替代架构。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Target/Query.zig">Query.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>zig build-exe</literal> 跨编译原生可执行文件，并在不离开 Linux 的情况下验证制品。</simpara>
+</listitem>
+<listitem>
+<simpara>生成与原生代码共享相同源码的 WASI 二进制，为项目构建流水线做好准备。<link xl:href="https://ziglang.org/documentation/master/#Command-line-flags">#Command-line-flags</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="target-discovery">
+<title>映射目标三元组</title>
+<simpara>Zig 的<literal>@import("builtin")</literal>暴露编译器对当前世界的认知，而<literal>std.Target.Query.parse</literal>允许你在不构建的情况下检查假设目标。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Target.zig">Target.zig</link></simpara>
+<simpara>这是在使用<literal>zig build</literal>之前定制构建图或 ENT 文件的基础。</simpara>
+<section xml:id="_understanding_the_target_structure">
+<title>理解 Target 结构</title>
+<simpara>在解析目标三元组之前，了解 Zig 在内部如何表示编译目标很有价值。下图展示了完整的<literal>std.Target</literal>结构：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "std.Target Structure"
+        TARGET["std.Target"]
+        CPU["cpu: Cpu"]
+        OS["os: Os"]
+        ABI["abi: Abi"]
+        OFMT["ofmt: ObjectFormat"]
+        DYNLINKER["dynamic_linker: DynamicLinker"]
+
+        TARGET --&gt; CPU
+        TARGET --&gt; OS
+        TARGET --&gt; ABI
+        TARGET --&gt; OFMT
+        TARGET --&gt; DYNLINKER
+    end
+
+    subgraph "Cpu Components"
+        CPU --&gt; ARCH["arch: Cpu.Arch"]
+        CPU --&gt; MODEL["model: *const Cpu.Model"]
+        CPU --&gt; FEATURES["features: Feature.Set"]
+
+        ARCH --&gt; ARCHEX["x86_64, aarch64, wasm32, etc"]
+        MODEL --&gt; MODELEX["generic, native, specific variants"]
+        FEATURES --&gt; FEATEX["CPU feature flags"]
+    end
+
+    subgraph "Os Components"
+        OS --&gt; OSTAG["tag: Os.Tag"]
+        OS --&gt; VERSION["version_range: VersionRange"]
+
+        OSTAG --&gt; OSEX["linux, windows, macos, wasi, etc"]
+        VERSION --&gt; VERUNION["linux: LinuxVersionRange&lt;br/&gt;windows: WindowsVersion.Range&lt;br/&gt;semver: SemanticVersion.Range&lt;br/&gt;none: void"]
+    end
+
+    subgraph "Abi and Format"
+        ABI --&gt; ABIEX["gnu, musl, msvc, none, etc"]
+        OFMT --&gt; OFMTEX["elf, macho, coff, wasm, c, spirv"]
+    end</literallayout>
+<simpara>该结构揭示三元组如何映射到具体配置。当你指定<literal>-target wasm32-wasi</literal>时，CPU 架构设为<literal>wasm32</literal>，OS 标签设为<literal>wasi</literal>，并隐式将对象格式设为<literal>wasm</literal>。<literal>x86_64-windows-gnu</literal>映射为架构<literal>x86_64</literal>、OS<literal>windows</literal>、ABI<literal>gnu</literal>与格式<literal>coff</literal>（Windows PE）。</simpara>
+<simpara>各组件影响代码生成：CPU 架构决定指令集与调用约定；OS 标签选择系统调用接口与运行时期望；ABI 指定调用约定与名称改编；对象格式决定链接器（Linux 用 ELF、Darwin 用 Mach-O、Windows 用 COFF、Web/WASI 用 WASM）。理解该映射有助于你解读<literal>std.Target.Query.parse</literal>结果、预测跨编译行为并排查目标特定问题。CPU 特性字段捕捉架构特定能力（x86_64 上的 AVX、ARM 上的 SIMD），供优化器用于代码生成。</simpara>
+</section>
+<section xml:id="_target_resolution_flow">
+<title>目标解析流程</title>
+<simpara>目标查询（用户输入）通过系统化流程解析为具体目标：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "Resolution Flow"
+        QUERY["std.Target.Query&lt;br/&gt;user input with defaults"]
+        RESOLVE["resolveTargetQuery()"]
+        TARGET["std.Target&lt;br/&gt;fully resolved"]
+
+        QUERY --&gt; RESOLVE
+        RESOLVE --&gt; TARGET
+    end
+
+    subgraph "Query Sources"
+        CMDLINE["-target flag&lt;br/&gt;command line"]
+        DEFAULT["native detection&lt;br/&gt;std.zig.system"]
+        MODULE["Module.resolved_target"]
+
+        CMDLINE --&gt; QUERY
+        DEFAULT --&gt; QUERY
+    end
+
+    subgraph "Native Detection"
+        DETECT["std.zig.system detection"]
+        CPUDETECT["CPU: cpuid, /proc/cpuinfo"]
+        OSDETECT["OS: uname, NT version"]
+        ABIDETECT["ABI: ldd, platform defaults"]
+
+        DETECT --&gt; CPUDETECT
+        DETECT --&gt; OSDETECT
+        DETECT --&gt; ABIDETECT
+    end
+
+    TARGET --&gt; COMP["Compilation.root_mod&lt;br/&gt;.resolved_target.result"]</literallayout>
+<simpara>目标查询来自三个来源：命令行 <literal>-target</literal> 标志（显式用户选择）、未指定目标时的原生检测（通过 cpuid 或 /proc/cpuinfo 读取主机 CPU，通过 uname 或 NT API 读取 OS，通过 ldd 或平台默认值读取 ABI），或构建脚本中的模块配置。</simpara>
+<simpara><literal>resolveTargetQuery()</literal>会通过补全缺失细节，将查询（可能包含"native"或"default"占位符）转换为具体的<literal>std.Target</literal>实例。该解析在编译初始化阶段进行，先于任何代码生成。</simpara>
+<simpara>当你未提供<literal>-target</literal>时，Zig 会自动检测宿主系统并构建本机目标。指定诸如<literal>wasm32-wasi</literal>等部分三元组时，解析将补全 ABI（WASI 通常为<literal>musl</literal>）与对象格式（<literal>wasm</literal>）。解析得到的目标随后进入编译模块，控制代码生成的各个方面，从指令选择到运行时库选择。</simpara>
+</section>
+<section xml:id="target-query-example">
+<title>示例：在代码中比较宿主与跨目标</title>
+<simpara>示例会内省宿主三元组，并解析两个跨目标，打印解析后的架构、OS 与 ABI。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 41__cross-compilation-and-wasm.adoc - include::example$chapters-data/code/41__cross-compilation-and-wasm/01_target_matrix.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 01_target_matrix.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">host triple: x86_64-linux-gnu
+pointer width: 64 bits
+query wasm32-wasi: arch=wasm32 os=wasi abi=gnu
+query x86_64-windows-gnu: arch=x86_64 os=windows abi=gnu
+single-threaded: false</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>解析器遵循与<literal>-Dtarget</literal>或<literal>zig build-exe -target</literal>相同的语法；可在调用编译器前复用解析输出以播种构建配置。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="native-cross">
+<title>跨编译原生可执行文件</title>
+<simpara>拿到三元组后，跨编译只需切换目标标志。Zig 0.15.2 随附自包含的 libc 集成，因此在 Linux 上生成 Windows 或 macOS 二进制不再需要额外 SDK。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+<simpara>使用 <literal>file</literal> 或类似工具确认制品，而无需启动另一个操作系统。</simpara>
+<section xml:id="windows-example">
+<title>示例：在 Linux 上使用<literal>zig build-exe</literal>生成 Windows 可执行</title>
+<simpara>我们保持源码相同，原生运行以进行健全性检查，然后发射 Windows PE 二进制并在原地检查它。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 41__cross-compilation-and-wasm.adoc - include::example$chapters-data/code/41__cross-compilation-and-wasm/02_cross_greeter.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 02_cross_greeter.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">hello from x86_64-linux-gnu!
+default executable suffix:</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>跨编译</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe 02_cross_greeter.zig -target x86_64-windows-gnu -OReleaseFast -femit-bin=greeter-windows.exe
+$ file greeter-windows.exe</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">greeter-windows.exe: PE32+ executable (console) x86-64, for MS Windows, 7 sections</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>当您需要为较旧硬件提供可移植二进制时，将 <literal>-target</literal> 与 <literal>-mcpu=baseline</literal> 配对；上面的 <literal>std.Target.Query</literal> 输出显示 Zig 将假定哪个 CPU 模型。</simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="wasi-modules">
+<title>发射 WASI 模块</title>
+<simpara>WebAssembly System Interface (WASI) 构建与原生流水线共享大部分内容，但使用不同的对象格式。相同的 Zig 源码可以在 Linux 上打印诊断信息，并在跨编译时发射 <literal>.wasm</literal> 负载，这得益于本版本中引入的共享 libc 组件。</simpara>
+<section xml:id="_object_formats_and_linker_selection">
+<title>对象格式与链接器选择</title>
+<simpara>在生成 WASI 二进制之前，理解对象格式如何决定编译输出很重要。下图展示了 ABI 与对象格式之间的关系：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "Common ABIs"
+        ABI["Abi enum"]
+
+        ABI --&gt; GNU["gnu&lt;br/&gt;GNU toolchain"]
+        ABI --&gt; MUSL["musl&lt;br/&gt;musl libc"]
+        ABI --&gt; MSVC["msvc&lt;br/&gt;Microsoft Visual C++"]
+        ABI --&gt; NONE["none&lt;br/&gt;freestanding"]
+        ABI --&gt; ANDROID["android, gnueabi, etc&lt;br/&gt;platform variants"]
+    end
+
+    subgraph "Object Formats"
+        OFMT["ObjectFormat enum"]
+
+        OFMT --&gt; ELF["elf&lt;br/&gt;Linux, BSD"]
+        OFMT --&gt; MACHO["macho&lt;br/&gt;Darwin systems"]
+        OFMT --&gt; COFF["coff&lt;br/&gt;Windows PE"]
+        OFMT --&gt; WASM["wasm&lt;br/&gt;WebAssembly"]
+        OFMT --&gt; C["c&lt;br/&gt;C source output"]
+        OFMT --&gt; SPIRV["spirv&lt;br/&gt;Shaders"]
+    end</literallayout>
+<simpara>对象格式决定 Zig 使用哪种链接器实现来生成最终二进制。<emphasis role="strong">ELF</emphasis>（可执行与可链接格式）用于 Linux 与 BSD 系统，生成<literal>.so</literal>共享库与标准可执行文件。<emphasis role="strong">Mach-O</emphasis>面向 Darwin 系统（macOS、iOS），生成<literal>.dylib</literal>库与 Mach 可执行。<emphasis role="strong">COFF</emphasis>（通用对象文件格式）在面向 Windows 时生成 PE 二进制（<literal>.exe</literal>、<literal>.dll</literal>）。<emphasis role="strong">WASM</emphasis>（WebAssembly）是一种独特格式，生成供浏览器与 WASI 运行时使用的<literal>.wasm</literal>模块；与传统格式不同，WASM 模块是为沙箱执行设计的平台无关字节码。<emphasis role="strong">C</emphasis>与<emphasis role="strong">SPIRV</emphasis>较为特殊：C 输出可供 C 构建系统集成的源代码，而 SPIRV 生成 GPU 着色器字节码。</simpara>
+<simpara>当你为<literal>-target wasm32-wasi</literal>构建时，Zig 会选择 WASM 对象格式并调用 WebAssembly 链接器（<literal>link/Wasm.zig</literal>），其处理函数导入/导出、内存管理与表初始化等 WASM 特有概念。这与 ELF 链接器（符号解析、重定位）或 COFF 链接器（导入表、资源段）有本质区别。同一源码可透明编译为不同对象格式——无论面向原生 Linux（ELF）、Windows（COFF）还是 WASI（WASM），你的 Zig 代码保持一致。</simpara>
+</section>
+<section xml:id="wasi-example">
+<title>示例：单一源码，原生运行，WASI 制品</title>
+<simpara>我们的流水线记录执行阶段并在 <literal>builtin.target.os.tag</literal> 上分支，以便 WASI 构建宣布其自己的入口点。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 41__cross-compilation-and-wasm.adoc - include::example$chapters-data/code/41__cross-compilation-and-wasm/03_wasi_pipeline.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 03_wasi_pipeline.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">stage: parse-args
+stage: render-payload
+stage: native-entry
+stage: linux</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>WASI 构建</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe 03_wasi_pipeline.zig -target wasm32-wasi -OReleaseSmall -femit-bin=wasi-pipeline.wasm
+$ ls -lh wasi-pipeline.wasm</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">-rwxr--r-- 1 zkevm zkevm 4.6K Nov  6 13:40 wasi-pipeline.wasm</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>使用您偏好的运行时（Wasmtime、Wasmer、浏览器）运行生成的模块，或将其交给下一章的构建图。无需更改源码。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>zig targets</literal> 提供支持的三元组的权威矩阵。在分派作业之前编写脚本以验证您的构建矩阵。</simpara>
+</listitem>
+<listitem>
+<simpara>某些目标默认为 <literal>ReleaseSmall</literal> 风格的安全性。当您需要在跨架构间保持一致的运行时检查时，请显式设置 <literal>-Doptimize</literal>。<link xl:href="https://ziglang.org/documentation/master/#releasefast">#releasefast</link></simpara>
+</listitem>
+<listitem>
+<simpara>在与 glibc 进行跨链接时，请填充<literal>ZIG_LIBC</literal>或使用<literal>zig fetch</literal>缓存 sysroot 制品，以避免链接器意外地引用宿主头文件。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展问候程序，添加 <literal>--cpu</literal> 和 <literal>--os</literal> 标志，然后为 <literal>x86_64-macos-gnu</literal> 和 <literal>aarch64-linux-musl</literal> 发射二进制，并使用 <literal>ls -lh</literal> 捕获它们的大小。</simpara>
+</listitem>
+<listitem>
+<simpara>修改 WASI 流水线以通过 <literal>std.json.stringify</literal> 发射 JSON，然后在 WASI 运行时中运行它并捕获输出以进行回归测试。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json.zig">json.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>编写一个 <literal>build.zig</literal> 步骤，循环遍历目标三元组列表，并为每个目标调用 <literal>addExecutable</literal>，使用 <literal>std.Target.Query</literal> 辅助程序打印人类友好的标签。<link xl:href="22__build-system-deep-dive.xml">22</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况：</title>
+<itemizedlist>
+<listitem>
+<simpara>LLVM 支持的目标可能仍与 Zig 的自托管代码生成行为不同。当您遇到新兴架构时，请回退到 <literal>-fllvm</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara>WASI 禁止许多系统调用和动态分配模式。保持日志简洁或受控，以避免超出导入预算。</simpara>
+</listitem>
+<listitem>
+<simpara>Windows 跨编译默认选择 GNU 工具链。如果您打算链接到 MSVC 提供的库，请添加 <literal>-msvc</literal> 或切换 ABI。<link xl:href="20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.xml">20</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

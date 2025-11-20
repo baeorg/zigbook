@@ -1,0 +1,464 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>集合与算法</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>有了标准库索引提供的地图，你现在可以深入探索 Zig 的集合类型——数据操作的主力军。本章探讨动态数组（<literal>ArrayList</literal>）、哈希表（<literal>HashMap</literal> 及其变体）、优先结构（<literal>PriorityQueue</literal>）、链表、专用容器如 <literal>MultiArrayList</literal> 和 <literal>SegmentedList</literal>，以及排序算法（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/array_list.zig">array_list.zig</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/hash_map.zig">hash_map.zig</link>）。每个集合都采用 Zig 的显式分配器模型，让你能够控制内存生命周期并在测试期间启用泄漏检测。</simpara>
+<simpara>与具有隐式垃圾回收的语言不同，Zig 集合要求你显式调用 <literal>deinit()</literal> 或转移所有权。这种纪律性，结合标准库丰富的适配器套件（非托管变体、哨兵感知切片、自定义上下文），使集合既强大又可预测。到本章结束时，你将能够自信地为你的用例选择正确的结构，并理解每种设计固有的性能权衡（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/sort.zig">sort.zig</link>）。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用 <literal>ArrayList(T)</literal> 处理动态数组：追加、插入、删除、迭代，并理解重新分配策略。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>HashMap</literal> 和 <literal>AutoHashMap</literal> 进行键值查找，支持自定义哈希和相等性函数。</simpara>
+</listitem>
+<listitem>
+<simpara>利用 <literal>PriorityQueue</literal> 进行最小/最大堆操作，并理解比较上下文（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/priority_queue.zig">priority_queue.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>应用 <literal>std.sort</literal> 进行原地排序，支持稳定和不稳定算法（pdqsort、块排序、插入排序）。</simpara>
+</listitem>
+<listitem>
+<simpara>识别专用结构：<literal>MultiArrayList</literal> 用于数组结构布局，<literal>SegmentedList</literal> 用于稳定指针，链表用于侵入式设计（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/multi_array_list.zig">multi_array_list.zig</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/segmented_list.zig">segmented_list.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>理解分配器的影响：集合增长如何触发重新分配，以及竞技场如何简化批量释放模式（参见 <link xl:href="10__allocators-and-memory-management.xml">10</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="arraylist">
+<title>ArrayList：动态数组</title>
+<simpara><literal>ArrayList(T)</literal> 是 Zig 的基础可增长数组，类似于 C++ 的 <literal>std::vector</literal> 或 Rust 的 <literal>Vec&lt;T&gt;</literal>。它管理一个连续的 <literal>T</literal> 值切片，根据需要扩展容量。你与 <literal>.items</literal>（当前切片）交互，并调用方法如 <literal>append</literal>、<literal>pop</literal>、<literal>insert</literal> 和 <literal>remove</literal>。</simpara>
+<section xml:id="arraylist-basics">
+<title>基本操作</title>
+<simpara>通过指定元素类型并传递分配器来创建 <literal>ArrayList</literal>。完成后调用 <literal>deinit()</literal> 来释放支持内存。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/arraylist_basic.zig[]</programlisting>
+<formalpara>
+<title>构建</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe arraylist_basic.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ ./arraylist_basic</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Item 0: 10
+Item 1: 20
+Item 2: 30
+Popped: 30
+Remaining length: 2</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>ArrayList</literal> 在满时加倍容量（指数增长），分摊重新分配成本。如果你知道最终大小，可以使用 <literal>try list.ensureTotalCapacity(allocator, n)</literal> 进行预分配。</simpara>
+</tip>
+</section>
+<section xml:id="arraylist-ownership">
+<title>所有权和非托管变体</title>
+<simpara>默认情况下，<literal>ArrayList(T)</literal> 在内部存储其分配器（托管变体）。为了更明确的控制，通过直接访问 <literal>.items</literal> 和 <literal>.capacity</literal> 使用非托管形式，或使用已弃用的 <literal>Unmanaged</literal> API。现代模式是使用更简单的托管形式，除非你需要将分配与列表本身解耦。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/arraylist_ownership.zig[]</programlisting>
+<formalpara>
+<title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe arraylist_ownership.zig &amp;&amp; ./arraylist_ownership</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Managed list length: 3
+After transfer, original list length: 0
+Owned slice length: 3</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>toOwnedSlice()</literal> 清空列表并将支持内存作为切片返回——你负责使用 <literal>allocator.free(slice)</literal> 释放它。</simpara>
+</note>
+</section>
+<section xml:id="arraylist-insertion-removal">
+<title>插入和删除</title>
+<simpara>除了 <literal>append</literal> 和 <literal>pop</literal> 之外，<literal>ArrayList</literal> 还支持数组中间操作。<literal>orderedRemove</literal> 维护元素顺序（移动后续元素），而 <literal>swapRemove</literal> 是 O(1) 但不保持顺序（与最后一个元素交换）。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/arraylist_insert_remove.zig[]</programlisting>
+<formalpara>
+<title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe arraylist_insert_remove.zig &amp;&amp; ./arraylist_insert_remove</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">After insert at 1: [1, 99, 2, 3, 4]
+After orderedRemove at 2: [1, 99, 3, 4]
+After swapRemove at 1: [1, 4, 3]</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara><literal>orderedRemove</literal> 在最坏情况下是 O(n)（删除第一个元素需要移动所有其他元素）；当顺序不重要时，使用 <literal>swapRemove</literal> 以获得 O(1) 性能。</simpara>
+</important>
+</section>
+</chapter>
+<chapter xml:id="hashmap">
+<title>HashMap：键值查找</title>
+<simpara>Zig 的哈希映射系列通过开放寻址和线性探测提供 O(1) 平均情况查找。<literal>HashMap(K, V, Context, max_load_percentage)</literal> 需要一个带有 <literal>hash</literal> 和 <literal>eql</literal> 函数的上下文。为方便起见，<literal>AutoHashMap</literal> 为可哈希类型自动生成这些函数，而 <literal>StringHashMap</literal> 专门用于 <literal>[]const u8</literal> 键。</simpara>
+<section xml:id="hashmap-basic">
+<title>StringHashMap 基础</title>
+<simpara>对于字符串键（<literal>[]const u8</literal>），使用 <literal>StringHashMap(V)</literal>，它提供优化的字符串哈希。请注意，<literal>AutoHashMap</literal> 不支持像 <literal>[]const u8</literal> 这样的切片类型以避免歧义——请改用 <literal>StringHashMap</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/hashmap_basic.zig[]</programlisting>
+<formalpara>
+<title>Build and Run</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe hashmap_basic.zig &amp;&amp; ./hashmap_basic</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>Output</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Value for 'foo': 42
+Contains 'bar': true
+Contains 'baz': false
+After removing 'foo', contains: false</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>使用 <literal>put</literal> 插入或更新，<literal>get</literal> 检索（返回 <literal>?V</literal>），<literal>remove</literal> 删除。使用 <literal>contains</literal> 检查存在性而无需检索值。</simpara>
+</tip>
+</section>
+<section xml:id="hashmap-string">
+<title>StringHashMap for字符串键</title>
+<simpara>当键是 <literal>[]const u8</literal> 时，使用 <literal>StringHashMap(V)</literal> 进行优化的字符串哈希。请记住：映射不会复制键内存——你必须确保字符串比映射生命周期更长，或者使用竞技场分配器。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/hashmap_string.zig[]</programlisting>
+<formalpara>
+<title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe hashmap_string.zig &amp;&amp; ./hashmap_string</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">City: Seattle, Population: 750000
+City: Austin, Population: 950000
+City: Boston, Population: 690000</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>字符串键不会被映射复制——如果你传递栈分配或临时字符串，它们必须保持有效。使用竞技场分配器或 <literal>dupe</literal> 来管理键的生命周期。</simpara>
+</important>
+</section>
+<section xml:id="hashmap-custom">
+<title>自定义哈希和相等性</title>
+<simpara>对于 <literal>autoHash</literal> 不支持的类型，定义带有自定义 <literal>hash</literal> 和 <literal>eql</literal> 函数的上下文。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/hashmap_custom.zig[]</programlisting>
+<formalpara>
+<title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe hashmap_custom.zig &amp;&amp; ./hashmap_custom</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Point(10, 20): Alice
+Point(30, 40): Bob
+Contains (10, 20): true</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>HashMap(K, V, Context, max_load_percentage)</literal> 中的上下文参数允许有状态哈希（例如，加盐哈希）。对于无状态上下文，传递 <literal>void</literal>。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="priorityqueue">
+<title>PriorityQueue：基于堆的优先结构</title>
+<simpara><literal>PriorityQueue(T, Context, compareFn)</literal> 根据你的比较函数实现二进制最小堆或最大堆。它支持 <literal>add</literal>、<literal>peek</literal>、<literal>remove</literal>（弹出顶部元素）和 <literal>removeIndex</literal>。</simpara>
+<section xml:id="priorityqueue-basic">
+<title>最小堆示例</title>
+<simpara>最小堆首先弹出最小的元素。当第一个参数应该在第二个参数之前时，比较函数返回 <literal>.lt</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/priorityqueue_min.zig[]</programlisting>
+<formalpara>
+<title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe priorityqueue_min.zig &amp;&amp; ./priorityqueue_min</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Popped: 1
+Popped: 5
+Popped: 10
+Popped: 20</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>对于最大堆，反转比较逻辑：当 <literal>a &lt; b</literal> 时返回 <literal>.gt</literal>。</simpara>
+</tip>
+</section>
+<section xml:id="priorityqueue-tasks">
+<title>任务调度的优先队列</title>
+<simpara>优先队列在调度方面表现出色：添加带优先级的任务，然后始终首先处理最高优先级的任务。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/priorityqueue_tasks.zig[]</programlisting>
+<formalpara>
+<title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe priorityqueue_tasks.zig &amp;&amp; ./priorityqueue_tasks</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Processing: Critical bug (priority 10)
+Processing: Feature request (priority 5)
+Processing: Documentation (priority 1)</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>PriorityQueue</literal> 在内部使用堆，因此 <literal>add</literal> 是 O(log n)，<literal>peek</literal> 是 O(1)，<literal>remove</literal> 是 O(log n)。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="sorting">
+<title>排序</title>
+<simpara>Zig 的 <literal>std.sort</literal> 模块提供多种算法：<literal>insertion</literal>（稳定，O(n²)）、<literal>heap</literal>（不稳定，O(n log n)）、<literal>pdq</literal>（模式击败快速排序，O(n log n) 最坏情况）和 <literal>block</literal>（稳定，O(n log n) 带额外内存）。对于大多数用例，默认推荐是 <literal>pdq</literal>。</simpara>
+<section xml:id="sort-basic">
+<title>基本排序</title>
+<simpara>使用切片、上下文和 <literal>lessThan</literal> 函数调用 <literal>std.sort.pdq</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/sort_basic.zig[]</programlisting>
+<formalpara>
+<title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe sort_basic.zig &amp;&amp; ./sort_basic</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Sorted ascending: [1, 2, 5, 8, 10]
+Sorted descending: [10, 8, 5, 2, 1]</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>pdq</literal> 不稳定但快速。如果你需要稳定性（相等元素保持其原始顺序），请使用 <literal>block</literal>。</simpara>
+</tip>
+</section>
+<section xml:id="sort-structs">
+<title>结构体排序</title>
+<simpara>通过提供自定义比较函数按结构体字段排序。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/sort_structs.zig[]</programlisting>
+<formalpara>
+<title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe sort_structs.zig &amp;&amp; ./sort_structs</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Sorted by age:
+Alice, age 30
+Bob, age 25
+Charlie, age 35</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>排序函数中的上下文参数可以持有状态（例如，排序方向标志或比较修饰符）。使用 <literal>anytype</literal> 以获得灵活性。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="multiarraylist">
+<title>MultiArrayList：数组结构布局</title>
+<simpara><literal>MultiArrayList(T)</literal> 以数组结构（SoA）格式存储结构体：每个字段存储在自己的连续数组中，在跨多个元素访问单个字段时提高缓存局部性。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/multiarraylist.zig[]</programlisting>
+<formalpara>
+<title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe multiarraylist.zig &amp;&amp; ./multiarraylist</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Entity 0: id=1, x=10.5, y=20.3
+Entity 1: id=2, x=30.1, y=40.7
+Sum of x coordinates: 40.6</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>当你经常迭代单个字段（例如，游戏引擎中的位置）但很少需要整个结构体时，使用 <literal>MultiArrayList</literal>。这种布局最大化 CPU 缓存效率。</simpara>
+</tip>
+</chapter>
+<chapter xml:id="segmentedlist">
+<title>SegmentedList：稳定指针</title>
+<simpara><literal>SegmentedList(T, prealloc_item_count)</literal> 通过分配固定大小的段而不是重新分配单个连续数组来增长。这确保元素指针在插入过程中保持有效。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/segmentedlist.zig[]</programlisting>
+<formalpara>
+<title>构建和运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe segmentedlist.zig &amp;&amp; ./segmentedlist</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">First item: 10
+First item (after append): 10
+List length: 3</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>与 <literal>ArrayList</literal> 不同，<literal>SegmentedList</literal> 元素的指针即使在你添加更多项目时也保持有效。当你需要稳定寻址时使用此功能（例如，在其他数据结构中存储指针）。</simpara>
+</important>
+</chapter>
+<chapter xml:id="linkedlists">
+<title>链表</title>
+<simpara>Zig 提供 <literal>DoublyLinkedList(T)</literal> 和 <literal>SinglyLinkedList(T)</literal> 作为侵入式链表：节点直接嵌入链接指针（参见 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/DoublyLinkedList.zig">DoublyLinkedList.zig</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/SinglyLinkedList.zig">SinglyLinkedList.zig</link>）。这避免了每个节点的分配器开销，并自然地与现有结构体集成。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/linkedlist.zig[]</programlisting>
+<formalpara>
+<title>Build and Run</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe linkedlist.zig &amp;&amp; ./linkedlist</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>Output</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Node: 10
+Node: 20
+Node: 30</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>Intrusive lists don&#8217;t own node memory—you allocate and manage nodes yourself. This is powerful but requires discipline to avoid use-after-free bugs.</simpara>
+</note>
+</chapter>
+<chapter xml:id="specialized-maps">
+<title>Specialized Maps</title>
+<section xml:id="_arrayhashmap">
+<title>ArrayHashMap</title>
+<simpara><literal>ArrayHashMap</literal> stores keys and values in separate arrays, preserving insertion order and enabling iteration by index (see <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/array_hash_map.zig">array_hash_map.zig</link>).</simpara>
+</section>
+<section xml:id="_staticstringmap">
+<title>StaticStringMap</title>
+<simpara><literal>StaticStringMap(V)</literal> is a compile-time perfect hash map for string keys—fast lookups with zero runtime allocation or hashing overhead (see <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/static_string_map.zig">static_string_map.zig</link>).</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/static_string_map.zig[]</programlisting>
+<formalpara>
+<title>Build and Run</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe static_string_map.zig &amp;&amp; ./static_string_map</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>Output</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Status code for 'ok': 200
+Status code for 'not_found': 404
+Status code for 'server_error': 500</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>Use <literal>StaticStringMap</literal> for compile-time constant mappings (e.g., keyword tables, command parsers). It compiles to optimal switch statements or lookup tables.</simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="allocator-impact">
+<title>Allocator Impact on Collections</title>
+<simpara>Every collection requires an allocator, either passed at initialization (<literal>ArrayList(T).init(allocator)</literal>) or per operation (unmanaged variants). Growth strategies trigger reallocations, and failure returns <literal>error.OutOfMemory</literal> (see <link xl:href="10__allocators-and-memory-management.xml">10</link>).</simpara>
+<section xml:id="arena-pattern">
+<title>Arena Pattern for Bulk-Free</title>
+<simpara>When building temporary collections that live for a single scope, use an arena allocator to free everything at once.</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 44__collections-and-algorithms.adoc - include::example$chapters-data/code/44__collections-and-algorithms/collections_arena.zig[]</programlisting>
+<formalpara>
+<title>Build and Run</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe collections_arena.zig &amp;&amp; ./collections_arena</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>Output</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">List has 1000 items
+Map has 500 entries
+All freed at once via arena.deinit()</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>The arena doesn&#8217;t call individual collection <literal>deinit()</literal> methods. It frees all memory at once. Use this pattern when you know collections won&#8217;t outlive the arena&#8217;s scope (see <link xl:href="10__allocators-and-memory-management.xml">10</link>).</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="performance-considerations">
+<title>Performance Considerations</title>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">ArrayList growth</emphasis>: Doubling capacity amortizes reallocation cost, but large allocations may fail. Pre-allocate if size is known.</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">HashMap load factor</emphasis>: Default <literal>max_load_percentage</literal> is 80%. Higher values save memory but increase collision chains.</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">Sort stability</emphasis>: <literal>pdq</literal> is fastest but unstable. Use <literal>block</literal> or <literal>insertion</literal> when order of equal elements matters.</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">MultiArrayList cache</emphasis>: SoA layout shines when iterating single fields but adds indirection overhead for full-struct access.</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">SegmentedList segments</emphasis>: Smaller <literal>prealloc_item_count</literal> means more segments (more allocations); larger values waste memory if lists stay small.</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>Exercises</title>
+<itemizedlist>
+<listitem>
+<simpara>Implement a <literal>FrequencyMap</literal> using <literal>StringHashMap(u32)</literal> that counts word occurrences in a text file, then print the top-10 most frequent words using a <literal>PriorityQueue</literal>.</simpara>
+</listitem>
+<listitem>
+<simpara>Compare <literal>ArrayList</literal> vs <literal>SegmentedList</literal> performance: create 10,000 items, take pointers to the first 100, then append 10,000 more. Verify pointers remain valid with <literal>SegmentedList</literal> but may invalidate with <literal>ArrayList</literal>.</simpara>
+</listitem>
+<listitem>
+<simpara>Write an <literal>LRU</literal> cache using <literal>HashMap</literal> for lookups and <literal>DoublyLinkedList</literal> for eviction order. When capacity is reached, remove the least-recently-used item.</simpara>
+</listitem>
+<listitem>
+<simpara>Sort an <literal>ArrayList</literal> of structs by multiple keys (e.g., sort by <literal>age</literal>, then by <literal>name</literal> for ties) using a custom comparator and <literal>std.sort.pdq</literal>.</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>Caveats, Alternatives, Edge Cases</title>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">Unmanaged variants</emphasis>: Most collections have unmanaged counterparts (e.g., <literal>ArrayListUnmanaged(T)</literal>) for manual allocator threading, useful in generic code or when embedding collections in structs.</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">HashMap key lifetimes</emphasis>: Maps don&#8217;t duplicate keys. Ensure key memory outlives the map, or use an arena allocator to manage key storage collectively.</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">Iterator invalidation</emphasis>: Like C++, modifying a collection (append, remove) may invalidate iterators or pointers to elements. Always check documentation for each operation.</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">Stable vs unstable sort</emphasis>: If your data has equal elements that must maintain relative order (e.g., sorting a table by column but preserving row order for ties), use <literal>std.sort.block</literal> or <literal>insertion</literal>, not <literal>pdq</literal>.</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">Treap</emphasis>: Zig also provides <literal>std.Treap</literal>, a tree-heap hybrid for ordered maps with probabilistic balancing, useful when you need both sorted iteration and O(log n) operations (see <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/treap.zig">treap.zig</link>).</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

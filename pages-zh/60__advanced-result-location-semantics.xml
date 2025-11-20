@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>附录F. 高级结果位置语义</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>结果位置语义（RLS）是驱动 Zig 的零拷贝聚合、类型推断与高效错误传播的“静默引擎”。在附录E体验内联汇编后，我们重新深入编译器，观察 Zig 如何将值直接导向其最终落点。无论是构建结构体、联合体，还是手动填充调用方提供的缓冲，它都能消除临时值。<link xl:href="59__advanced-inline-assembly.xml">59</link></simpara>
+<simpara>Zig 0.15.2 明确了指针对齐与可选结果指针相关的 RLS 诊断，使在构造期间推理数据“居所”更容易。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>跟踪结构体字面量和强制转换如何将结果位置转发到每个字段而不产生隐藏副本。</simpara>
+</listitem>
+<listitem>
+<simpara>当您想要复用调用方拥有的存储，同时仍提供返回值的API时，应用显式结果指针。</simpara>
+</listitem>
+<listitem>
+<simpara>使用RLS组合联合体，使每个变体直接写入其自己的有效载荷，而无需在运行时分配临时缓冲。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="struct-forwarding">
+<title>结构体转发的实践</title>
+<simpara>当你将结构体字面量赋给变量时，Zig 会将该操作重写为一系列字段写入，使各子表达式可继承最终目的地。第一个“菜谱”将若干传感器读数汇总为<literal>Report</literal>，展示嵌套字面量（<literal>Report</literal>中的<literal>range</literal>）如何传递继承结果位置。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/math.zig">math.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 60__advanced-result-location-semantics.adoc - include::example$chapters-data/code/60__advanced-result-location-semantics/01_histogram_report.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/60__advanced-result-location-semantics/01_histogram_report.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>由于字面量<literal>.{ .range = …, .buckets = histogram }</literal>按字段写入，你可以安全地用<literal>var</literal>数据填充<literal>histogram</literal>——不会产生该 16 字节数组的临时副本。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</tip>
+</chapter>
+<chapter xml:id="manual-result-pointers">
+<title>用于复用的手动结果指针</title>
+<simpara>有时您需要两全其美：为符合人体工程学的调用方提供返回值辅助函数，以及为复用存储的热循环提供就地变体。通过公开一个接收<literal>*Numbers</literal>的<literal>parseInto</literal>例程，您可以显式确定结果位置，同时仍提供受益于自动省略的<literal>parseNumbers</literal>函数。<link xl:href="04__errors-resource-cleanup.xml">4</link> 请注意slice方法接受<literal>*const Numbers</literal>；从按值参数返回切片会指向临时值并违反安全规则。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 60__advanced-result-location-semantics.adoc - include::example$chapters-data/code/60__advanced-result-location-semantics/02_numbers_parse_into.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/60__advanced-result-location-semantics/02_numbers_parse_into.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>用新值重置<literal>Numbers</literal>并清零后备数组可确保结果位置准备好复用，即使前一次解析只填充了缓冲区的部分内容。<link xl:href="57__error-handling-patterns-cookbook.xml">57</link></simpara>
+</note>
+</chapter>
+<chapter xml:id="union-forwarding">
+<title>联合体变体与分支特定目的地</title>
+<simpara>联合体暴露了相同的机制：一旦编译器知道您正在构造哪个变体，它就将有效载荷的结果位置连接到适当的字段。下面的查找辅助函数要么将字节流式传输到<literal>Resource</literal>有效载荷中，要么返回格式错误查询的元数据，而不分配中间缓冲区。这种方案可以扩展到流解析器、FFI桥或必须避免堆通信量的缓存。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 60__advanced-result-location-semantics.adoc - include::example$chapters-data/code/60__advanced-result-location-semantics/03_union_forwarding.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/60__advanced-result-location-semantics/03_union_forwarding.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 2 tests passed.</programlisting>
+</para>
+</formalpara>
+<caution>
+<simpara>复制到固定大小缓冲时，请如示例所示裁剪长度，以免意外写出有效载荷范围。若需完整保留，请改用切片字段，并配合超出联合值寿命的生命周期管理。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</caution>
+</chapter>
+<chapter xml:id="patterns">
+<title>随手可用的模式</title>
+<itemizedlist>
+<listitem>
+<simpara>将<literal>return .{ … };</literal>视为按字段写入的语法糖——编译器已经知道目标位置，因此可以依靠字面量来提高清晰度。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+<listitem>
+<simpara>在解析或格式化时提供基于指针的<literal>*_into</literal>变体——它们将RLS转变为有意识的API控制杆，而不是隐式优化。<link xl:href="04__errors-resource-cleanup.xml">4</link></simpara>
+</listitem>
+<listitem>
+<simpara>联合体承载大有效载荷时，请内联构造，使变体无需堆分配或临时缓冲。<link xl:href="08__user-types-structs-enums-unions.xml">8</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>从按值方法（如<literal>fn slice(self: Numbers)</literal>）返回切片会捕获临时副本；应优先使用指针接收器来保持结果位置稳定。</simpara>
+</listitem>
+<listitem>
+<simpara>许多标准库构建器接受结果指针——在重新实现类似的管道代码之前，请先阅读它们的签名。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>RLS不会绕过任何验证：如果子表达式失败（例如，解析错误），部分写入的目标仍由您控制，因此请记住在重用之前重置或丢弃它。<link xl:href="57__error-handling-patterns-cookbook.xml">57</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展<literal>buildReport</literal>以参数化桶大小，然后检查嵌套循环如何在没有副本的情况下转发其目标位置。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+<listitem>
+<simpara>为<literal>parseInto</literal>添加溢出检测，使其拒绝超过可配置限制的整数，并在错误发生时重置结果缓冲。<link xl:href="57__error-handling-patterns-cookbook.xml">57</link></simpara>
+</listitem>
+<listitem>
+<simpara>当有效载荷超过32字节时，让<literal>lookup</literal>流入调用方提供的临时缓冲，镜像前一节中的基于指针的模式。<link xl:href="04__errors-resource-cleanup.xml">4</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>对于<literal>comptime</literal>构造，结果位置可能完全存在于编译时内存中；使用<literal>@TypeOf</literal>来确认您的数据是否会逃逸到运行时。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+<listitem>
+<simpara>在对接期望你自行管理缓冲的 C API 时，将 RLS 与<literal>extern</literal>结构体结合，以匹配其布局并避免中间拷贝。<link xl:href="33__c-interop-import-export-abi.xml">33</link></simpara>
+</listitem>
+<listitem>
+<simpara>在微优化之前分析热路径：有时使用<literal>std.ArrayList</literal>或流式写入器会更清晰，而RLS仍会为您消除中间临时值。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/array_list.zig">array_list.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

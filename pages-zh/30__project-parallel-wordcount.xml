@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>并行词频统计</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>借助上一章的并发原语，我们将构建一个小而实用的工具：并行词频统计器。它读取文件，按空白分割为连续片段，启动工作线程进行分词与计数，然后将线程本地映射合并为最终的频率表。参见<link xl:href="29__threads-and-atomics.xml">29</link>、<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Thread.zig">Thread.zig</link>与<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/atomic.zig">atomic.zig</link>。</simpara>
+<simpara>为何选择该项目？它锻炼常见系统模式——工作拆分、避免虚假共享、字符串键的所有权与内存序纪律——同时避免陷入样板代码。最终产出是一个健壮骨架，可适配日志处理、类 grep 索引或轻量分析。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>在尊重词元边界的前提下对输入进行分片。</simpara>
+</listitem>
+<listitem>
+<simpara>安全使用<literal>std.Thread.spawn</literal>并在单线程构建中回退为内联执行。</simpara>
+</listitem>
+<listitem>
+<simpara>维护每线程的<literal>std.StringHashMap</literal>并在合并时避免悬挂指针。</simpara>
+</listitem>
+<listitem>
+<simpara>通过排序键值对向量呈现确定性的“Top N”。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="project-setup">
+<title>项目布局与构建</title>
+<simpara>该示例保持为一个本地构建的小型包。0.15.2 的构建 API 构造显式模块并传给<literal>addExecutable</literal>——注意使用<literal>root_module</literal>字段而非旧的<literal>root_source_file</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 30__project-parallel-wordcount.adoc - include::example$chapters-data/code/30__project-parallel-wordcount/build.zig[]</programlisting>
+<simpara>See <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build.zig">Build.zig</link>.</simpara>
+</chapter>
+<chapter xml:id="implementation">
+<title>实现</title>
+<simpara>程序将整个文件读入内存（受合理上限限制），在空白处分片，然后启动 N 个工作线程（N 为 CPU 数量，除非为单线程模式）。每个工作线程执行分词与 ASCII 小写化、去除标点，并插入到其各自的、由 arena 支撑的映射中以避免对每个词元的单次释放。合并时，我们将键复制到最终映射的分配器中，以确保在反初始化 arena 时不会使键失效。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 30__project-parallel-wordcount.adoc - include::example$chapters-data/code/30__project-parallel-wordcount/src/main.zig[]</programlisting>
+<simpara>See <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/hash_map.zig">hash_map.zig</link> and <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem/tokenize.zig">tokenize.zig</link>.</simpara>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build --build-file chapters-data/code/30__project-parallel-wordcount/build.zig run -- chapters-data/code/30__project-parallel-wordcount/data/lines.txt</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">top 10 words in 8 shards:
+and 2
+i 2
+little 2
+me 2
+the 2
+a 1
+about 1
+ago—never 1
+call 1
+how 1</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>StringHashMap</literal>以引用方式存储字符串切片；不会复制字节。合并指向短生命周期 arena 的映射时，请将键字节复制到目标分配器，完成后再释放。示例在退出前迭代并释放各键。</simpara>
+</tip>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>分片会将片段末尾推进到下一个空白，以避免在词中部拆分词元。这意味着片段可能不均匀；对 I/O 受限工具而言无妨。</simpara>
+</listitem>
+<listitem>
+<simpara>示例以粗略的 ASCII 小写化与去除标点来把焦点保持在线程上。若需要 Unicode 分段，请集成<literal>std.unicode</literal>与更忠实的规范化。</simpara>
+</listitem>
+<listitem>
+<simpara>在单线程构建（<literal>-Dsingle-threaded=true</literal>）中，我们内联执行工作线程并完全跳过 spawn，遵循第 29 章的模式。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>添加<literal>-n &lt;N&gt;</literal>以打印 Top N 单词，并使用<literal>std.process.argsWithAllocator</literal>解析参数。</simpara>
+</listitem>
+<listitem>
+<simpara>将合并阶段切换为并行归约：每个 CPU 进行成对合并，直至仅剩一个映射；衡量可扩展性。</simpara>
+</listitem>
+<listitem>
+<simpara>以按<literal>文件大小/分片数</literal>定额的 bump 分配器替换 arena，并权衡碎片化与峰值占用。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="summary">
+<title>总结</title>
+<simpara>该项目将磁盘字节到排序频率表的路径浓缩为实用且快速的过程，同时尊重 Zig 的所有权与线程模型。它整合了分片、每线程映射与安全合并——一个可用于更大流水线的最小模板。</simpara>
+</chapter>
+</book>

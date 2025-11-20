@@ -1,0 +1,298 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>线程与原子</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>上一章的文件系统管线为并行产出与消费数据的应用奠定了舞台。现在我们关注 Zig 如何启动操作系统线程、在多核间协调工作，并通过原子操作保持共享状态一致（参见<link xl:href="28__filesystem-and-io.xml">28</link>与<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Thread.zig">Thread.zig</link>）。</simpara>
+<simpara>Zig 0.15.2 的线程原语将轻量的 spawn API 与显式的内存序结合起来，因此由你决定存储何时可见以及竞争何时应阻塞。现在理解这些工具，将让后续的并行词频统计项目不再神秘（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/atomic.zig">atomic.zig</link>与<link xl:href="30__project-parallel-wordcount.xml">30</link>）。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>Spawn and join worker threads responsibly, selecting stack sizes and allocators only when necessary.</simpara>
+</listitem>
+<listitem>
+<simpara>Choose memory orderings for atomic loads, stores, and compare-and-swap loops when protecting shared state.</simpara>
+</listitem>
+<listitem>
+<simpara>Detect single-threaded builds at compile time and fall back to synchronous execution paths.</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="thread-model">
+<title>用<literal>std.Thread</literal>编排工作</title>
+<simpara>Zig 通过<literal>std.Thread</literal>建模内核线程，提供查询 CPU 数量、配置栈大小与确定性 join 句柄的助手。不同于异步 I/O，这些是真正的内核线程——每次 spawn 都消耗操作系统资源，因此批处理工作单元至关重要。</simpara>
+<section xml:id="_thread_pool_pattern">
+<title>线程池模式</title>
+<simpara>在深入手动线程 spawn 之前，理解 Zig 编译器自身用于并行工作的线程池模式很有价值。下图展示了<literal>std.Thread.Pool</literal>如何在工作线程间分配任务：</simpara>
+<literallayout class="monospaced">graph TB
+    ThreadPool["ThreadPool&lt;br/&gt;(std.Thread.Pool)"]
+
+    AstGen1["AstGen&lt;br/&gt;(File 1)"]
+    AstGen2["AstGen&lt;br/&gt;(File 2)"]
+    AstGen3["AstGen&lt;br/&gt;(File 3)"]
+
+    Sema1["Sema&lt;br/&gt;(Function 1)"]
+    Sema2["Sema&lt;br/&gt;(Function 2)"]
+
+    Codegen1["CodeGen&lt;br/&gt;(Function 1)"]
+    Codegen2["CodeGen&lt;br/&gt;(Function 2)"]
+
+    ThreadPool --&gt; AstGen1
+    ThreadPool --&gt; AstGen2
+    ThreadPool --&gt; AstGen3
+    ThreadPool --&gt; Sema1
+    ThreadPool --&gt; Sema2
+    ThreadPool --&gt; Codegen1
+    ThreadPool --&gt; Codegen2
+
+    ZcuPerThread["Zcu.PerThread&lt;br/&gt;(per-thread state)"]
+
+    Sema1 -.-&gt;|"uses"| ZcuPerThread
+    Sema2 -.-&gt;|"uses"| ZcuPerThread</literallayout>
+<simpara>线程池维护固定数量的工作线程，从队列拉取任务，避免反复 spawn 与 join 的开销。Zig 编译器广泛采用此模式：<literal>std.Thread.Pool</literal>将 AST 生成、语义分析与代码生成任务派发给工作线程。每个工作线程拥有线程本地状态（<literal>Zcu.PerThread</literal>）以最小化同步——仅在合并到<literal>InternPool.shards</literal>等共享数据结构时，最终结果需要互斥保护。该架构体现了并发设计的关键原则：工作单元应相互独立；共享状态应分片或用互斥保护；线程本地缓存可减少竞争。若负载涉及大量小任务，优先采用<literal>std.Thread.Pool</literal>而非手动 spawn；若需要少量长时间运行且职责明确的工作线程，手动<literal>spawn</literal>/<literal>join</literal>更为适宜。</simpara>
+</section>
+<section xml:id="thread-model-chunk">
+<title>用 spawn/join 分块数据</title>
+<simpara>下例将一个整数数组划分给动态数量的工作线程，使用原子 fetch-add 在无锁情况下累计偶数总和。其会适配宿主 CPU 数量，但绝不会 spawn 超过待处理元素数量的线程。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 29__threads-and-atomics.adoc - include::example$chapters-data/code/29__threads-and-atomics/01_parallel_even_sum.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 01_parallel_even_sum.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">spawned 8 worker(s)
+even sum (threads): 7264
+even sum (sequential check): 7264</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>std.atomic.Value</literal> wraps plain integers and routes every access through <literal>@atomicLoad</literal>, <literal>@atomicStore</literal>, or <literal>@atomicRmw</literal>, shielding you from accidentally mixing atomic and non-atomic access to the same memory location.</simpara>
+</tip>
+</section>
+<section xml:id="thread-model-config">
+<title>spawn 配置与调度提示</title>
+<simpara><literal>std.Thread.SpawnConfig</literal>允许在默认不合用时覆盖栈大小或提供自定义分配器（例如深度递归或预分配 arena）。捕获<literal>Thread.getCpuCount()</literal>的错误以提供安全回退；当等待其它线程推进时，别忘了使用<literal>Thread.yield()</literal>或<literal>Thread.sleep()</literal>进行协作式调度。</simpara>
+</section>
+</chapter>
+<chapter xml:id="atomics">
+<title>原子状态机</title>
+<simpara>Zig 直接暴露 LLVM 的原子内建：你选择<literal>.acquire</literal>、<literal>.release</literal>或<literal>.seq_cst</literal>等序，编译器发射相应的栅栏。设计小型状态机（如一次性初始化器）且需被多线程一致观察时，这种清晰性极具价值。</simpara>
+<section xml:id="atomics-once">
+<title>用原子内建实现一次保护</title>
+<simpara>该程序围绕<literal>@cmpxchgStrong</literal>构建一个无锁的“仅调用一次”助手。线程仅在其它线程执行初始化期间自旋，随后通过 acquire 加载读取已发布的值。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 29__threads-and-atomics.adoc - include::example$chapters-data/code/29__threads-and-atomics/02_atomic_once.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 02_atomic_once.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">thread 0 observed 9157
+thread 1 observed 9157
+thread 2 observed 9157
+thread 3 observed 9157
+init calls: 1
+config value: 9157</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>@cmpxchgStrong</literal> returns <literal>null</literal> on success, so looping while it yields a value is a concise way to retry the CAS without allocating a mutex. Pair the final <literal>@atomicStore</literal> with <literal>.release</literal> to publish the results before any waiter performs its <literal>.acquire</literal> load.</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="single-threaded">
+<title>单线程构建与回退</title>
+<simpara>传递<literal>-Dsingle-threaded=true</literal>会强制编译器拒绝任何 spawn 操作系统线程的尝试。可能在两种配置下运行的代码应在编译期基于<literal>builtin.single_threaded</literal>分支，并替换为内联执行路径。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link>。</simpara>
+<section xml:id="_understanding_the_single_threaded_flag">
+<title>理解单线程标志</title>
+<simpara><literal>single_threaded</literal>标志是编译器特性配置的一部分，会影响代码生成与优化：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "Code Generation Features"
+        Features["Feature Flags"]
+
+        Features --&gt; UnwindTables["unwind_tables: bool"]
+        Features --&gt; StackProtector["stack_protector: bool"]
+        Features --&gt; StackCheck["stack_check: bool"]
+        Features --&gt; RedZone["red_zone: ?bool"]
+        Features --&gt; OmitFramePointer["omit_frame_pointer: bool"]
+        Features --&gt; Valgrind["valgrind: bool"]
+        Features --&gt; SingleThreaded["single_threaded: bool"]
+
+        UnwindTables --&gt; EHFrame["Generate .eh_frame&lt;br/&gt;for exception handling"]
+
+        StackProtector --&gt; CanaryCheck["Stack canary checks&lt;br/&gt;buffer overflow detection"]
+
+        StackCheck --&gt; ProbeStack["Stack probing&lt;br/&gt;prevents overflow"]
+
+        RedZone --&gt; RedZoneSpace["Red zone optimization&lt;br/&gt;(x86_64, AArch64)"]
+
+        OmitFramePointer --&gt; NoFP["Omit frame pointer&lt;br/&gt;for performance"]
+
+        Valgrind --&gt; ValgrindSupport["Valgrind client requests&lt;br/&gt;for memory debugging"]
+
+        SingleThreaded --&gt; NoThreading["Assume single-threaded&lt;br/&gt;enable optimizations"]
+    end</literallayout>
+<simpara>当<literal>single_threaded</literal>为真时，编译器假定内存无并发访问，从而启用若干优化：原子操作可降低为普通加载与存储（消除栅栏指令）、线程局部存储变为普通全局、同步原语可被完全省略。该标志通过<literal>-Dsingle-threaded=true</literal>在构建时设置，并经由<literal>Compilation.Config</literal>流入代码生成。重要的是，这不仅是 API 限制——它从根本上改变了生成代码。以单线程模式编译的原子指令比多线程构建中的原子保障更弱，因此必须确保两种模式下的代码路径保持一致，以避免在切换该标志时出现微妙缺陷。</simpara>
+</section>
+<section xml:id="single-threaded-guard">
+<title>在编译期门控线程使用</title>
+<simpara>如下保护器会重置一个原子状态机，然后根据构建模式选择 spawn 一个工作线程或内联执行任务。由于该分支发生在编译期，单线程配置下不会实例化<literal>Thread.spawn</literal>，从而完全避免编译错误。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 29__threads-and-atomics.adoc - include::example$chapters-data/code/29__threads-and-atomics/03_single_thread_guard.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 03_single_thread_guard.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">multi-threaded build; spawning worker
+task state: threaded_done</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>When you build with <literal>-Dsingle-threaded=true</literal>, the inline branch is the only one compiled, so keep the logic symmetrical and make sure any shared state is still set via the same atomic helpers to avoid diverging semantics.</simpara>
+</important>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>线程必须恰好 join 或 detach 一次；泄漏句柄会导致资源耗尽。<literal>Thread.join</literal>会消费该句柄，因此将其存放在稍后可迭代的切片中。</simpara>
+</listitem>
+<listitem>
+<simpara>原子操作作用于原始内存——切勿在同一地址混用原子与非原子访问，即便你“知道”不会发生竞争。用<literal>std.atomic.Value</literal>包裹共享标量以使意图清晰。</simpara>
+</listitem>
+<listitem>
+<simpara>比较交换循环可能自旋；当等待可能持续多个时钟周期时，考虑使用<literal>Thread.yield()</literal>或<literal>Thread.ResetEvent</literal>等事件原语。</simpara>
+</listitem>
+</itemizedlist>
+<section xml:id="_debugging_concurrent_code_with_threadsanitizer">
+<title>用 ThreadSanitizer 调试并发代码</title>
+<simpara>Zig 通过 ThreadSanitizer 提供内置竞争检测，它是查找数据竞争、死锁及其它并发缺陷的强大工具：</simpara>
+<informaltable frame="all" rowsep="1" colsep="1">
+<tgroup cols="4">
+<colspec colname="col_1" colwidth="25*"/>
+<colspec colname="col_2" colwidth="25*"/>
+<colspec colname="col_3" colwidth="25*"/>
+<colspec colname="col_4" colwidth="25*"/>
+<thead>
+<row>
+<entry align="left" valign="top">Sanitizer</entry>
+<entry align="left" valign="top">Config Field</entry>
+<entry align="left" valign="top">Purpose</entry>
+<entry align="left" valign="top">Requirements</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry align="left" valign="top"><simpara>Thread Sanitizer</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>any_sanitize_thread</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>Data race detection</simpara></entry>
+<entry align="left" valign="top"><simpara>LLVM backend</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>UBSan</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>any_sanitize_c</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>C undefined behavior</simpara></entry>
+<entry align="left" valign="top"><simpara>LLVM backend, C code</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>Fuzzing</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>any_fuzz</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>Fuzzing instrumentation</simpara></entry>
+<entry align="left" valign="top"><simpara>libfuzzer integration</simpara></entry>
+</row>
+</tbody>
+</tgroup>
+</informaltable>
+<literallayout class="monospaced">graph TB
+    subgraph "Sanitizer Configuration"
+        Sanitizers["Sanitizer Flags"]
+
+        Sanitizers --&gt; TSan["any_sanitize_thread"]
+        Sanitizers --&gt; UBSan["any_sanitize_c"]
+        Sanitizers --&gt; Fuzz["any_fuzz"]
+
+        TSan --&gt; TSanLib["tsan_lib: ?CrtFile"]
+        TSan --&gt; TSanRuntime["ThreadSanitizer runtime&lt;br/&gt;linked into binary"]
+
+        UBSan --&gt; UBSanLib["ubsan_rt_lib: ?CrtFile&lt;br/&gt;ubsan_rt_obj: ?CrtFile"]
+        UBSan --&gt; UBSanRuntime["UBSan runtime&lt;br/&gt;C undefined behavior checks"]
+
+        Fuzz --&gt; FuzzLib["fuzzer_lib: ?CrtFile"]
+        Fuzz --&gt; FuzzRuntime["libFuzzer integration&lt;br/&gt;for fuzz testing"]
+    end</literallayout>
+<simpara>构建程序时使用<literal>-Dsanitize-thread</literal>启用 ThreadSanitizer。TSan 会对所有内存访问与同步操作插桩，跟踪先发生关系以检测竞争。一旦发现竞争，TSan 会打印详细报告，展示冲突访问及其栈追踪。插桩会带来显著运行时开销（慢 2–5 倍、内存 5–10 倍），因此仅在开发与测试阶段使用，不要用于生产。TSan 对验证原子代码尤为有用：即使逻辑看似正确，它也能捕获细微的排序问题或缺失的同步。对于本章示例，尝试使用<literal>-Dsanitize-thread</literal>运行以验证无竞争——并行求和与 atomic once 模式应当能干净通过，证明同步正确。</simpara>
+</section>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展并行求和以接收谓词回调，从而将“偶数”替换为任意你喜欢的分类；衡量<literal>.acquire</literal>与<literal>.monotonic</literal>加载对竞争的影响。</simpara>
+</listitem>
+<listitem>
+<simpara>重构<literal>callOnce</literal>演示以分层错误：使初始化器返回<literal>!void</literal>并将失败存入一个原子槽，以便调用者一致地重新抛出同一错误。</simpara>
+</listitem>
+<listitem>
+<simpara>在一次性保护代码周围引入<literal>std.Thread.WaitGroup</literal>，使其无需手动存储句柄即可等待任意数量的工作线程。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>在无 pthreads 或 Win32 线程的平台上 Zig 会报编译错误；针对不支持<literal>--threading</literal>的 WASI 目标时，应规划回退到事件循环或异步。</simpara>
+</listitem>
+<listitem>
+<simpara>原子操作适用于普通整数与枚举；对于复合状态，考虑使用互斥锁或设计原子数组以避免撕裂更新。</simpara>
+</listitem>
+<listitem>
+<simpara>单线程构建仍可使用原子，但这些指令会编译为普通加载/存储。保持代码路径一致，避免无意依赖多线程构建中更强的排序保证。</simpara>
+</listitem>
+</itemizedlist>
+<section xml:id="_platform_specific_threading_constraints">
+<title>平台特定的线程约束</title>
+<simpara>并非所有平台都支持线程，且部分平台对线程局部存储（TLS）有特殊要求：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "Threading Configuration"
+        TARG["Target Platform"]
+        TARG --&gt; SINGLETHREAD["defaultSingleThreaded()&lt;br/&gt;WASM, Haiku"]
+        TARG --&gt; EMULATETLS["useEmulatedTls()&lt;br/&gt;OpenBSD, old Android"]
+
+        SINGLETHREAD --&gt; NOTHREAD["No thread support"]
+        EMULATETLS --&gt; TLSEMU["Software TLS"]
+    end</literallayout>
+<simpara>某些目标默认单线程模式，因为它们缺乏操作系统线程支持：WebAssembly（未开启<literal>--threading</literal>标志）与 Haiku OS 即属此类。在这些平台上，除非在构建配置中明确启用线程支持，否则尝试 spawn 线程会导致编译错误。相关问题是线程局部存储（TLS）：OpenBSD 与老版本 Android 不提供原生 TLS，因此 Zig 使用仿真 TLS——这是一种更慢但可移植的软件实现。编写跨平台并发代码时，请检查<literal>target.defaultSingleThreaded()</literal>与<literal>target.useEmulatedTls()</literal>以了解平台约束。对于 WASM，可通过启用<literal>atomics</literal>与<literal>bulk-memory</literal>特性加上<literal>--import-memory --shared-memory</literal>链接标志来开启线程，但并非所有 WASM 运行时都支持此特性。请将代码设计为优雅降级：使用<literal>builtin.single_threaded</literal>提供同步回退，并避免假定 TLS 在所有平台上都是零成本。</simpara>
+</section>
+</chapter>
+<chapter xml:id="summary">
+<title>总结</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>std.Thread</literal>提供轻量的 spawn/join 语义，但调度与清理仍由你负责。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>@atomicLoad</literal>、<literal>@atomicStore</literal>与<literal>@cmpxchgStrong</literal>等原子内建在你将序与不变量匹配时，使小型无锁状态机可行。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>builtin.single_threaded</literal>可使共享组件在单线程构建与多核部署间保持工作，而无需分叉代码库。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

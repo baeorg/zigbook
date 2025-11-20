@@ -1,0 +1,838 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>标准库索引（地图）</title>
+<subtitle>导航Zig 0.15.2标准库的70+模块和30+目录</subtitle>
+<date>2025-11-06</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>在构建了针对WASI和原生平台的可移植应用程序后，<xref linkend="42__project-wasi-build-and-run" xrefstyle="short">42</xref> 你现在站在Zig标准库的门槛上——这是一个精心策划的集合，包含大约70个顶级模块和30多个目录，涵盖数据结构、I/O、加密、压缩和编译器内部。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/std.zig">std.zig</link></simpara>
+<simpara>本章作为你的地图：一个导航索引，帮助你在0.15.2版本的 <literal>zig/lib/std/</literal> 中定位，显示功能所在位置以及库类别如何与后续深入章节对齐。</simpara>
+<simpara>与教程章节不同，这是一个参考指南——没有代码示例，只有有组织的指针。用它来快速定位模块，理解stdlib的分类法，并跳转到44-52章的详细处理。<xref linkend="44__collections-and-algorithms" xrefstyle="short">44</xref> 把它看作是Zig内置电池理念的目录。</simpara>
+</chapter>
+<chapter xml:id="specialized-modules">
+<title>专用模块（本书不展开）</title>
+<simpara>部分标准库组件高度专用或主要服务于编译器内部。它们在目录树中出现，但并非后续章节的重点：</simpara>
+<informaltable frame="all" rowsep="1" colsep="1">
+<tgroup cols="2">
+<colspec colname="col_1" colwidth="33.3333*"/>
+<colspec colname="col_2" colwidth="66.6667*"/>
+<thead>
+<row>
+<entry align="left" valign="top">模块/路径</entry>
+<entry align="left" valign="top">用途</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.Build</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>构建系统内部；见 <literal>Build/</literal>，详见<link xl:href="22__build-system-deep-dive.xml">第22章</link></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.zig</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>编译器AST与代码生成；见 <literal>zig/</literal>；高级主题</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.zon</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>ZON 解析/序列化；见 <literal>zon/</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.Target</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>目标架构元数据；见 <literal>Target/</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.SemanticVersion</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>语义化版本；见 <literal>SemanticVersion.zig</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.Uri</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>URI 解析；见 <literal>Uri.zig</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.wasm</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>WebAssembly 常量；见 <literal>wasm.zig</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.elf</literal>、<literal>std.macho</literal>、<literal>std.coff</literal>、<literal>std.pdb</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>二进制格式解析器；对应各自 <literal>.zig</literal> 文件</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.dwarf</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>DWARF 常量；见 <literal>dwarf/</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.Thread</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>线程原语；在<link xl:href="29__threads-and-atomics.xml">第29章</link>涉及</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.atomic</literal>、<literal>std.once</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>原子操作与一次性初始化；见<link xl:href="29__threads-and-atomics.xml">第29章</link></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>std.http</literal>、<literal>std.net</literal>、<literal>std.json</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>网络与HTTP；详见<link xl:href="31__networking-http-and-json.xml">第31章</link></simpara></entry>
+</row>
+</tbody>
+</tgroup>
+</informaltable>
+</chapter>
+
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>自信地导航 <literal>zig/lib/std/</literal> 的物理布局，区分顶级文件和子目录。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/">std</link></simpara>
+</listitem>
+<listitem>
+<simpara>识别哪些stdlib组件处理集合、I/O、格式化、压缩、时间、进程和调试。<xref linkend="44__collections-and-algorithms" xrefstyle="short">44</xref></simpara>
+</listitem>
+<listitem>
+<simpara>理解模块的文件系统路径与其导入名称之间的关系（例如，<literal>std.ArrayList</literal> 映射到 <literal>array_list.zig</literal>）。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/array_list.zig">array_list.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用此索引作为详细API章节的跳板，而不会在100多个源文件中迷失。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="stdlib-at-a-glance">
+<title>标准库一览</title>
+<simpara>标准库作为Zig编译器安装的一部分提供，位于 <literal>zig/lib/std/</literal>。其根目录包含大约：</simpara>
+<itemizedlist>
+  <listitem>
+    <simpara><strong>70个 <literal>.zig</literal> 文件</strong> 提供单个模块（例如，<literal>array_list.zig</literal>、<literal>json.zig</literal>、<literal>log.zig</literal>）</simpara>
+  </listitem>
+  <listitem>
+    <simpara><strong>30多个子目录</strong> 分组相关功能（例如，<literal>crypto/</literal>、<literal>compress/</literal>、<literal>fs/</literal>、<literal>math/</literal>）</simpara>
+  </listitem>
+  <listitem>
+    <simpara><strong>1个入口点</strong>：<literal>std.zig</literal>，它重新导出公共API表面</simpara>
+  </listitem>
+</itemizedlist>
+<simpara>当你写 <literal>@import("std")</literal> 时，编译器加载 <literal>std.zig</literal>，然后执行 <literal>pub const ArrayList = @import("array_list.zig")</literal> 以及每个公共符号的类似操作。这种扁平命名空间设计意味着 <literal>std.ArrayList</literal> 和 <literal>std.json</literal> 位于同一级别，即使某些实现跨越子目录中的多个文件。</simpara>
+</chapter>
+
+<chapter xml:id="directory-tree">
+<title>目录树（选择性视图）</title>
+<simpara>下面是一个ASCII树，显示关键目录和代表性文件。这不是详尽的（某些目录包含20多个文件），但它突出了定向的地标。</simpara>
+<informalfigure>
+<mediaobject>
+<textobject><phrase>std命名空间图</phrase></textobject>
+</mediaobject>
+</informalfigure>
+<programlisting language="text">std/ ──► Build/ ──► Cache.zig, Fuzz.zig, Module.zig, Step.zig, Watch.zig, WebServer.zig, abi.zig
+           │
+           ├──► Cache/ ──► DepTokenizer.zig, Directory.zig, Path.zig
+           │
+           ├──► Step/  ──► CheckFile.zig, CheckObject.zig, Compile.zig, ConfigHeader.zig, Fail.zig,
+           │              Fmt.zig, InstallArtifact.zig, InstallDir.zig, InstallFile.zig, ObjCopy.zig,
+           │              Options.zig, RemoveDir.zig, Run.zig, TranslateC.zig, UpdateSourceFiles.zig, WriteFile.zig
+           │
+           └──► Watch/ ──► FsEvents.zig
+           
+       └──► Io/ ──► DeprecatedReader.zig, DeprecatedWriter.zig, Reader.zig, Writer.zig, counting_reader.zig
+           │
+           ├──► fixed_buffer_stream.zig, test.zig, tty.zig
+           │
+           └──► Reader/ ──► Limited.zig, test.zig
+
+       └──► Random/ ──► Ascon.zig, ChaCha.zig, Isaac64.zig, Pcg.zig, RomuTrio.zig, Sfc64.zig, SplitMix64.zig
+           │
+           ├──► Xoroshiro128.zig, Xoshiro256.zig, benchmark.zig, test.zig, ziggurat.zig
+
+       └──► Target/ ──► Query.zig, aarch64.zig, amdgcn.zig, arc.zig, arm.zig, avr.zig, bpf.zig, csky.zig
+           │
+           ├──► generic.zig, hexagon.zig, lanai.zig, loongarch.zig, m68k.zig, mips.zig, msp430.zig
+           │
+           ├──► nvptx.zig, powerpc.zig, propeller.zig, riscv.zig, s390x.zig, sparc.zig, spirv.zig
+           │
+           ├──► ve.zig, wasm.zig, x86.zig, xcore.zig, xtensa.zig
+
+       └──► Thread/ ──► Condition.zig, Futex.zig, Pool.zig, ResetEvent.zig, RwLock.zig, Semaphore.zig, WaitGroup.zig
+           │
+           ├──► Mutex/ ──► Recursive.zig
+           │
+           └──► Mutex.zig
+
+       └──► builtin/ ──► assembly.zig
+
+       └──► c/ ──► darwin.zig, dragonfly.zig, freebsd.zig, haiku.zig, netbsd.zig, openbsd.zig, serenity.zig, solaris.zig
+
+       └──► compress/ ──► flate.zig, lzma.zig, lzma2.zig, xz.zig, zstd.zig
+           │
+           ├──► flate/ ──► BlockWriter.zig, Compress.zig, Decompress.zig, HuffmanEncoder.zig, Lookup.zig, Token.zig, testdata/
+           │
+           ├──► lzma/  ──► decode/, decode.zig, test.zig, testdata/, vec2d.zig
+           │
+           ├──► lzma2/ ──► decode.zig
+           │
+           ├──► xz/    ──► block.zig, test.zig, testdata/
+           │
+           └──► zstd/  ──► Decompress.zig
+
+       └──► crypto/ ──► Certificate.zig, Sha1.zig, aegis.zig, aes.zig, aes_gcm.zig, aes_ocb.zig, argon2.zig, ascon.zig, bcrypt.zig
+           │
+           ├──► benchmark.zig, blake2.zig, blake3.zig, chacha20.zig, cmac.zig, codecs.zig, ecdsa.zig, errors.zig, ff.zig
+           │
+           ├──► ghash_polyval.zig, hash_composition.zig, hkdf.zig, hmac.zig, isap.zig, keccak_p.zig, md5.zig, ml_kem.zig
+           │
+           ├──► modes.zig, pbkdf2.zig, phc_encoding.zig, poly1305.zig, salsa20.zig, scrypt.zig, sha2.zig, sha3.zig
+           │
+           ├──► siphash.zig, test.zig, timing_safe.zig, tlcsprng.zig, tls.zig
+           │
+           ├──► 25519/ ──► curve25519.zig, ed25519.zig, edwards25519.zig, field.zig, ristretto255.zig, scalar.zig, x25519.zig
+           │
+           ├──► aes/    ──► aesni.zig, armcrypto.zig, soft.zig
+           │
+           ├──► codecs/ ──► asn1/, asn1.zig, base64_hex_ct.zig
+           │
+           ├──► pcurves/ ──► common.zig, p256/, p256.zig, p384/, p384.zig, secp256k1/, secp256k1.zig, tests/
+           │
+           └──► tls/    ──► Client.zig
+
+       └──► debug/ ──► Coverage.zig, Dwarf.zig, FixedBufferReader.zig, Info.zig, MemoryAccessor.zig, Pdb.zig, SelfInfo.zig
+           │
+           ├──► no_panic.zig, simple_panic.zig
+           │
+           └──► Dwarf/ ──► abi.zig, call_frame.zig, expression.zig
+
+       └──► dwarf/ ──► AT.zig, ATE.zig, EH.zig, FORM.zig, LANG.zig, OP.zig, TAG.zig
+
+       └──► fmt/ ──► float.zig, parse_float.zig
+           │
+           ├──► parse_float/ ──► FloatInfo.zig, FloatStream.zig, common.zig, convert_eisel_lemire.zig
+           │
+           ├──► convert_fast.zig, convert_hex.zig, convert_slow.zig, decimal.zig, parse.zig
+
+       └──► fs/ ──► AtomicFile.zig, Dir.zig, File.zig, get_app_data_dir.zig, path.zig, test.zig, wasi.zig
+
+       └──► hash/ ──► Adler32.zig, auto_hash.zig, benchmark.zig, cityhash.zig, fnv.zig, murmur.zig, verify.zig, wyhash.zig
+           │
+           └──► xxhash.zig
+           │
+           └──► crc/ ──► crc.zig, impl.zig, test.zig
+
+       └──► heap/ ──► FixedBufferAllocator.zig, PageAllocator.zig, SmpAllocator.zig, ThreadSafeAllocator.zig, WasmAllocator.zig
+           │
+           ├──► arena_allocator.zig, debug_allocator.zig, memory_pool.zig, sbrk_allocator.zig
+
+       └──► http/ ──► ChunkParser.zig, Client.zig, HeadParser.zig, HeaderIterator.zig, Server.zig, test.zig
+
+       └──► json/ ──► JSONTestSuite_test.zig, Scanner.zig, Stringify.zig, dynamic.zig, dynamic_test.zig
+           │
+           ├──► hashmap.zig, hashmap_test.zig, scanner_test.zig, static.zig, static_test.zig, test.zig
+
+       └──► math/ ──► acos.zig, acosh.zig, asin.zig, asinh.zig, atan.zig, atan2.zig, atanh.zig, cbrt.zig, copysign.zig
+           │
+           ├──► cosh.zig, expm1.zig, expo2.zig, float.zig, frexp.zig, gamma.zig, gcd.zig, hypot.zig
+           │
+           ├──► ilogb.zig, isfinite.zig, isinf.zig, isnan.zig, isnormal.zig, iszero.zig, lcm.zig, ldexp.zig, log.zig
+           │
+           ├──► log10.zig, log1p.zig, log2.zig, log_int.zig, modf.zig, nextafter.zig, pow.zig, powi.zig
+           │
+           ├──► scalbn.zig, signbit.zig, sinh.zig, sqrt.zig, tanh.zig
+           │
+           ├──► big/ ──► int.zig, int_test.zig
+           │
+           └──► complex/ ──► abs.zig, acos.zig, acosh.zig, arg.zig, asin.zig, asinh.zig, atan.zig, atanh.zig
+                          └──► conj.zig, cos.zig, cosh.zig, exp.zig, ldexp.zig, log.zig, pow.zig, proj.zig, sin.zig
+                          └──► sinh.zig, sqrt.zig, tan.zig, tanh.zig
+
+       └──► mem/ ──► Allocator.zig
+
+       └──► meta/ ──► trailer_flags.zig
+
+       └──► net/ ──► test.zig
+
+       └──► os/ ──► emscripten.zig, freebsd.zig, linux.zig, plan9.zig, uefi.zig, wasi.zig, windows.zig
+           │
+           ├──► linux/ ──► IoUring.zig, aarch64.zig, arm.zig, bpf.zig, bpf/, hexagon.zig, io_uring_sqe.zig, ioctl.zig
+           │
+           ├──► loongarch64.zig, m68k.zig, mips.zig, mips64.zig, powerpc.zig, powerpc64.zig
+           │
+           ├──► riscv32.zig, riscv64.zig, s390x.zig, seccomp.zig, sparc64.zig, syscalls.zig
+           │
+           ├──► test.zig, thumb.zig, tls.zig, vdso.zig, x86.zig, x86_64.zig
+           │
+           └──► plan9/ ──► x86_64.zig
+           │
+           └──► uefi/ ──► device_path.zig, hii.zig, pool_allocator.zig, protocol.zig, protocol/, status.zig
+           │
+           └──► windows/ ──► advapi32.zig, crypt32.zig, kernel32.zig, lang.zig, nls.zig, ntdll.zig
+                          └──► ntstatus.zig, sublang.zig, test.zig, tls.zig, win32error.zig, ws2_32.zig
+
+       └──► posix/ ──► test.zig
+
+       └──► process/ ──► Child.zig
+
+       └──► sort/ ──► block.zig, pdq.zig
+
+       └──► testing/ ──► FailingAllocator.zig
+
+       └──► time/ ──► epoch.zig
+
+       └──► unicode/ ──► (empty, API in `unicode.zig`)
+
+       └──► valgrind/ ──► cachegrind.zig, callgrind.zig, memcheck.zig
+
+       └──► tar/ ──► Writer.zig, test.zig
+           └──► testdata/
+
+       └──► tz/ ──► (empty)
+
+       └──► zon/ ──► Serializer.zig, parse.zig, stringify.zig
+
+       └──► zig/ ──► Ast.zig, AstGen.zig, AstRlAnnotate.zig, BuiltinFn.zig, Client.zig, ErrorBundle.zig
+           │
+           ├──► LibCDirs.zig, LibCInstallation.zig, Parse.zig, Server.zig, WindowsSdk.zig
+           │
+           ├──► Zir.zig, Zoir.zig, ZonGen.zig, c_builtins.zig, c_translation.zig
+           │
+           ├──► number_literal.zig, parser_test.zig, perf_test.zig, primitives.zig
+           │
+           ├──► string_literal.zig, system.zig, target.zig, tokenizer.zig
+           │
+           ├──► Ast/ ──► Render.zig
+           │
+           ├──► llvm/ ──► BitcodeReader.zig, Builder.zig, bitcode_writer.zig, ir.zig
+           │
+           └──► system/ ──► NativePaths.zig, arm.zig, darwin.zig, linux.zig, windows.zig, x86.zig
+                          └──► darwin/
+
+       └──► zip/ ──► Reader.zig, Writer.zig, test.zig, testdata/</programlisting>
+<tip><simpara>像 <literal>crypto/</literal>、<literal>compress/</literal> 和 <literal>math/</literal> 这样的目录包含数十个专门的文件。顶级 <literal>.zig</literal> 文件（例如，<literal>crypto.zig</literal>）通常重新导出子目录的公共API，因此你可以写 <literal>std.crypto.aes</literal> 而不是导航内部结构。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/crypto.zig">crypto.zig</link></simpara></tip>
+</chapter>
+
+<chapter xml:id="module-categories">
+<title>模块类别</title>
+<simpara>以下各节按目的对stdlib功能进行分组，将每个类别映射到其详细章节。当你知道<emphasis>什么</emphasis>是你需要的但不知道它<emphasis>在哪里</emphasis>时，请使用此作快速参考指南。</simpara>
+
+<section xml:id="collections">
+<title>集合和算法</title>
+<simpara><emphasis>涵盖在：</emphasis> <xref linkend="44__collections-and-algorithms" xrefstyle="short">第44章</xref></simpara>
+<table frame="all" rowsep="1" colsep="1">
+<title>集合模块</title>
+<tgroup cols="2">
+<colspec colname="col_1" colwidth="1*"/>
+<colspec colname="col_2" colwidth="2*"/>
+<thead>
+<row>
+<entry>模块/路径</entry>
+<entry>目的</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry><literal>std.ArrayList</literal></entry>
+<entry>动态数组（向量）；参见 <literal>array_list.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.MultiArrayList</literal></entry>
+<entry>数组结构布局；参见 <literal>multi_array_list.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.HashMap</literal> / <literal>AutoHashMap</literal> / <literal>ArrayHashMap</literal></entry>
+<entry>具有各种存储策略的哈希表；参见 <literal>hash_map.zig</literal>、<literal>array_hash_map.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.StaticStringMap</literal></entry>
+<entry>字符串键的编译时完美哈希映射；参见 <literal>static_string_map.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.DoublyLinkedList</literal></entry>
+<entry>侵入式双向链表；参见 <literal>DoublyLinkedList.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.SinglyLinkedList</literal></entry>
+<entry>侵入式单向链表；参见 <literal>SinglyLinkedList.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.SegmentedList</literal></entry>
+<entry>维护稳定指针的分段列表；参见 <literal>segmented_list.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.Treap</literal></entry>
+<entry>Treap（树+堆）；参见 <literal>treap.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.PriorityQueue</literal></entry>
+<entry>最小/最大堆；参见 <literal>priority_queue.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.PriorityDequeue</literal></entry>
+<entry>双端优先队列；参见 <literal>priority_dequeue.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.sort</literal></entry>
+<entry>排序算法（pdqsort、块排序）；参见 <literal>sort/</literal></entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+</section>
+
+<section xml:id="text-formatting">
+<title>文本、格式化和Unicode</title>
+<simpara><emphasis>涵盖在：</emphasis> <xref linkend="45__text-formatting-and-unicode" xrefstyle="short">第45章</xref></simpara>
+<table frame="all" rowsep="1" colsep="1">
+<title>文本处理模块</title>
+<tgroup cols="2">
+<colspec colname="col_1" colwidth="1*"/>
+<colspec colname="col_2" colwidth="2*"/>
+<thead>
+<row>
+<entry>模块/路径</entry>
+<entry>目的</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry><literal>std.fmt</literal></entry>
+<entry>格式化API：<literal>format</literal>、<literal>parseInt</literal>、<literal>parseFloat</literal>；参见 <literal>fmt/</literal></entry>
+</row>
+<row>
+<entry><literal>std.ascii</literal></entry>
+<entry>ASCII字符工具；参见 <literal>ascii.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.unicode</literal></entry>
+<entry>Unicode操作（UTF-8、UTF-16）；参见 <literal>unicode/</literal></entry>
+</row>
+<row>
+<entry><literal>std.base64</literal></entry>
+<entry>Base64编码/解码；参见 <literal>base64.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.leb128</literal></entry>
+<entry>LEB128编码；参见 <literal>leb128.zig</literal></entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+</section>
+
+<section xml:id="io-streams">
+<title>I/O和流适配器</title>
+<simpara><emphasis>涵盖在：</emphasis> <xref linkend="46__io-and-stream-adapters" xrefstyle="short">第46章</xref></simpara>
+<table frame="all" rowsep="1" colsep="1">
+<title>I/O模块</title>
+<tgroup cols="2">
+<colspec colname="col_1" colwidth="1*"/>
+<colspec colname="col_2" colwidth="2*"/>
+<thead>
+<row>
+<entry>模块/路径</entry>
+<entry>目的</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry><literal>std.io</literal>（现在 <literal>std.Io</literal>）</entry>
+<entry>Reader/Writer接口；参见 <literal>Io.zig</literal>、<literal>Io/</literal></entry>
+</row>
+<row>
+<entry><literal>std.fs</literal></entry>
+<entry>文件系统操作：<literal>Dir</literal>、<literal>File</literal>、<literal>path</literal>；参见 <literal>fs/</literal></entry>
+</row>
+<row>
+<entry><literal>std.io.fixedBufferStream</literal></entry>
+<entry>固定缓冲区流适配器；参见 <literal>Io/fixed_buffer_stream.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.io.countingReader</literal></entry>
+<entry>计数读取器适配器；参见 <literal>Io/counting_reader.zig</literal></entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+</section>
+
+<section xml:id="time-logging-progress">
+<title>时间、日志记录和进度</title>
+<simpara><emphasis>涵盖在：</emphasis> <xref linkend="47__time-logging-and-progress" xrefstyle="short">第47章</xref></simpara>
+<table frame="all" rowsep="1" colsep="1">
+<title>时间处理模块</title>
+<tgroup cols="2">
+<colspec colname="col_1" colwidth="1*"/>
+<colspec colname="col_2" colwidth="2*"/>
+<thead>
+<row>
+<entry>模块/路径</entry>
+<entry>目的</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry><literal>std.time</literal></entry>
+<entry>计时、睡眠、时钟；参见 <literal>time/</literal></entry>
+</row>
+<row>
+<entry><literal>std.log</literal></entry>
+<entry>具有级别的日志记录框架；参见 <literal>log.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.Progress</literal></entry>
+<entry>进度报告；参见 <literal>Progress.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.tz</literal></entry>
+<entry>时区数据；参见 <literal>tz/</literal></entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+</section>
+
+<section xml:id="process-environment">
+<title>进程和环境</title>
+<simpara><emphasis>涵盖在：</emphasis> <xref linkend="48__process-and-environment" xrefstyle="short">第48章</xref></simpara>
+<table frame="all" rowsep="1" colsep="1">
+<title>进程处理模块</title>
+<tgroup cols="2">
+<colspec colname="col_1" colwidth="1*"/>
+<colspec colname="col_2" colwidth="2*"/>
+<thead>
+<row>
+<entry>模块/路径</entry>
+<entry>目的</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry><literal>std.process</literal></entry>
+<entry>参数、环境、生成子进程；参见 <literal>process/</literal></entry>
+</row>
+<row>
+<entry><literal>std.posix</literal></entry>
+<entry>POSIX包装器；参见 <literal>posix/</literal></entry>
+</row>
+<row>
+<entry><literal>std.os</literal></entry>
+<entry>平台特定的OS接口；参见 <literal>os/</literal></entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+</section>
+
+<section xml:id="compression-archives">
+<title>压缩和归档</title>
+<simpara><emphasis>涵盖在：</emphasis> <xref linkend="49__compression-and-archives" xrefstyle="short">第49章</xref></simpara>
+<table frame="all" rowsep="1" colsep="1">
+<title>压缩模块</title>
+<tgroup cols="2">
+<colspec colname="col_1" colwidth="1*"/>
+<colspec colname="col_2" colwidth="2*"/>
+<thead>
+<row>
+<entry>模块/路径</entry>
+<entry>目的</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry><literal>std.compress</literal></entry>
+<entry>压缩：flate、lzma、lzma2、zstd；参见 <literal>compress/</literal></entry>
+</row>
+<row>
+<entry><literal>std.tar</literal></entry>
+<entry>TAR归档读/写；参见 <literal>tar/</literal></entry>
+</row>
+<row>
+<entry><literal>std.zip</literal></entry>
+<entry>ZIP归档支持；参见 <literal>zip.zig</literal></entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+</section>
+
+<section xml:id="random-math-hashing">
+<title>随机、数学和哈希</title>
+<simpara><emphasis>涵盖在：</emphasis> <xref linkend="50__random-and-math" xrefstyle="short">第50章</xref></simpara>
+<table frame="all" rowsep="1" colsep="1">
+<title>数学模块</title>
+<tgroup cols="2">
+<colspec colname="col_1" colwidth="1*"/>
+<colspec colname="col_2" colwidth="2*"/>
+<thead>
+<row>
+<entry>模块/路径</entry>
+<entry>目的</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry><literal>std.Random</literal></entry>
+<entry>PRNG：ChaCha、PCG、Ascon；参见 <literal>Random/</literal></entry>
+</row>
+<row>
+<entry><literal>std.math</literal></entry>
+<entry>数学函数（三角、exp、log等）；参见 <literal>math/</literal></entry>
+</row>
+<row>
+<entry><literal>std.hash</literal></entry>
+<entry>非加密哈希：CRC、Adler32、auto_hash；参见 <literal>hash/</literal></entry>
+</row>
+<row>
+<entry><literal>std.crypto</literal></entry>
+<entry>加密原语：AES、Ed25519、SHA-2、AEGIS；参见 <literal>crypto/</literal></entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+</section>
+
+<section xml:id="mem-meta">
+<title>内存和元实用程序</title>
+<simpara><emphasis>涵盖在：</emphasis> <xref linkend="51__mem-and-meta-utilities" xrefstyle="short">第51章</xref></simpara>
+<table frame="all" rowsep="1" colsep="1">
+<title>内存工具模块</title>
+<tgroup cols="2">
+<colspec colname="col_1" colwidth="1*"/>
+<colspec colname="col_2" colwidth="2*"/>
+<thead>
+<row>
+<entry>模块/路径</entry>
+<entry>目的</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry><literal>std.mem</literal></entry>
+<entry>内存实用程序：split、tokenize、copy、search；参见 <literal>mem.zig</literal>、<literal>mem/</literal></entry>
+</row>
+<row>
+<entry><literal>std.meta</literal></entry>
+<entry>类型内省助手；参见 <literal>meta/</literal>、<literal>meta.zig</literal></entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+</section>
+
+<section xml:id="debug-valgrind">
+<title>调试和Valgrind</title>
+<simpara><emphasis>涵盖在：</emphasis> <xref linkend="52__debug-and-valgrind" xrefstyle="short">第52章</xref></simpara>
+<table frame="all" rowsep="1" colsep="1">
+<title>调试模块</title>
+<tgroup cols="2">
+<colspec colname="col_1" colwidth="1*"/>
+<colspec colname="col_2" colwidth="2*"/>
+<thead>
+<row>
+<entry>模块/路径</entry>
+<entry>目的</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry><literal>std.debug</literal></entry>
+<entry>恐慌、堆栈跟踪、DWARF信息；参见 <literal>debug/</literal></entry>
+</row>
+<row>
+<entry><literal>std.valgrind</literal></entry>
+<entry>Valgrind集成（memcheck、cachegrind）；参见 <literal>valgrind/</literal></entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+</section>
+
+<section xml:id="specialized-modules">
+<title>专门模块（未详细涵盖）</title>
+<simpara>某些stdlib组件是高度专业化的或主要是编译器内部的。它们出现在目录树中，但不是接下来章节的焦点：</simpara>
+<table frame="all" rowsep="1" colsep="1">
+<title>专门模块</title>
+<tgroup cols="2">
+<colspec colname="col_1" colwidth="1*"/>
+<colspec colname="col_2" colwidth="2*"/>
+<thead>
+<row>
+<entry>模块/路径</entry>
+<entry>目的</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry><literal>std.Build</literal></entry>
+<entry>构建系统内部；参见 <literal>Build/</literal>，在<xref linkend="22__build-system-deep-dive" xrefstyle="short">第22章</xref>中涵盖</entry>
+</row>
+<row>
+<entry><literal>std.zig</literal></entry>
+<entry>编译器AST、代码生成；参见 <literal>zig/</literal>；高级主题</entry>
+</row>
+<row>
+<entry><literal>std.zon</literal></entry>
+<entry>ZON解析器/序列化器；参见 <literal>zon/</literal></entry>
+</row>
+<row>
+<entry><literal>std.Target</literal></entry>
+<entry>目标架构元数据；参见 <literal>Target/</literal></entry>
+</row>
+<row>
+<entry><literal>std.SemanticVersion</literal></entry>
+<entry>语义版本控制；参见 <literal>SemanticVersion.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.Uri</literal></entry>
+<entry>URI解析；参见 <literal>Uri.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.wasm</literal></entry>
+<entry>WebAssembly常量；参见 <literal>wasm.zig</literal></entry>
+</row>
+<row>
+<entry><literal>std.elf</literal>、<literal>std.macho</literal>、<literal>std.coff</literal>、<literal>std.pdb</literal></entry>
+<entry>二进制格式解析器；参见相应的 <literal>.zig</literal> 文件</entry>
+</row>
+<row>
+<entry><literal>std.dwarf</literal></entry>
+<entry>DWARF常量；参见 <literal>dwarf/</literal></entry>
+</row>
+<row>
+<entry><literal>std.Thread</literal></entry>
+<entry>线程原语；在<xref linkend="29__threads-and-atomics" xrefstyle="short">第29章</xref>中触及</entry>
+</row>
+<row>
+<entry><literal>std.atomic</literal>、<literal>std.once</literal></entry>
+<entry>原子操作、一次性初始化；参见<xref linkend="29__threads-and-atomics" xrefstyle="short">第29章</xref></entry>
+</row>
+<row>
+<entry><literal>std.http</literal>、<literal>std.net</literal>、<literal>std.json</literal></entry>
+<entry>网络和HTTP；在<xref linkend="31__networking-http-and-json" xrefstyle="short">第31章</xref>中涵盖</entry>
+</row>
+</tbody>
+</tgroup>
+</table>
+</section>
+</chapter>
+
+<chapter xml:id="import-conventions">
+<title>导入约定</title>
+<simpara>Zig的stdlib在顶级使用扁平命名空间：<literal>std.ArrayList</literal>、<literal>std.HashMap</literal>、<literal>std.json</literal> 等。在内部，某些模块跨越子目录（<literal>crypto/</literal>、<literal>compress/</literal>），但公共API通过根目录中的单个 <literal>.zig</literal> 文件重新导出。</simpara>
+<simpara><emphasis>示例：</emphasis></simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>std.crypto.aes</literal> → 定义在 <literal>crypto/aes/</literal> 中，由 <literal>crypto.zig</literal> 重新导出</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.compress.flate</literal> → 定义在 <literal>compress/flate/</literal> 中，由 <literal>compress.zig</literal> 重新导出</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.fs.Dir</literal> → 定义在 <literal>fs/Dir.zig</literal> 中，由 <literal>fs.zig</literal> 重新导出</simpara>
+</listitem>
+</itemizedlist>
+<tip><simpara>当有疑问时，请检查 <literal>std.zig</literal> 以获取规范的导出名称，然后将其跟踪到实现文件。</simpara></tip>
+</chapter>
+
+<chapter xml:id="navigating-source">
+<title>导航源代码</title>
+<simpara>要亲自探索stdlib：</simpara>
+<orderedlist numeration="arabic">
+<listitem>
+<simpara><strong>找到你的Zig安装</strong>：运行 <literal>zig env</literal> 并记下 <literal>lib_dir</literal>。<link xl:href="https://ziglang.org/documentation/master/#Command-line-flags">#命令行标志</link></simpara>
+</listitem>
+<listitem>
+<simpara><strong>浏览 <literal>lib/std/</literal></strong>：使用 <literal>ls</literal>、<literal>tree</literal> 或编辑器的文件资源管理器。</simpara>
+</listitem>
+<listitem>
+<simpara><strong>首先阅读顶级文件</strong>：<literal>std.zig</literal> 显示什么是公共的；单个 <literal>.zig</literal> 文件包含实现。</simpara>
+</listitem>
+<listitem>
+<simpara><strong>检查子目录以获取深度</strong>：像 <literal>crypto/</literal>、<literal>compress/</literal>、<literal>math/</literal> 这样的目录包含专门的代码。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/crypto/">crypto</link></simpara>
+</listitem>
+</orderedlist>
+<tip><simpara>stdlib是用Zig编写的，因此阅读其源代码是学习惯用模式的绝佳方式——尤其是错误处理、分配器线程和编译时技巧。</simpara></tip>
+</chapter>
+
+<chapter xml:id="whats-next">
+<title>接下来是什么</title>
+<simpara>此索引为你提供方向，但真正的学习发生在详细章节中：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><strong>第44章</strong>：集合和算法——<literal>ArrayList</literal>、<literal>HashMap</literal>、<literal>PriorityQueue</literal>、排序。<xref linkend="44__collections-and-algorithms" xrefstyle="short">44</xref></simpara>
+</listitem>
+<listitem>
+<simpara><strong>第45章</strong>：文本、格式化、Unicode——<literal>std.fmt</literal>、<literal>std.ascii</literal>、Base64。<xref linkend="45__text-formatting-and-unicode" xrefstyle="short">45</xref></simpara>
+</listitem>
+<listitem>
+<simpara><strong>第46章</strong>：I/O和流——<literal>std.Io</literal>、<literal>std.fs</literal>、适配器。<xref linkend="46__io-and-stream-adapters" xrefstyle="short">46</xref></simpara>
+</listitem>
+<listitem>
+<simpara><strong>第47章</strong>：时间、日志记录、进度——<literal>std.time</literal>、<literal>std.log</literal>、<literal>std.Progress</literal>。<xref linkend="47__time-logging-and-progress" xrefstyle="short">47</xref></simpara>
+</listitem>
+<listitem>
+<simpara><strong>第48章</strong>：进程和环境——<literal>std.process</literal>、<literal>std.posix</literal>。<xref linkend="48__process-and-environment" xrefstyle="short">48</xref></simpara>
+</listitem>
+<listitem>
+<simpara><strong>第49章</strong>：压缩和归档——<literal>std.compress</literal>、<literal>std.tar</literal>、<literal>std.zip</literal>。<xref linkend="49__compression-and-archives" xrefstyle="short">49</xref></simpara>
+</listitem>
+<listitem>
+<simpara><strong>第50章</strong>：随机、数学、哈希——<literal>std.Random</literal>、<literal>std.math</literal>、<literal>std.crypto</literal>。<xref linkend="50__random-and-math" xrefstyle="short">50</xref></simpara>
+</listitem>
+<listitem>
+<simpara><strong>第51章</strong>：内存和元实用程序——<literal>std.mem</literal>、<literal>std.meta</literal>。<xref linkend="51__mem-and-meta-utilities" xrefstyle="short">51</xref></simpara>
+</listitem>
+<listitem>
+<simpara><strong>第52章</strong>：调试和Valgrind——<literal>std.debug</literal>、<literal>std.valgrind</literal>。<xref linkend="52__debug-and-valgrind" xrefstyle="short">52</xref></simpara>
+</listitem>
+</itemizedlist>
+<simpara>每章都提供代码示例、API演练和实用指导。使用此索引直接跳转到所需的模块。</simpara>
+</chapter>
+
+<chapter xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara>此索引反映Zig 0.15.2。未来版本可能会重组模块或重命名导出。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+</listitem>
+<listitem>
+<simpara>并非所有stdlib组件都是稳定的——有些被标记为实验性的，或者在版本之间可能会有破坏性更改。</simpara>
+</listitem>
+<listitem>
+<simpara>编译器自己的内部（<literal>pass:[std.zig.*]</literal>、<literal>pass:[std.Build.*]</literal>）是高级主题。在深入研究AST操作之前，先从面向用户的API（如集合和I/O）开始。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/zig/">zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>运行 <literal>zig env</literal> 并导航到 <literal>lib_dir/std/</literal>，然后 <literal>ls</literal> 根目录以查看所有顶级模块。挑选三个你从未听说过的模块，并阅读它们的前20行以了解其目的。</simpara>
+</listitem>
+<listitem>
+<simpara>在编辑器中打开 <literal>std.zig</literal> 并跟踪 <literal>std.ArrayList</literal> 的定义。（提示：<literal>pub const ArrayList = @import("array_list.zig").ArrayList;</literal>）</simpara>
+</listitem>
+<listitem>
+<simpara>在整个stdlib中搜索 <literal>pub fn</literal> 以计算所有模块中存在多少个公共函数。用它来评估stdlib的范围。</simpara>
+</listitem>
+<listitem>
+<simpara>比较 <literal>crypto/</literal> 与 <literal>compress/</literal> 的目录结构。注意两者都包含特定算法的子目录，说明了Zig的模块化组织理念。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>警告、替代方案、边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>某些模块同时具有 <literal>.zig</literal> 文件和目录（例如，<literal>fmt.zig</literal> 和 <literal>fmt/</literal>）。该文件通常重新导出目录的内容或提供高级API。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>stdlib<emphasis>不</emphasis>包含包管理器或注册表集成（这是外部工具）。它专注于语言级实用程序和OS抽象。</simpara>
+</listitem>
+<listitem>
+<simpara>第三方库不是 <literal>std</literal> 的一部分。你将使用 <literal>build.zig.zon</literal> 和 <literal>std.Build.dependency()</literal> 来获取它们。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

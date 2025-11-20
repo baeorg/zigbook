@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh-CN">
+<info>
+<title>测试与泄漏检测</title>
+<date>2025-11-03</date>
+<authorinitials>zigbook</authorinitials>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<para>好的测试简短、精确，并且言之有物。Zig 的 <literal>std.testing</literal> 通过小型、可组合的断言（<literal>expect</literal>、<literal>expectEqual</literal>、<literal>expectError</literal>）和内置的测试分配器（默认检测泄漏）使其变得简单。结合分配失败注入，你可以练习那些否则难以触发的错误路径，确保你的代码正确且确定性地释放资源；参见 <link xl:href="10__allocators-and-memory-management.adoc">第10章</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/testing.zig">testing.zig</link>。</para>
+<para>本章展示如何编写富有表现力的测试，如何解释测试运行器的泄漏诊断，以及如何使用 <literal>std.testing.checkAllAllocationFailures</literal> 来加固代码以抵御 <literal>error.OutOfMemory</literal>，而无需编写数百个定制测试；参见 <link xl:href="11__project-dynamic-string-builder.adoc">第11章</link> 和 <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/heap.zig">heap.zig</link>。</para>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<para>使用 <literal>test</literal> 块和 <literal>std.testing</literal> 辅助函数编写专注的单元测试。</para>
+</listitem>
+<listitem>
+<para>使用 <literal>std.testing.allocator</literal> 和测试中的 <literal>defer</literal> 检测和修复内存泄漏；参见 <link xl:href="04__errors-resource-cleanup.adoc">第4章</link>。</para>
+</listitem>
+<listitem>
+<para>使用 <literal>std.testing.checkAllAllocationFailures</literal> 系统地测试 OOM 行为；参见 <link xl:href="10__allocators-and-memory-management.adoc">第10章</link>。</para>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="testing-basics">
+<title>使用 std.testing 进行测试基础</title>
+<para>Zig 的测试运行器在任何你传递给 <literal>zig test</literal> 的文件中发现 <literal>test</literal> 块。断言是普通函数，它们返回错误，因此它们自然地与 <literal>try</literal>/<literal>catch</literal> 组合。</para>
+<section xml:id="testing-framework-structure">
+<title>std.testing 模块结构</title>
+<para>在深入研究特定断言之前，了解 <literal>std.testing</literal> 中可用的完整工具包是有帮助的。该模块提供三类功能：断言函数、测试分配器和实用工具。</para>
+<informalfigure>
+<mediaobject>
+<imageobject>
+<imagedata fileref="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNjAwIj4KICA8ZGVmcz4KICAgIDxzdHlsZT4KICAgICAgLm5vZGUgeyBmaWxsOiAjZjBmMGYwOyBzdHJva2U6ICMzMzM7IHN0cm9rZS13aWR0aDogMnB4OyB9CiAgICAgIC5lZGdlIHsgc3Ryb2tlOiAjMzMzOyBzdHJva2Utd2lkdGg6IDJweDsgfQogICAgICAubGFiZWwgeyBmb250LWZhbWlseTogQXJpYWwsIHNhbnMtc2VyaWY7IGZvbnQtc2l6ZTogMTRweDsgfQogICAgPC9zdHlsZT4KICA8L2RlZnM+CiAgPGcgY2xhc3M9ImxhYmVsIj4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIzMDAiIHk9IjUwIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iNDAwIiB5PSI4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgc3R5bGU9ImZvbnQtd2VpZ2h0OiBib2xkOyI+c3RkLnRlc3Rpbmc8YnIvPuWfuueBueWkhOeQhuWwgemfsTwvdGV4dD4KICAgIAogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjEwMCIgeT0iMTUwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iMTc1IiB5PSIxODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPmV4cGVjdCgpPC90ZXh0PgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjEwMCIgeT0iMjUwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iMTc1IiB5PSIyODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPmV4cGVjdEVxdWFsKCk8L3RleHQ+CiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMTAwIiB5PSIzNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjM4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+ZXhwZWN0RXJyb3IoKTwvdGV4dD4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIxMDAiIHk9IjQ1MCIgd2lkdGg9IjE1MCIgaGVpZ2h0PSI2MCIgcng9IjUiLz4KICAgIDx0ZXh0IHg9IjE3NSIgeT0iNDg1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5leHBlY3RFcXVhbFNsaWNlcygpPC90ZXh0PgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjEwMCIgeT0iNTUwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iMTc1IiB5PSI1ODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPmV4cGVjdEVxdWFsU3RyaW5ncygpPC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMzAwIiB5PSIxNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSIzNzUiIHk9IjE4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+YWxsb2NhdG9yPC90ZXh0PgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjMwMCIgeT0iMjUwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iMzc1IiB5PSIyODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPmZhaWxpbmdfYWxsb2NhdG9yPC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iNTAwIiB5PSIxNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI1NzUiIHk9IjE4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+cmFuZG9tX3NlZWQ8L3RleHQ+CiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iNTAwIiB5PSIyNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI1NzUiIHk9IjI4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+dG1wRGlyKCk8L3RleHQ+CiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iNTAwIiB5PSIzNTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI1NzUiIHk9IjM4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+bG9nX2xldmVsPC90ZXh0PgogICAgCiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjMwMCIgeTE9IjExMCIgeDI9IjE3NSIgeTI9IjE1MCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSIzMDAiIHkxPSIxMTAiIHgyPSIzNzUiIHkyPSIxNTAiLz4KICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iMzAwIiB5MT0iMTEwIiB4Mj0iNTc1IiB5Mj0iMTUwIi8+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjMwMCIgeTE9IjExMCIgeDI9IjM3NSIgeTI9IjE1MCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSIzMDAiIHkxPSIxMTAiIHgyPSI1NzUiIHkyPSIxNTAiLz4KICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iMzAwIiB5MT0iMTEwIiB4Mj0iNTc1IiB5Mj0iMTUwIi8+CiAgPC9nPgo8L3N2Zz4K" width="800" height="600"/>
+</imagedata>
+</imageobject>
+</mediaobject>
+</informalfigure>
+<para>本章重点介绍核心断言（<literal>expect</literal>、<literal>expectEqual</literal>、<literal>expectError</literal>）和用于泄漏检测的测试分配器。<literal>expectEqualSlices</literal> 和 <literal>expectEqualStrings</literal> 等额外断言函数提供专门的比较，而 <literal>tmpDir()</literal> 等实用工具帮助测试文件系统代码；参见 <link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/testing.zig">testing.zig</link>。</para>
+</chapter>
+<section xml:id="testing-basics-expect">
+<title>期望：布尔值、相等性和错误</title>
+<para>这个示例涵盖布尔断言、值相等性、字符串相等性，以及期望来自被测函数的错误。</para>
+<screen><code language="zig">const std = @import("std");
+const testing = std.testing;
+
+test "boolean assertion" {
+    const value = true;
+    try testing.expect(value);
+}
+
+test "equality assertion" {
+    const expected = 42;
+    const actual = 40 + 2;
+    try testing.expectEqual(expected, actual);
+}
+
+test "string equality" {
+    const expected = "hello";
+    var buffer: [5]u8 = undefined;
+    _ = try std.fmt.bufPrint(&amp;buffer, "{s}", .{"hello"});
+    try testing.expectEqualStrings(expected, &amp;buffer);
+}
+
+test "expecting an error" {
+    const result = std.fs.cwd().openFile("nonexistent.txt", .{});
+    try testing.expectError(error.FileNotFound, result);
+}</code></screen>
+<screen><prompt>运行</prompt>
+<code language="shell">$ zig test basic_tests.zig</code></screen>
+<screen><prompt>输出</prompt>
+<code language="shell">All 3 tests passed.</code></screen>
+</chapter>
+</chapter>
+<chapter xml:id="leak-detection">
+<title>通过构建进行泄漏检测</title>
+<para>测试分配器（<literal>std.testing.allocator</literal>）是一个 <literal>GeneralPurposeAllocator</literal>，配置为跟踪分配并在测试完成时报告泄漏。这意味着如果你的测试忘记释放，它们就会失败；参见 <link xl:href="10__allocators-and-memory-management.adoc">第10章</link>。</para>
+<section xml:id="test-allocator-architecture">
+<title>测试分配器的工作原理</title>
+<para>测试模块提供两个分配器：<literal>allocator</literal> 用于带泄漏检测的通用测试，<literal>failing_allocator</literal> 用于模拟分配失败。了解它们的架构有助于解释它们的不同行为。</para>
+<informalfigure>
+<mediaobject>
+<imageobject>
+<imagedata fileref="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNTAwIj4KICA8ZGVmcz4KICAgIDxzdHlsZT4KICAgICAgLm5vZGUgeyBmaWxsOiAjZjBmMGYwOyBzdHJva2U6ICMzMzM7IHN0cm9rZS13aWR0aDogMnB4OyB9CiAgICAgIC5lZGdlIHsgc3Ryb2tlOiAjMzMzOyBzdHJva2Utd2lkdGg6IDJweDsgfQogICAgICAubGFiZWwgeyBmb250LWZhbWlseTogQXJpYWwsIHNhbnMtc2VyaWY7IGZvbnQtc2l6ZTogMTRweDsgfQogICAgPC9zdHlsZT4KICA8L2RlZnM+CiAgPGcgY2xhc3M9ImxhYmVsIj4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIyMDAiIHk9IjUwIiB3aWR0aD0iMjUwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iMzI1IiB5PSI4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgc3R5bGU9ImZvbnQtd2VpZ2h0OiBib2xkOyI+5omL5bel5py65omL5bel5rS+5YiGPC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMTAwIiB5PSIxNTAiIHdpZHRoPSIyMDAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSIyMDAiIHk9IjE4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+YWxsb2NhdG9yX2luc3RhbmNlJmx0O2JyLz5HZW5lcmFsUHVycG9zZUFsbG9jYXRvcjwvdGV4dD4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIxMDAiIHk9IjI1MCIgd2lkdGg9IjIwMCIgaGVpZ2h0PSI2MCIgcng9IjUiLz4KICAgIDx0ZXh0IHg9IjIwMCIgeT0iMjg1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5hbGxvY2F0b3ImbHQ7YnIvPkFsbG9jYXRvciBpbnRlcmZhY2U8L3RleHQ+CiAgICAKICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSI0MDAiIHk9IjE1MCIgd2lkdGg9IjIwMCIgaGVpZ2h0PSI2MCIgcng9IjUiLz4KICAgIDx0ZXh0IHg9IjUwMCIgeT0iMTg1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5iYXNlX2FsbG9jYXRvcl9pbnN0YW5jZSZsdDtici8+Rml4ZWRCdWZmZXJBbGxvY2F0b3I8L3RleHQ+CiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iNDAwIiB5PSIyNTAiIHdpZHRoPSIyMDAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI1MDAiIHk9IjI4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+ZmFpbGluZ19hbGxvY2F0b3JfaW5zdGFuY2UmbHQ7YnIvPkZhaWxpbmdBbGxvY2F0b3I8L3RleHQ+CiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iNDAwIiB5PSIzNTAiIHdpZHRoPSIyMDAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI1MDAiIHk9IjQxNSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+ZmFpbGluZ19hbGxvY2F0b3ImbHQ7YnIvPkFsbG9jYXRvciBpbnRlcmZhY2U8L3RleHQ+CiAgICAKICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iMjAwIiB5MT0iMTEwIiB4Mj0iMjAwIiB5Mj0iMTUwIi8+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjIwMCIgeTE9IjIxMCIgeDI9IjIwMCIgeTI9IjI1MCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSI0MDAiIHkxPSIxMTAiIHgyPSI0MDAiIHkyPSIxNTAiLz4KICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iNDAwIiB5MT0iMzEwIiB4Mj0iNDAwIiB5Mj0iMzUwIi8+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjUwMCIgeTE9IjE5MCIgeDI9IjUwMCIgeTI9IjI1MCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSI1MDAiIHkxPSIzNzAiIHgyPSI1MDAiIHkyPSI0MTAiLz4KICA8L2c+Cjwvc3ZnPgo=" width="800" height="500"/>
+</imagedata>
+</imageobject>
+</mediaobject>
+</informalfigure>
+<para><literal>testing.allocator</literal> 包装一个配置有栈跟踪和泄漏检测的 <literal>GeneralPurposeAllocator</literal>。<literal>failing_allocator</literal> 使用 <literal>FixedBufferAllocator</literal> 作为其基础，然后用失败注入逻辑包装它。两者都暴露标准的 <literal>Allocator</literal> 接口，使它们成为测试中生产分配器的直接替代品；参见 <link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/testing.zig">testing.zig</link>。</para>
+</chapter>
+<section xml:id="leak-detection-fail">
+<title>泄漏是什么样子</title>
+<para>下面的测试故意忘记 <literal>free</literal>。运行器报告泄漏的地址、到分配调用点的栈跟踪，并以非零状态退出。</para>
+<screen><code language="zig">const std = @import("std");
+const testing = std.testing;
+
+test "leak detection catches a missing free" {
+    const buf = try testing.allocator.alloc(u8, 16);
+    _ = buf; // 故意不释放
+}</code></screen>
+<screen><prompt>运行</prompt>
+<code language="shell">$ zig test leak_demo_fail.zig</code></screen>
+<screen><prompt>输出</prompt>
+<code language="shell">[gpa] (err): memory address 0x… leaked: 
+… leak_demo_fail.zig:1:36: … in test.leak detection catches a missing free (leak_demo_fail.zig)
+
+All 1 tests passed.
+1 errors were logged.
+1 tests leaked memory.
+error: the following test command failed with exit code 1:
+…/test --seed=0x…</code></screen>
+<important>
+<para>"所有 N 个测试通过。"这一行只断言测试逻辑；泄漏报告仍然导致整体运行失败。修复泄漏以使套件变绿。<link xl:href="04__errors-resource-cleanup.adoc">第4章</link></para>
+</important>
+</chapter>
+<section xml:id="leak-detection-fix">
+<title>使用 defer 修复泄漏</title>
+<para>在成功分配后立即使用 <literal>defer allocator.free(buf)</literal> 以保证沿所有路径释放。</para>
+<screen><code language="zig">const std = @import("std");
+const testing = std.testing;
+
+test "leak detection passes with defer" {
+    const buf = try testing.allocator.alloc(u8, 16);
+    defer testing.allocator.free(buf);
+    
+    // 使用 buf...
+    buf[0] = 42;
+    try testing.expectEqual(@as(u8, 42), buf[0]);
+}</code></screen>
+<screen><prompt>运行</prompt>
+<code language="shell">$ zig test leak_demo_fix.zig</code></screen>
+<screen><prompt>输出</prompt>
+<code language="shell">All 1 tests passed.</code></screen>
+<para><link xl:href="04__errors-resource-cleanup.adoc">第4章</link>，<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link></para>
+</chapter>
+<section xml:id="leak-detection-flow">
+<title>泄漏检测生命周期</title>
+<para>泄漏检测在每个测试结束时自动发生。理解这个时间线有助于解释为什么 <literal>defer</literal> 必须在测试完成之前执行，以及为什么即使测试断言通过，泄漏报告也会出现。</para>
+<informalfigure>
+<mediaobject>
+<imageobject>
+<imagedata fileref="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNDAwIj4KICA8ZGVmcz4KICAgIDxzdHlsZT4KICAgICAgLm5vZGUgeyBmaWxsOiAjZjBmMGYwOyBzdHJva2U6ICMzMzM7IHN0cm9rZS13aWR0aDogMnB4OyB9CiAgICAgIC5lZGdlIHsgc3Ryb2tlOiAjMzMzOyBzdHJva2Utd2lkdGg6IDJweDsgfQogICAgICAubGFiZWwgeyBmb250LWZhbWlseTogQXJpYWwsIHNhbnMtc2VyaWY7IGZvbnQtc2l6ZTogMTRweDsgfQogICAgPC9zdHlsZT4KICA8L2RlZnM+CiAgPGcgY2xhc3M9ImxhYmVsIj4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIzMDAiIHk9IjUwIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjYwIiByeD0iNSIvPgogICAgPHRleHQgeD0iNDAwIiB5PSI4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgc3R5bGU9ImZvbnQtd2VpZ2h0OiBib2xkOyI+5omL5bel5rS+5YiG5Z6LPC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMzAwIiB5PSIxNTAiIHdpZHRoPSIyMDAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI0MDAiIHk9IjE4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+5oqA5ben5Zy65Y+35LitPC90ZXh0PgogICAgPHRleHQgeD0iNDAwIiB5PSIyMDUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPmNvbnN0IGRhdGEgPSB0cnkgdGVzdGluZy5hbGxvY2F0b3IuYWxsb2MoVCwgbik7PC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMzAwIiB5PSIyNTAiIHdpZHRoPSIyMDAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI0MDAiIHk9IjI4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+5oqA5Y+35LitPC90ZXh4PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMzAwIiB5PSIzNTAiIHdpZHRoPSIyMDAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI0MDAiIHk9IjM4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+5oqA5Y+35Lit56eN5Y+3PC90ZXh0PgogICAgPHRleHQgeD0iNDAwIiB5PSI0MDUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPmRlZmVyIHRlc3RpbmcuYWxsb2NhdG9yLmZyZWUoZGF0YSk7PC90ZXh0PgogICAgCiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMzAwIiB5PSI0NTAiIHdpZHRoPSIyMDAiIGhlaWdodD0iNjAiIHJ4PSI1Ii8+CiAgICA8dGV4dCB4PSI0MDAiIHk9IjQ4NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgc3R5bGU9ImZvbnQtd2VpZ2h0OiBib2xkOyI+5omL5bel5rS+5YiG56S65L6LPC90ZXh0PgogICAgPHRleHQgeD0iNDAwIiB5PSI1MDUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPuWfuuacrOaKveWApuS4reW/g+aXpeWfuuehgDwvdGV4dD4KICAgIAogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSI0MDAiIHkxPSIxMTAiIHgyPSI0MDAiIHkyPSIxNTAiLz4KICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iNDAwIiB5MT0iMjEwIiB4Mj0iNDAwIiB5Mj0iMjUwIi8+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjQwMCIgeTE9IjMxMCIgeDI9IjQwMCIgeTI9IjM1MCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSI0MDAiIHkxPSI0MTAiIHgyPSI0MDAiIHkyPSI0NTAiLz4KICA8L2c+Cjwvc3ZnPgo=" width="800" height="400"/>
+</imagedata>
+</imageobject>
+</mediaobject>
+</informalfigure>
+<para>当测试结束时，<literal>GeneralPurposeAllocator</literal> 验证所有已分配的内存都已释放。如果任何分配仍然存在，它会打印栈跟踪，显示泄漏内存的分配位置（而不是应该在哪里释放）。这种自动检查无需手动跟踪即可消除整个错误类别。关键是将 <literal>defer allocator.free(...)</literal> 放在成功分配之后，以便它在所有代码路径上执行，包括早期返回和错误传播；参见 <link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/heap.zig">heap.zig</link>。</para>
+</section>
+</section>
+<chapter xml:id="oom-injection">
+<title>分配失败注入</title>
+<para>分配内存的代码即使在分配失败时也必须正确。<literal>std.testing.checkAllAllocationFailures</literal> 使用失败分配器在每个分配站点重新运行你的函数，验证你清理部分初始化的状态并正确传播 <literal>error.OutOfMemory</literal>；参见 <link xl:href="10__allocators-and-memory-management.adoc">第10章</link>。</para>
+<section xml:id="oom-injection-good">
+<title>系统地测试 OOM 安全性</title>
+<para>这个示例使用 <literal>checkAllAllocationFailures</literal> 和一个执行两次分配并用 <literal>defer</literal> 释放两者的小函数。辅助函数在每个分配点模拟失败；仅当没有发生泄漏且 <literal>error.OutOfMemory</literal> 被正确转发时，测试才通过。</para>
+<screen><code language="zig">const std = @import("std");
+const testing = std.testing;
+
+fn buildPair(a: u8, b: u8) !struct { first: []u8, second: []u8 } {
+    const first = try testing.allocator.alloc(u8, 1);
+    defer testing.allocator.free(first);
+    first[0] = a;
+
+    const second = try testing.allocator.alloc(u8, 1);
+    defer testing.allocator.free(second);
+    second[0] = b;
+
+    // 将所有权转移给调用者
+    return .{
+        .first = first,
+        .second = second,
+    };
+}
+
+test "OOM injection verifies cleanup" {
+    try testing.checkAllAllocationFailures(testing.allocator, buildPair, .{ 1, 2 });
+}</code></screen>
+<screen><prompt>运行</prompt>
+<code language="shell">$ zig test oom_injection.zig</code></screen>
+<screen><prompt>输出</prompt>
+<code language="shell">All 1 tests passed.</code></screen>
+<note>
+<para>在 <literal>checkAllAllocationFailures</literal> 下故意"不好"的实现将导致测试运行器记录泄漏的分配并使整体运行失败，即使你 <literal>expectError(error.MemoryLeakDetected, …)</literal>。在教学或调试时隔离失败的示例；参见 <link xl:href="10__allocators-and-memory-management.adoc">第10章</link>。</para>
+</note>
+</section>
+</section>
+<chapter xml:id="notes-caveats">
+<title>注意事项与警告</title>
+<itemizedlist>
+<listitem>
+<para>测试分配器仅在编译测试时可用。尝试在非测试代码中使用它会触发编译错误。</para>
+</listitem>
+<listitem>
+<para>泄漏检测依赖于确定性释放。优先在分配后直接 <literal>defer</literal>；避免跳过释放的隐藏控制流；参见 <link xl:href="04__errors-resource-cleanup.adoc">第4章</link>。</para>
+</listitem>
+<listitem>
+<para>对于需要大量分配的集成测试，用竞技场分配器包装以提高速度，但仍通过测试分配器路由最终支持，以保持泄漏检查；参见 <link xl:href="10__allocators-and-memory-management.adoc">第10章</link>。</para>
+</listitem>
+</itemizedlist>
+</section>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<para>编写一个从输入字节构建 <literal>std.ArrayList(u8)</literal> 然后清除它的函数。使用 <literal>checkAllAllocationFailures</literal> 验证 OOM 安全性；参见 <link xl:href="11__project-dynamic-string-builder.adoc">第11章</link>。</para>
+</listitem>
+<listitem>
+<para>在第一次分配后引入一个故意的早期返回，观察泄漏检测器捕获缺失的 <literal>free</literal>；然后用 <literal>defer</literal> 修复它。</para>
+</listitem>
+<listitem>
+<para>为返回无效输入错误的函数添加 <literal>expectError</literal> 测试；包括错误路径和成功路径。</para>
+</listitem>
+</itemizedlist>
+</section>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<para>如果你需要运行一个故意演示泄漏的套件，将这些文件与通过的测试分开，以避免 CI 运行失败。或者，将它们放在构建标志后面，并且只在本地选择加入；参见 <link xl:href="20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.adoc">第20章</link>。</para>
+</listitem>
+<listitem>
+<para>在测试之外，你可以在调试构建中启用 <literal>std.heap.GeneralPurposeAllocator</literal> 泄漏检测以捕获手动运行中的泄漏，但生产构建应该禁用昂贵的检查以提高性能。</para>
+</listitem>
+<listitem>
+<para>分配失败注入对小型、自包含的辅助函数最有效。对于更高级别的工作流，隔离测试关键组件，以保持诱导的失败空间可管理；参见 <link xl:href="36__style-and-best-practices.adoc">第36章</link>。</para>
+</listitem>
+</itemizedlist>
+</section>
+</book>

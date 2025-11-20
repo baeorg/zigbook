@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>样式和最佳实践</title>
+<subtitle>通过一致的格式、文档和不变式保持代码库纪律</subtitle>
+<date>2025-11-06</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>完成GPU计算项目后，我们得到了一个多文件工作区，它依赖于一致的命名、可预测的格式化和坚定的测试（参见<xref linkend="35__project-gpu-compute-in-zig" xrefstyle="short">第35章</xref>）。本章解释了如何随着代码库的发展保持这种纪律。我们将<literal>zig fmt</literal>约定与文档卫生配对，展示Zig期望的惯用错误处理模式，并依靠目标不变式来保持未来重构的安全性（参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>）。
+</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>采用格式化和命名约定，在模块间传达意图。</simpara>
+</listitem>
+<listitem>
+<simpara>构建文档和测试，使它们形成API的可执行规范。</simpara>
+</listitem>
+<listitem>
+<simpara>应用<literal>defer</literal>、<literal>errdefer</literal>和不变式助手，长期保持资源安全性和正确性。</simpara>
+</listitem>
+</itemizedlist>
+<simpara><emphasis>参考资料：</emphasis> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/testing.zig">testing.zig</link>
+</simpara>
+</chapter>
+<chapter xml:id="style-foundations">
+<title>基础：一致性作为特性</title>
+<simpara>格式化不是装饰性步骤：标准格式化器消除了主观空白辩论，并在差异中突出语义变化。<literal>zig fmt</literal>在0.15.x版本中得到了增量改进，以确保生成的代码与编译器期望的匹配，因此项目应该从一开始就将格式化集成到编辑器和CI中。将自动格式化与描述性标识符、文档注释和作用域错误集结合起来，这样读者就可以在不翻找实现细节的情况下跟随控制流。</simpara>
+<chapter xml:id="documenting-apis">
+<title>用可执行测试记录API</title>
+<simpara>以下示例将命名、文档和测试组装到单个文件中。它公开了一个小的统计助手，在打印时扩展错误集，并演示了测试如何兼作用法示例（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link>）。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 36__style-and-best-practices.adoc - include::example$chapters-data/code/36__style-and-best-practices/01_style_baseline.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig test 01_style_baseline.zig</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>All 3 tests passed.</screen>
+<tip>
+<simpara>将文档注释加单元测试视为最低可行的API参考——两者都在每次运行时编译，因此它们与你发布的代码保持同步。</simpara>
+</tip>
+</chapter>
+</chapter>
+<chapter xml:id="resource-patterns">
+<title>资源管理和错误模式</title>
+<simpara>Zig的标准库倾向于显式资源所有权；将<literal>defer</literal>与<literal>errdefer</literal>配对有助于确保临时分配正确展开。在解析用户提供的数据时，保持错误词汇表小而确定性，这样调用者可以在不检查字符串的情况下路由失败模式。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs.zig">fs.zig</link>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 36__style-and-best-practices.adoc - include::example$chapters-data/code/36__style-and-best-practices/02_error_handling_patterns.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig test 02_error_handling_patterns.zig</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>All 2 tests passed.</screen>
+<note>
+<simpara>通过<literal>toOwnedSlice</literal>返回切片使生命周期显而易见，并在解析中途失败时防止泄漏后备分配——<literal>errdefer</literal>使清理显式（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link>）。</simpara>
+</note>
+</chapter>
+<chapter xml:id="maintainability">
+<title>可维护性检查清单：保护不变式</title>
+<simpara>保护自己不变式的数据结构更容易安全重构。通过在助手中隔离检查并在突变前后调用它，你可以创建正确性的单一真实来源。<literal>std.debug.assert</literal>使合同在调试构建中可见，而不会惩罚发布性能（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/debug.zig">debug.zig</link>）。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 36__style-and-best-practices.adoc - include::example$chapters-data/code/36__style-and-best-practices/03_invariant_guard.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig test 03_invariant_guard.zig</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>All 2 tests passed.</screen>
+<tip>
+<simpara>也在单元测试中捕获不变式——断言保护开发人员，而测试阻止通过手动审查的回归。</simpara>
+</tip>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>zig fmt</literal>只触及它理解的语法；生成的代码或嵌入的字符串可能仍需要手动查看。</simpara>
+</listitem>
+<listitem>
+<simpara>有意扩展错误集——组合尽可能小的联合使调用站点精确，并避免意外的全捕获（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/error.zig">error.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>记得在调试和发布版本下测试，这样断言和<literal>std.debug</literal>检查不会掩盖仅生产问题（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/build.zig">build.zig</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<info>
+<title>练习</title>
+</info>
+<itemizedlist>
+<listitem>
+<simpara>将统计助手包装在暴露均值和方差的模块中；添加文档测试，从消费者的角度演示API。</simpara>
+</listitem>
+<listitem>
+<simpara>扩展加载器以流式传输数据而不是读取整个文件；在发布安全构建中比较堆使用情况，确保你保持分配有界。</simpara>
+</listitem>
+<listitem>
+<simpara>为环形缓冲区添加压力测试，在数千次操作中交错推送和弹出，然后在<literal>zig test -Drelease-safe</literal>下运行它，确认不变式在优化构建中存活。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<info>
+<title>替代方案和边缘情况</title>
+</info>
+<itemizedlist>
+<listitem>
+<simpara>具有生成代码的项目可能需要格式化排除——记录这些目录，让贡献者知道何时运行<literal>zig fmt</literal>是安全的。</simpara>
+</listitem>
+<listitem>
+<simpara>偏爱小的助手函数（如<literal>invariant</literal>）而不是到处撒断言；集中检查更容易在审查期间审计。</simpara>
+</listitem>
+<listitem>
+<simpara>添加新依赖项时，将它们置于特性标志或构建选项之后，这样样式规则即使在最小配置中也可执行。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

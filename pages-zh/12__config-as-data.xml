@@ -1,0 +1,364 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>配置即数据</title>
+<subtitle>基于结构体的配置</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>配置文件最终会成为内存中的普通数据。通过为这些数据提供丰富的类型——包括默认值、枚举和可选类型——你可以在编译时推理配置错误，以确定性方式验证不变量，并将手动调整的设置传递给下游代码，而无需使用字符串类型的胶水代码（参见<link xl:href="11__project-dynamic-string-builder.xml">11</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig">meta.zig</link>）。</simpara>
+<simpara>本章为基于结构体的配置建立了一个指南：从包含大量默认值的结构体开始，叠加分层覆盖（如环境变量或命令行标志），然后使用显式错误集强制执行防护措施，以便下一个项目中的最终CLI可以信任其输入（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/log.zig">log.zig</link>）。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用枚举、可选类型和合理的默认值建模嵌套配置结构体，以捕获应用程序意图。</simpara>
+</listitem>
+<listitem>
+<simpara>使用反射助手（如<literal>std.meta.fields</literal>）分层配置文件、环境和运行时覆盖，同时保持合并的类型安全。</simpara>
+</listitem>
+<listitem>
+<simpara>使用专用错误集、结构化报告和廉价的诊断来验证配置，以便下游系统可以快速失败。<link xl:href="04__errors-resource-cleanup.xml">04</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="config-structs">
+<title>结构体作为配置契约</title>
+<simpara>类型化配置反映了你在生产环境中期望的不变量。Zig结构体允许你内联声明默认值，使用枚举编码模式，并分组相关的旋钮，以便调用者不会意外传递格式错误的元组。依赖标准库枚举、日志级别和写入器保持API符合人体工程学，同时遵循<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>中的I/O接口大修。</simpara>
+<section xml:id="config-structs-defaults">
+<title>默认值丰富的结构体定义</title>
+<simpara>基线配置为每个字段提供默认值，包括嵌套结构体。消费者可以使用指定初始化器选择性地覆盖值，而不会丢失其余的默认值。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 12__config-as-data.adoc - include::example$chapters-data/code/12__config-as-data/default_config.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run default_config.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">defaults -&gt;
+  host = 127.0.0.1
+  port = 8080
+  log_level = info
+  instrumentation = false
+  theme = system
+  timeouts = .{ connect_ms = 200, read_ms = 1200 }
+
+overrides -&gt;
+  host = 0.0.0.0
+  port = 9090
+  log_level = debug
+  instrumentation = true
+  theme = dark
+  timeouts = .{ connect_ms = 75, read_ms = 1500 }</programlisting>
+</para>
+</formalpara>
+</section>
+<section xml:id="config-structs-optionals">
+<title>可选类型与哨兵默认值</title>
+<note>
+<simpara>只有真正需要三态语义的字段才成为可选类型（本章后面用于TLS文件路径的<literal>?[]const u8</literal>）；其他所有内容都坚持具体默认值。将嵌套结构体（此处为<literal>Timeouts</literal>）与<literal>[]const u8</literal>字符串结合使用，提供在配置生命周期内保持有效的不可变引用（参见<link xl:href="03__data-fundamentals.xml">03</link>）。</simpara>
+</note>
+</section>
+<section xml:id="config-structs-initializers">
+<title>指定覆盖保持可读性</title>
+<simpara>由于指定初始化器允许你仅覆盖你关心的字段，你可以将配置声明保持在调用站点附近，而不会牺牲可发现性。将结构体字面量视为文档：将相关的覆盖分组在一起，并依赖枚举（如<literal>Theme</literal>）将魔法字符串排除在你的构建之外。<link xl:href="02__control-flow-essentials.xml">02</link>, <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/enums.zig">enums.zig</link></simpara>
+<section xml:id="parsing-enum-values">
+<title>从字符串解析枚举值</title>
+<simpara>从JSON、YAML或环境变量加载配置时，你通常需要将字符串转换为枚举值。Zig的<literal>std.meta.stringToEnum</literal>基于枚举大小使用编译时优化来处理此问题。</simpara>
+<literallayout class="monospaced">graph LR
+    STRINGTOENUM["stringToEnum(T, str)"]
+
+    subgraph "Small Enums"
+        SMALL["fields.len &lt;= 100"]
+        MAP["StaticStringMap"]
+        STRINGTOENUM --&gt; SMALL
+        SMALL --&gt; MAP
+    end
+
+    subgraph "Large Enums"
+        LARGE["fields.len &gt; 100"]
+        INLINE["inline for loop"]
+        STRINGTOENUM --&gt; LARGE
+        LARGE --&gt; INLINE
+    end
+
+    RESULT["?T"]
+    MAP --&gt; RESULT
+    INLINE --&gt; RESULT</literallayout>
+<simpara>For small enums (≤100 fields), <literal>stringToEnum</literal> builds a compile-time <literal>StaticStringMap</literal> for O(1) lookups. Larger enums use an inline loop to avoid compilation slowdowns from massive switch statements. The function returns <literal>?T</literal> (optional enum value), allowing you to handle invalid strings gracefully:</simpara>
+<programlisting language="zig" linenumbering="unnumbered">const theme_str = "dark";
+const theme = std.meta.stringToEnum(Theme, theme_str) orelse .system;</programlisting>
+<simpara><emphasis role="strong">This pattern is essential for config loaders:</emphasis> parse the string, fall back to a sensible default if invalid. The optional return forces you to handle the error case explicitly, preventing silent failures from typos in config files (see <link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/meta.zig">meta.zig</link>).</simpara>
+</section>
+</section>
+</chapter>
+<chapter xml:id="config-layering">
+<title>分层和覆盖</title>
+<simpara>实际部署从多个来源拉取配置。通过将每个层表示为可选类型的结构体，你可以确定性地合并它们：反射桥接使得无需为每个旋钮手动编写样板代码就能轻松迭代字段。<link xl:href="05__project-tempconv-cli.xml">05</link></simpara>
+<section xml:id="config-layering-example">
+<title>合并分层覆盖</title>
+<simpara>此程序应用配置文件、环境和命令行覆盖（如果存在），否则回退到默认值。合并顺序在<literal>apply</literal>中变得明确，并且结果结构体保持完全类型化。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 12__config-as-data.adoc - include::example$chapters-data/code/12__config-as-data/merge_overrides.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/12__config-as-data/merge_overrides.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">defaults:
+  host = 127.0.0.1
+  port = 8080
+  log = info
+  instrumentation = false
+  theme = system
+  timeouts = .{ .connect_ms = 200, .read_ms = 1200 }
+profile:
+  host = 0.0.0.0
+  port = 9000
+  log = debug
+  instrumentation = true
+  theme = dark
+  timeouts = .{ .connect_ms = 100, .read_ms = 1500 }
+env:
+  host = config.internal
+  port = 9443
+  log = warn
+  instrumentation = false
+  theme = system
+  timeouts = .{ .connect_ms = 60, .read_ms = 1100 }
+command_line:
+  host = 127.0.0.1
+  port = 8080
+  log = info
+  instrumentation = false
+  theme = light
+  timeouts = .{ .connect_ms = 200, .read_ms = 1200 }
+
+resolved:
+  host = config.internal
+  port = 9443
+  log = warn
+  instrumentation = false
+  theme = light
+  timeouts = .{ .connect_ms = 60, .read_ms = 1100 }</programlisting>
+</para>
+</formalpara>
+<simpara>参见<link xl:href="10__allocators-and-memory-management.xml">10</link>了解与分层配置相关的分配器背景知识。</simpara>
+<section xml:id="field-introspection">
+<title>字段迭代的底层工作原理</title>
+<simpara><literal>apply</literal>函数使用<literal>std.meta.fields</literal>在编译时迭代结构体字段。Zig的反射API提供了一组丰富的内省功能，使得无需为每个字段手动编写样板代码就能实现通用配置合并。</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "Container Introspection"
+        FIELDS["fields(T)"]
+        FIELDINFO["fieldInfo(T, field)"]
+        FIELDNAMES["fieldNames(T)"]
+        TAGS["tags(T)"]
+        FIELDENUM["FieldEnum(T)"]
+    end
+
+    subgraph "Declaration Introspection"
+        DECLARATIONS["declarations(T)"]
+        DECLINFO["declarationInfo(T, name)"]
+        DECLENUM["DeclEnum(T)"]
+    end
+
+    subgraph "Applicable Types"
+        STRUCT["struct"]
+        UNION["union"]
+        ENUMP["enum"]
+        ERRORSET["error_set"]
+    end
+
+    STRUCT --&gt; FIELDS
+    UNION --&gt; FIELDS
+    ENUMP --&gt; FIELDS
+    ERRORSET --&gt; FIELDS
+
+    STRUCT --&gt; DECLARATIONS
+    UNION --&gt; DECLARATIONS
+    ENUMP --&gt; DECLARATIONS
+
+    FIELDS --&gt; FIELDINFO
+    FIELDS --&gt; FIELDNAMES
+    FIELDS --&gt; FIELDENUM
+    ENUMP --&gt; TAGS</literallayout>
+<simpara>内省API提供：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong"><literal>fields(T)</literal></emphasis>：返回任何结构体、联合体、枚举或错误集的编译时字段信息</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong"><literal>fieldInfo(T, field)</literal></emphasis>：获取特定字段的详细信息（名称、类型、默认值、对齐方式）</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong"><literal>FieldEnum(T)</literal></emphasis>：为每个字段名称创建一个枚举变体，用于字段的switch语句</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong"><literal>declarations(T)</literal></emphasis>：返回类型中函数和常量的编译时声明信息</simpara>
+</listitem>
+</itemizedlist>
+<simpara>当你在合并逻辑中看到<literal>inline for (std.meta.fields(Config))</literal>时，Zig在编译时展开此循环，为每个字段生成专门的代码。这消除了运行时开销，同时保持类型安全——编译器验证所有字段类型在层之间匹配（参见<link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/meta.zig">meta.zig</link>）。</simpara>
+</section>
+</section>
+<section xml:id="config-layering-precedence">
+<title>明确优先级</title>
+<simpara>因为<literal>apply</literal>在每次迭代时复制合并的结构体，切片字面量的顺序读取为从上到下的优先级：后面的条目获胜。如果你需要惰性求值或短路合并，将<literal>apply</literal>替换为一旦字段设置就停止的版本——只需记住保持默认值不可变，以便较早的层不会意外改变共享状态。<link xl:href="07__project-safe-file-copier.xml">07</link></simpara>
+<section xml:id="deep-equality">
+<title>使用std.meta.eql进行深度结构相等性比较</title>
+<simpara>对于高级配置场景，如检测是否需要重新加载，<literal>std.meta.eql(a, b)</literal>执行深度结构比较。此函数递归处理嵌套结构体、联合体、错误联合体和可选类型：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "Type Comparison"
+        EQL["eql(a, b)"]
+
+        STRUCT_EQL["Struct comparison"]
+        UNION_EQL["Union comparison"]
+        ERRORUNION_EQL["Error union comparison"]
+        OPTIONAL_EQL["Optional comparison"]
+
+        EQL --&gt; STRUCT_EQL
+        EQL --&gt; UNION_EQL
+        EQL --&gt; ERRORUNION_EQL
+        EQL --&gt; OPTIONAL_EQL
+    end</literallayout>
+<simpara><literal>eql(a, b)</literal>函数执行深度结构相等性比较，递归处理嵌套结构体、联合体和错误联合体。这对于检测"无操作"配置更新很有用：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">const old_config = loadedConfig;
+const new_config = parseConfigFile("app.conf");
+
+if (std.meta.eql(old_config, new_config)) {
+    // 跳过重新加载，没有变化
+    return;
+}
+// 应用新配置</programlisting>
+<simpara>比较对结构体逐字段工作（包括嵌套的<literal>Timeouts</literal>），比较联合体的标签和有效载荷，并正确处理错误联合体和可选类型（参见<link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/meta.zig">meta.zig</link>）。</simpara>
+</section>
+</section>
+</chapter>
+<chapter xml:id="config-validation">
+<title>验证和防护</title>
+<simpara>一旦你保护了它们的不变量，类型化配置就变得可信。Zig的错误集将验证失败转化为可操作的诊断，辅助函数保持报告一致性，无论你是记录日志还是向CLI提供反馈（参见<link xl:href="04__errors-resource-cleanup.xml">04</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/debug.zig">debug.zig</link>）。</simpara>
+<section xml:id="config-validation-example">
+<title>使用错误集编码不变量</title>
+<simpara>此验证器检查端口范围、TLS先决条件和超时顺序。每个失败都映射到专用的错误标签，以便调用者可以相应地做出反应。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 12__config-as-data.adoc - include::example$chapters-data/code/12__config-as-data/validate_config.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/12__config-as-data/validate_config.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">production: ok
+insecure: error InsecureProduction
+misordered: error TimeoutOrdering
+missing_tls_material: error MissingTlsMaterial</programlisting>
+</para>
+</formalpara>
+<simpara><link xl:href="04__errors-resource-cleanup.xml">04__errors-resource-cleanup.xml</link></simpara>
+</section>
+<section xml:id="config-validation-reporting">
+<title>报告有用的诊断信息</title>
+<simpara>在打印验证错误时使用<literal>@errorName</literal>（或用于更丰富数据的结构化枚举），以便操作员看到确切失败的不变量。将其与共享的报告助手（如示例中的<literal>report</literal>）配对，以统一测试、日志记录和CLI反馈的格式（参见<link xl:href="03__data-fundamentals.xml">03</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/Writer.zig">Writer.zig</link>）。</simpara>
+<section xml:id="error-message-format">
+<title>错误消息格式标准</title>
+<simpara>对于生产级诊断，遵循编译器的错误消息格式以提供一致、可解析的输出。标准格式符合用户对Zig工具的期望：</simpara>
+<informaltable frame="all" rowsep="1" colsep="1">
+<tgroup cols="3">
+<colspec colname="col_1" colwidth="33.3333*"/>
+<colspec colname="col_2" colwidth="33.3333*"/>
+<colspec colname="col_3" colwidth="33.3334*"/>
+<thead>
+<row>
+<entry align="left" valign="top">组件</entry>
+<entry align="left" valign="top">格式</entry>
+<entry align="left" valign="top">描述</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry align="left" valign="top"><simpara>位置</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>:line:col:</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>行号和列号（1索引）</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>严重性</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>error:</literal> 或 <literal>note:</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>消息严重性级别</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>消息</simpara></entry>
+<entry align="left" valign="top"><simpara>文本</simpara></entry>
+<entry align="left" valign="top"><simpara>实际的错误或注释消息</simpara></entry>
+</row>
+</tbody>
+</tgroup>
+</informaltable>
+<simpara>示例错误消息：</simpara>
+<screen>config.toml:12:8: error: port must be between 1024 and 65535
+config.toml:15:1: error: TLS enabled but cert_file not specified
+config.toml:15:1: note: set cert_file and key_file when tls = true</screen>
+<simpara>冒号分隔的格式允许工具解析错误位置以进行IDE集成，严重性级别（<literal>error:</literal> vs <literal>note:</literal>）帮助用户区分问题和有用的上下文。在验证配置文件时，包括文件名、行号（如果从解析器可用）以及对不变量违反的清晰描述。这种一致性使你的配置错误感觉像是Zig生态系统原生的。</simpara>
+</section>
+</section>
+<section xml:id="config-validation-comptime">
+<title>用于模式漂移的编译时助手</title>
+<simpara>对于较大的系统，考虑将你的配置结构体包装在一个编译时函数中，该函数使用<literal>@hasField</literal>验证字段存在性或从默认值生成文档。这使运行时代码保持小巧，同时保证演进的模式与生成的配置文件保持同步（参见<link xl:href="15__comptime-and-reflection.xml">15</link>）。</simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>为字符串设置保留不可变的<literal>[]const u8</literal>切片，以便它们可以安全地别名编译时常量而无需额外副本（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>在发出配置诊断后记得刷新缓冲写入器，特别是在将stdout与进程管道混合使用时。</simpara>
+</listitem>
+<listitem>
+<simpara>在分层覆盖时，在突变之前克隆可变子结构体（如分配器支持的列表），以避免跨层别名。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>使用可选的遥测端点（<literal>?[]const u8</literal>）扩展<literal>AppConfig</literal>，并更新验证器以确保在启用检测时设置它。</simpara>
+</listitem>
+<listitem>
+<simpara>实现一个<literal>fromArgs</literal>助手，将键值命令行对解析为覆盖结构体，重用分层函数来应用它们。<link xl:href="05__project-tempconv-cli.xml">05</link></simpara>
+</listitem>
+<listitem>
+<simpara>通过在编译时迭代<literal>std.meta.fields(AppConfig)</literal>并将行写入缓冲写入器来生成总结默认值的Markdown表格。<link xl:href="11__project-dynamic-string-builder.xml">11</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>对于大型配置，将JSON/YAML数据流式传输到竞技场支持的结构体中，而不是在栈上构建所有内容，以避免耗尽临时缓冲区（参见<link xl:href="10__allocators-and-memory-management.xml">10</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>如果需要动态键，将基于结构体的配置与<literal>std.StringHashMap</literal>查找配对，这样你可以在保持类型化默认值的同时仍然尊重用户提供的额外内容（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/hash_map.zig">hash_map.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>在验证通过网络上传的文件时，考虑使用<literal>std.io.Reader</literal>管道；这让你可以在具体化整个配置之前短路（参见<link xl:href="28__filesystem-and-io.xml">28</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

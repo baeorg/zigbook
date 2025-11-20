@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>性能与内联</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>我们的 CLI 调研为有纪律的试验奠定了基础（<link xl:href="38__zig-cli-deep-dive.xml">38</link>）。现在关注 Zig 如何将这些命令行开关转换为机器层行为。语义内联、调用修饰符与显式 SIMD 都为你提供塑造热点路径的杠杆——前提是谨慎测量并尊重编译器默认值。<link xl:href="https://ziglang.org/documentation/master/#inline-fn">#inline fn</link></simpara>
+<simpara>下一章将在此测量循环之上叠加分析与加固工作流，使其规范化。<link xl:href="40__profiling-optimization-hardening.xml">40</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>当编译期语义必须优先于启发式算法时，强制或禁止内联。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>@call</literal> 和 <literal>std.time.Timer</literal> 对热点循环进行采样，比较构建模式。</simpara>
+</listitem>
+<listitem>
+<simpara>在转向目标特定内建函数之前，使用 <literal>@Vector</literal> 数学作为可移植 SIMD 的桥梁。</simpara>
+</listitem>
+</itemizedlist>
+<simpara><link xl:href="https://ziglang.org/documentation/master/#call">#call</link>, <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/time/Timer.zig">Timer.zig</link>, <link xl:href="https://ziglang.org/documentation/master/#vectors">#vectors</link></simpara>
+</chapter>
+<chapter xml:id="inline-semantics">
+<title>语义内联 vs 优化器启发</title>
+<simpara>Zig 的 <literal>inline</literal> 关键字改变求值规则，而非向优化器提供提示：编译期已知的参数变为编译期常量，使您能够生成类型或预计算值，而普通调用会将其推迟到运行期。</simpara>
+<simpara>内联函数限制了编译器的自由度，因此仅在语义重要时使用——传播 <literal>comptime</literal> 数据、改进调试或满足真实基准测试。</simpara>
+<section xml:id="_understanding_optimization_modes">
+<title>理解优化模式</title>
+<simpara>在探索内联行为之前，理解影响编译器处理代码方式的优化模式非常重要。下图显示了优化配置：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "优化"
+        OPTIMIZE["优化设置"]
+        OPTIMIZE --&gt; OPTMODE["optimize_mode: OptimizeMode&lt;br/&gt;Debug, ReleaseSafe, ReleaseFast, ReleaseSmall"]
+        OPTIMIZE --&gt; LTO["lto: bool&lt;br/&gt;链接时优化"]
+    end</literallayout>
+<simpara>Zig 提供四种不同的优化模式，每种模式在安全性、速度和二进制大小之间做出不同的权衡。<emphasis role="strong">Debug</emphasis> 模式禁用优化并保留完整的运行期安全检查，使其成为开发和调试的理想选择。编译器保留栈帧、发出符号信息，除非语义要求，否则从不内联函数。<emphasis role="strong">ReleaseSafe</emphasis> 启用优化同时保留所有安全检查（边界检查、整数溢出检测等），在性能和错误检测之间取得平衡。<emphasis role="strong">ReleaseFast</emphasis> 通过禁用运行期安全检查和启用包括启发式内联在内的激进优化来最大化速度。这是本章基准测试中使用的模式。<emphasis role="strong">ReleaseSmall</emphasis> 优先考虑二进制大小而非速度，通常完全禁用内联以减少代码重复。</simpara>
+<simpara>此外，<emphasis role="strong">链接时优化 (LTO)</emphasis> 可以通过 <literal>-flto</literal> 独立启用，允许链接器跨编译单元执行全程序优化。在对内联行为进行基准测试时，这些模式会显著影响结果：<literal>inline</literal> 函数在不同模式下行为相同（语义保证），但 ReleaseFast 中的启发式内联可能会内联 Debug 或 ReleaseSmall 会保留为调用的函数。本章示例使用 <literal>-OReleaseFast</literal> 来展示优化器行为，但您应该跨模式测试以了解完整的性能谱系。</simpara>
+</section>
+<section xml:id="inline-fibonacci">
+<title>示例：用内联函数进行编译期运算</title>
+<simpara><literal>inline</literal> 递归让我们将小型计算烘焙到二进制文件中，同时为更大的输入保留回退的运行期路径。<literal>@call</literal> 内建函数提供了一个直接句柄，在参数可用时在编译期评估调用点。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 39__performance-and-inlining.adoc - include::example$chapters-data/code/39__performance-and-inlining/01_inline_semantics.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 01_inline_semantics.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 3 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>若被调函数接触仅运行期可用的状态，<literal>.compile_time</literal>修饰符将失败。此类试验请先包裹在<literal>comptime</literal>块内，再添加运行期测试，确保发布构建也得到覆盖。</simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="call-modifiers">
+<title>为测量定向调用</title>
+<simpara>Zig 0.15.2 的自托管后端奖励准确的微基准测试。当与新的线程化代码生成流水线配对时，它们可以提供显著的加速。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#threaded-codegen">v0.15.2</link></simpara>
+<simpara>使用 <literal>@call</literal> 修饰符比较内联、默认和从不内联的调度，而无需重构您的调用点。</simpara>
+<section xml:id="call-benchmark">
+<title>示例：在 ReleaseFast 下比较调用修饰符</title>
+<simpara>该基准固定优化器（<literal>-OReleaseFast</literal>），同时切换调用修饰符。各变体产出一致结果，但计时凸显了在函数调用开销占主导时，<literal>never_inline</literal>会如何让热点循环膨胀。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 39__performance-and-inlining.adoc - include::example$chapters-data/code/39__performance-and-inlining/03_call_benchmark.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run 03_call_benchmark.zig -OReleaseFast</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">optimize-mode=ReleaseFast iterations=5000000
+auto call   : 161394 ns
+always_inline: 151745 ns
+never_inline : 2116797 ns</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>Performing the same run under <literal>-OReleaseSafe</literal> makes the gap larger because additional safety checks amplify the per-call overhead. <link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#x86-backend">v0.15.2</link> Use <literal>zig run --time-report</literal> from the previous chapter when you want compiler-side attribution for slow code paths. <link xl:href="38__zig-cli-deep-dive.xml#cli-webui">38</link></simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="vectorization">
+<title>使用 @Vector 的可移植向量化</title>
+<simpara>当编译器无法自行推断 SIMD 使用时，<literal>@Vector</literal>类型提供可移植的垫片，既遵循安全检查，也支持回退标量执行。配合<literal>@reduce</literal>，你可表达水平归约，而无需编写目标特定的内建。<link xl:href="https://ziglang.org/documentation/master/#reduce">#reduce</link></simpara>
+<section xml:id="vector-example">
+<title>示例：适合 SIMD 的点积</title>
+<simpara>标量与向量化版本产出一致结果；究竟额外的向量管线是否值得，需由性能分析在你的目标平台上裁定。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 39__performance-and-inlining.adoc - include::example$chapters-data/code/39__performance-and-inlining/02_vector_reduction.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test 02_vector_reduction.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>一旦开始混合向量和标量，请使用 <literal>@splat</literal> 来提升常量，并避免向量规则禁止的隐式转换。</simpara>
+</tip>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>内联递归计入编译期分支配额。仅当测量证明额外的编译期工作是值得的时，才使用 <literal>@setEvalBranchQuota</literal> 提高配额。<link xl:href="https://ziglang.org/documentation/master/#setevalbranchquota">#setevalbranchquota</link></simpara>
+</listitem>
+<listitem>
+<simpara>在 <literal>@call(.always_inline, &#8230;&#8203;)</literal> 和 <literal>inline</literal> 关键字之间切换很重要：前者适用于单个调用点，而 <literal>inline</literal> 修改被调用方定义和所有未来调用。</simpara>
+</listitem>
+<listitem>
+<simpara>非 2 的幂的向量长度在某些目标上可能回退到标量循环。在确信获胜之前，请使用 <literal>zig build-exe -femit-asm</literal> 捕获生成的汇编。</simpara>
+</listitem>
+</itemizedlist>
+<section xml:id="_code_generation_features_affecting_performance">
+<title>影响性能的代码生成特性</title>
+<simpara>除了优化模式之外，几个代码生成特性也会影响运行期性能和可调试性。理解这些标志有助于您推理性能权衡：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "代码生成特性"
+        Features["特性标志"]
+
+        Features --&gt; UnwindTables["unwind_tables: bool"]
+        Features --&gt; StackProtector["stack_protector: bool"]
+        Features --&gt; StackCheck["stack_check: bool"]
+        Features --&gt; RedZone["red_zone: ?bool"]
+        Features --&gt; OmitFramePointer["omit_frame_pointer: bool"]
+        Features --&gt; Valgrind["valgrind: bool"]
+        Features --&gt; SingleThreaded["single_threaded: bool"]
+
+        UnwindTables --&gt; EHFrame["生成 .eh_frame&lt;br/&gt;用于异常处理"]
+
+        StackProtector --&gt; CanaryCheck["栈金丝雀检查&lt;br/&gt;缓冲区溢出检测"]
+
+        StackCheck --&gt; ProbeStack["栈探测&lt;br/&gt;防止溢出"]
+
+        RedZone --&gt; RedZoneSpace["红区优化&lt;br/&gt;(x86_64, AArch64)"]
+
+        OmitFramePointer --&gt; NoFP["省略帧指针&lt;br/&gt;用于性能"]
+
+        Valgrind --&gt; ValgrindSupport["Valgrind 客户端请求&lt;br/&gt;用于内存调试"]
+
+        SingleThreaded --&gt; NoThreading["假定单线程&lt;br/&gt;启用优化"]
+    end</literallayout>
+<simpara><emphasis role="strong">omit_frame_pointer</emphasis>标志与性能工作密切相关：启用后（在 ReleaseFast 中常见），编译器会释放帧指针寄存器（x86_64 的 RBP、ARM 的 FP）供通用使用，从而改善寄存器分配并启用更激进的优化。但这也使栈展开更困难，调试器与分析器可能产生不完整或缺失的栈踪。</simpara>
+<simpara><emphasis role="strong">red_zone</emphasis>优化（仅 x86_64 与 AArch64）允许函数在不调整 RSP 的情况下使用栈指针下方 128 字节，减少叶子函数的序言/尾声开销。<emphasis role="strong">栈保护</emphasis>通过金丝雀检测缓冲区溢出，但带来运行期开销，因此在 ReleaseFast 中禁用。<emphasis role="strong">栈检查</emphasis>为函数插桩以探测栈并防止溢出，适用于深度递归但成本较高。<emphasis role="strong">展开表</emphasis>生成<literal>.eh_frame</literal>段用于异常处理与调试器栈遍历；调试模式总是包含它们，发布模式可能因体积而省略。</simpara>
+<simpara>当练习建议使用<literal>@call(.never_inline, &#8230;&#8203;)</literal>衡量分配器热点路径时，这些标志解释了为何 Debug 模式的栈踪更好（保留帧指针），但执行更慢（更多指令、无寄存器优化）。性能关键代码应在 ReleaseFast 下做基准，在 Debug 下校验正确性，以捕获可能被优化器掩盖的问题。</simpara>
+</section>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>向基准测试程序添加 <literal>--mode</literal> 标志，以便您可以在 Debug、ReleaseSafe 和 ReleaseFast 运行之间切换而无需编辑代码。<link xl:href="38__zig-cli-deep-dive.xml#cli-run-summary">38</link></simpara>
+</listitem>
+<listitem>
+<simpara>扩展点积示例，添加处理长度不是 4 的倍数的切片的余数循环。测量 SIMD 仍然获胜的交叉点。</simpara>
+</listitem>
+<listitem>
+<simpara>在第 10 章的分配器热点路径上试验 <literal>@call(.never_inline, &#8230;&#8203;)</literal>，确认 Debug 中改进的栈踪是否值得运行期成本。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况：</title>
+<itemizedlist>
+<listitem>
+<simpara>在 <literal>zig run</literal> 内部运行的微基准测试共享编译缓存。在比较计时之前，使用虚拟运行预热缓存以避免偏差。<link xl:href="ZIG_DEEP_WIKI.md#entry-points-and-command-structure">#entry points and command structure</link></simpara>
+</listitem>
+<listitem>
+<simpara>自托管 x86 后端速度快但并不完美；若在尝试激进内联模式时出现误编译，请回退到<literal>-fllvm</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara>ReleaseSmall 通常完全禁用内联以节省大小。当您需要小型二进制文件和调优的热点路径时，请隔离热点函数并从 ReleaseFast 构建的共享库中调用它们。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

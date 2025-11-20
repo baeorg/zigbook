@@ -1,0 +1,360 @@
+////
+changes: ["Initial draft for Dynamic String Builder project"]
+examples_compile: yes
+keywords: ["动态数组","字符串构建器","分配器","栈回退"]
+last_updated: 2025-11-03
+last_verified: 2025-11-03
+next_chapter: "12__config-as-data"
+open_questions: []
+previous_chapter: "10__allocators-and-memory-management"
+status: draft
+xref_complete: true
+////
+
+= 项目：Dynamic String Builder
+:chapter-number: 11
+:chapter-slug: project-dynamic-string-builder
+:copyright: zigbook
+:doctype: book
+:embedded:
+:experimental:
+:icons: font
+:partnums:
+:pygments-linenums-mode: inline
+:pygments-style: manni
+:safe-mode-level: 0
+:sectanchors:
+:sectids:
+:sectlinks:
+:source-highlighter: pygments
+:sourcedir: example$chapters-data/code
+:webfonts:
+:xrefstyle: short
+:zig-version: 0.15.2
+:linkcss:
+:stylesdir: styles
+:stylesheet: zigbook.css
+
+[[overview]]
+== 概览
+
+本项目将前一章的原始分配器模式转化为一个专注的工具：一个动态字符串构建器，可以将报告、日志和模板拼接在一起，而无需在代码中到处散布 `[]u8` 簿记。通过包装 `std.ArrayList(u8)`，我们保持摊销的 O(1) 追加操作，暴露增长指标用于调试，并在缓冲区准备就绪时轻松将所有权交给调用者；参见 xref:10__allocators-and-memory-management.adoc[10] 和 link:https://github.com/ziglang/zig/tree/master/lib/std/array_list.zig[array_list.zig]。
+
+真实的程序使用多个分配器，因此我们还对构建器进行了栈缓冲区、竞技场和通用分配器的压力测试。结果是一个可以放入 CLI、模板任务或日志子系统的模式，无论何时需要灵活但明确的字符串组装；参见 link:https://github.com/ziglang/zig/tree/master/lib/std/heap.zig[heap.zig]。
+
+[[learning-goals]]
+== 学习目标
+
+* 构建一个可重用的 `StringBuilder` 包装器，在依赖 `std.ArrayList(u8)` 进行存储的同时跟踪增长事件；参见 link:chapters-data/code/11__project-dynamic-string-builder/string_builder.zig[string_builder.zig]。
+* 通过 `std.io.GenericWriter` 驱动构建器，使格式化打印与普通追加操作组合使用；参见 link:https://github.com/ziglang/zig/tree/master/lib/std/io/writer.zig[writer.zig]。
+* 使用 `std.heap.stackFallback` 在栈缓冲区、竞技场和堆分配器之间为动态文本工作流进行选择。
+
+[[builder-blueprint]]
+== 构建器蓝图
+
+核心工具位于 `string_builder.zig` 中：一个薄结构体，存储调用者的分配器、一个 `std.ArrayList(u8)` 缓冲区以及一些用于追加、格式化和增长遥测的辅助函数。每个操作都通过您选择的分配器进行，因此将构建器交给不同的分配器会立即改变其行为。
+
+[[builder-blueprint-core]]
+=== 渲染结构化摘要
+
+要查看构建器的实际运行情况，以下程序组合了一个简短报告，捕获长度/容量/增长的快照，并将拥有的切片返回给调用者。构建器将清理推迟到 `defer builder.deinit()`，因此即使 `toOwnedSlice` 移动了缓冲区，周围的作用域也保持无泄漏。
+
+[source,zig]
+----
+include::{sourcedir}/11__project-dynamic-string-builder/builder_core.zig[]
+----
+
+.Run
+[source,shell]
+----
+$ zig run builder_core.zig
+----
+
+.Output
+[source,shell]
+----
+Report
+======
+source: dynamic builder
+
+* 1. widgets: 7
+* 2. gadgets: 13
+* 3. doodads: 2
+
+summary: appended 3 entries
+
+---
+.{ .length = 88, .capacity = 224, .growth_events = 1 }
+----
+
+TIP: `snapshot()` 足够廉价，可以在需要确认特定工作负载保持在特定容量范围内时随意使用。
+
+.Run
+[source,shell]
+----
+$ zig run builder_core.zig
+----
+
+.Output
+[source,shell]
+----
+Report
+======
+source: dynamic builder
+
+* 1. widgets: 7
+* 2. gadgets: 13
+* 3. doodads: 2
+
+summary: appended 3 entries
+
+---
+.{ .length = 88, .capacity = 224, .growth_events = 1 }
+----
+
+TIP: `snapshot()` is cheap enough to sprinkle through your code whenever you need to confirm that a given workload stays inside a particular capacity envelope.
+
+[[allocators-in-action]]
+== 分配器实战
+
+分配器定义了构建器在压力下的行为：`stackFallback` 提供极快的栈写入，直到缓冲区溢出；竞技场允许您批量释放整个代；GPA 保持泄漏检测有效。本节演示相同的构建器代码如何适应不同的分配策略。
+
+[[allocators-fallback]]
+=== 带有竞技场安全网的栈缓冲区
+
+这里我们将构建器包装在一个栈支持的分配器中，一旦 256 字节的暂存空间填满，就会回退到竞技场。输出显示小报告如何保持在栈缓冲区内，而较大的报告如何溢出到竞技场并增长四次；参见 xref:10__allocators-and-memory-management.adoc[10]。
+
+[source,zig]
+----
+include::{sourcedir}/11__project-dynamic-string-builder/allocator_fallback.zig[]
+----
+
+.Run
+[source,shell]
+----
+$ zig run allocator_fallback.zig
+----
+
+.Output
+[source,shell]
+----
+small buffer ->
+label: stack-only
+0: +40 KiB
+1: +16 KiB
+2: +13 KiB
+3: +31 KiB
+4: +44 KiB
+5: +9 KiB
+total: 153 KiB across 6 samples
+stats: .{ .length = 115, .capacity = 128, .growth_events = 1 }
+
+large buffer ->
+label: needs-arena
+0: +35 KiB
+1: +29 KiB
+2: +33 KiB
+3: +14 KiB
+4: +33 KiB
+5: +20 KiB
+6: +36 KiB
+7: +21 KiB
+8: +11 KiB
+9: +58 KiB
+10: +22 KiB
+11: +53 KiB
+12: +21 KiB
+13: +41 KiB
+14: +30 KiB
+15: +20 KiB
+16: +10 KiB
+17: +39 KiB
+18: +46 KiB
+19: +59 KiB
+20: +33 KiB
+21: +8 KiB
+22: +30 KiB
+23: +22 KiB
+24: +28 KiB
+25: +32 KiB
+26: +48 KiB
+27: +50 KiB
+28: +61 KiB
+29: +53 KiB
+30: +30 KiB
+31: +27 KiB
+32: +42 KiB
+33: +24 KiB
+34: +32 KiB
+35: +58 KiB
+36: +60 KiB
+37: +27 KiB
+38: +40 KiB
+39: +17 KiB
+40: +50 KiB
+41: +50 KiB
+42: +42 KiB
+43: +54 KiB
+44: +61 KiB
+45: +10 KiB
+46: +25 KiB
+47: +50 KiB
+total: 1695 KiB across 48 samples
+stats: .{ .length = 618, .capacity = 1040, .growth_events = 4 }
+----
+
+NOTE: `stackFallback(N, allocator)` 每个实例只允许一次 `.get()` 调用；当需要多个并发构建器时，启动一个新的回退包装器。
+
+.Run
+[source,shell]
+----
+$ zig run allocator_fallback.zig
+----
+
+.Output
+[source,shell]
+----
+small buffer ->
+label: stack-only
+0: +40 KiB
+1: +16 KiB
+2: +13 KiB
+3: +31 KiB
+4: +44 KiB
+5: +9 KiB
+total: 153 KiB across 6 samples
+stats: .{ .length = 115, .capacity = 128, .growth_events = 1 }
+
+large buffer ->
+label: needs-arena
+0: +35 KiB
+1: +29 KiB
+2: +33 KiB
+3: +14 KiB
+4: +33 KiB
+5: +20 KiB
+6: +36 KiB
+7: +21 KiB
+8: +11 KiB
+9: +58 KiB
+10: +22 KiB
+11: +53 KiB
+12: +21 KiB
+13: +41 KiB
+14: +30 KiB
+15: +20 KiB
+16: +10 KiB
+17: +39 KiB
+18: +46 KiB
+19: +59 KiB
+20: +33 KiB
+21: +8 KiB
+22: +30 KiB
+23: +22 KiB
+24: +28 KiB
+25: +32 KiB
+26: +48 KiB
+27: +50 KiB
+28: +61 KiB
+29: +53 KiB
+30: +30 KiB
+31: +27 KiB
+32: +42 KiB
+33: +24 KiB
+34: +32 KiB
+35: +58 KiB
+36: +60 KiB
+37: +27 KiB
+38: +40 KiB
+39: +17 KiB
+40: +50 KiB
+41: +50 KiB
+42: +42 KiB
+43: +54 KiB
+44: +61 KiB
+45: +10 KiB
+46: +25 KiB
+47: +50 KiB
+total: 1695 KiB across 48 samples
+stats: .{ .length = 618, .capacity = 1040, .growth_events = 4 }
+----
+
+NOTE: `stackFallback(N, allocator)` only tolerates one call to `.get()` per instance; spin up a fresh fallback wrapper when you need multiple concurrent builders.
+
+[[growth-planning]]
+== 增长规划
+
+构建器记录容量改变的次数，这对于分析"盲目追加"和"一次性预分配大小"之间的差异非常完美。下一个示例显示两条路径产生相同的文本，而计划版本将增长保持在单次重新分配。
+
+[[growth-planning-compare]]
+=== 预分配大小 vs 朴素追加
+
+[source,zig]
+----
+include::{sourcedir}/11__project-dynamic-string-builder/growth_comparison.zig[]
+----
+
+.Run
+[source,shell]
+----
+$ zig run growth_comparison.zig
+----
+
+.Output
+[source,shell]
+----
+naive -> .{ .length = 186, .capacity = 320, .growth_events = 2 }
+alpha beta gamma delta epsilon zeta eta theta
+iota kappa lambda mu nu xi omicron pi
+rho sigma tau upsilon phi chi psi omega
+aurora borealis cosmos nebula quasar pulsar singularity zenith
+
+planned -> .{ .length = 186, .capacity = 320, .growth_events = 1 }
+alpha beta gamma delta epsilon zeta eta theta
+iota kappa lambda mu nu xi omicron pi
+rho sigma tau upsilon phi chi psi omega
+aurora borealis cosmos nebula quasar pulsar singularity zenith
+----
+
+WARNING: 增长计数取决于分配器策略—切换到固定缓冲区或竞技场会改变容量扩展的时间。在比较配置文件时，同时跟踪统计数据和选择的分配器。
+$ zig run growth_comparison.zig
+----
+
+.Output
+[source,shell]
+----
+naive -> .{ .length = 186, .capacity = 320, .growth_events = 2 }
+alpha beta gamma delta epsilon zeta eta theta
+iota kappa lambda mu nu xi omicron pi
+rho sigma tau upsilon phi chi psi omega
+aurora borealis cosmos nebula quasar pulsar singularity zenith
+
+planned -> .{ .length = 186, .capacity = 320, .growth_events = 1 }
+alpha beta gamma delta epsilon zeta eta theta
+iota kappa lambda mu nu xi omicron pi
+rho sigma tau upsilon phi chi psi omega
+aurora borealis cosmos nebula quasar pulsar singularity zenith
+----
+
+WARNING: Growth counts depend on allocator policy—switching to a fixed buffer or arena changes when capacity expands. Track both stats and chosen allocator when comparing profiles.
+
+[[notes-caveats]]
+== 说明与注意事项
+
+* `toOwnedSlice` 将所有权交给调用者；记得使用传递给 `StringBuilder` 的相同分配器进行释放。
+* `stackFallback` 每次调用 `.get()` 时都会清零暂存缓冲区；如果需要持久重用，请保留返回的分配器而不是重复调用 `.get()`。
+* `reset()` 清除内容但保留容量，因此在紧密循环中重建字符串的热路径中优先使用它。
+
+[[exercises]]
+== 练习
+
+* 使用 `std.io.Writer.Allocating` 为 `StringBuilder` 扩展一个 `appendFormat(comptime fmt, args)` 辅助函数，然后将其分配与重复的 `writer.print` 调用进行比较。
+* 构建一个 CLI，将 JSON 记录流式传输到构建器中，通过命令行标志在 GPA 和竞技场分配器之间切换；参见 xref:05__project-tempconv-cli.adoc[05]。
+* 通过将构建器管道传输到 `std.fs.File.writer()` 并将最终切片与写入的字节进行验证，将 Markdown 报告发送到磁盘；参见 xref:06__project-grep-lite.adoc[06] 和 link:https://github.com/ziglang/zig/tree/master/lib/std/fs.zig[fs.zig]。
+
+[[caveats-alternatives-edge-cases]]
+== 替代方案与边缘情况
+
+* 非常大的字符串可能分配千兆字节—一旦 `length` 超过安全阈值，保护输入或流式传输到磁盘。
+* 组合多个构建器时，共享单个竞技场或 GPA，使所有权链保持简单且泄漏检测保持准确。
+* 如果延迟比分配更重要，直接发送到缓冲写入器，并仅对真正需要随机访问编辑的部分使用构建器；参见 xref:09__project-hexdump.adoc[09]。

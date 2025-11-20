@@ -1,0 +1,278 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>C互操作：导入、导出、ABI</title>
+<subtitle>在Zig和C之间无缝桥接代码和数据</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>我们上一章的HTTP客户端消费了用Zig编写的数据（<link xl:href="32__project-http-json-client.adoc">第32章</link>）；真实系统通常不得不依赖多年的C代码。本章展示了Zig 0.15.2如何将C视为一等公民：我们使用 <code>@cImport</code> 拉入头文件，将Zig函数导出回C，并验证记录保持其ABI承诺。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/c.zig">c.zig</link></simpara>
+<simpara>标准库现在通过触及I/O栈的相同现代化来路由 <code>std.c</code> 和 <code>std.builtin.CallingConvention</code>，因此本章重点介绍最相关的变化，同时保持示例仅需 <code>zig run</code> 即可运行。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link>、<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+
+<section xml:id="the-c-interoperability-architecture">
+<title>C互操作架构</title>
+<simpara>在深入 <code>@cImport</code> 机制之前，了解Zig的C互操作层如何组织是很有价值的。下图显示了从用户代码到libc和系统调用的完整架构：</simpara>
+<informalfigure>
+<mediaobject>
+<textobject role="monospaced"><![CDATA[graph TB
+    subgraph "用户代码层"
+        USER["用户应用程序代码"]
+    end
+
+    subgraph "标准库抽象"
+        OS["std.os<br/>操作系统特定包装器"]
+        POSIX["std.posix<br/>POSIX API层"]
+        FS["std.fs<br/>文件系统API"]
+        NET["std.net<br/>网络API"]
+        PROCESS["std.process<br/>进程管理"]
+    end
+
+    subgraph "C互操作层"
+        C["std.c<br/>主C类型模块"]
+
+        subgraph "平台特定模块"
+            DARWIN["c/darwin.zig<br/>macOS/iOS类型"]
+            FREEBSD["c/freebsd.zig<br/>FreeBSD类型"]
+            LINUX["os/linux.zig<br/>Linux系统调用"]
+            WINDOWS["os/windows.zig<br/>Windows API"]
+            NETBSD["c/netbsd.zig<br/>NetBSD类型"]
+            OPENBSD["c/openbsd.zig<br/>OpenBSD类型"]
+            SOLARIS["c/solaris.zig<br/>Solaris类型"]
+            HAIKU["c/haiku.zig<br/>Haiku类型"]
+            DRAGONFLY["c/dragonfly.zig<br/>DragonflyBSD类型"]
+        end
+
+        C --> DARWIN
+        C --> FREEBSD
+        C --> LINUX
+        C --> WINDOWS
+        C --> NETBSD
+        C --> OPENBSD
+        C --> SOLARIS
+        C --> HAIKU
+        C --> DRAGONFLY
+    end
+
+    subgraph "系统层"
+        LIBC["libc<br/>C标准库"]
+        SYSCALL["系统调用<br/>直接系统调用接口"]
+        WINAPI["Windows API<br/>kernel32/ntdll"]
+    end
+
+    USER --> OS
+    USER --> POSIX
+    USER --> FS
+    USER --> NET
+    USER --> PROCESS
+
+    OS --> C
+    POSIX --> C
+    FS --> POSIX
+    NET --> POSIX
+    PROCESS --> POSIX
+
+    DARWIN --> LIBC
+    FREEBSD --> LIBC
+    NETBSD --> LIBC
+    OPENBSD --> LIBC
+    SOLARIS --> LIBC
+    HAIKU --> LIBC
+    DRAGONFLY --> LIBC
+
+    LINUX --> LIBC
+    LINUX --> SYSCALL
+
+    WINDOWS --> WINAPI]]></textobject>
+</mediaobject>
+</informalfigure>
+<simpara>此架构揭示了 <code>std.c</code> 不是一个单一模块——它是一个调度器，使用编译时逻辑（<code>builtin.os.tag</code>）导入平台特定的C类型定义。当你为macOS编写Zig代码时，<code>std.c</code> 从 <code>c/darwin.zig</code> 拉取类型；在FreeBSD上，它使用 <code>c/freebsd.zig</code>；在Windows上，<code>os/windows.zig</code>；等等。这些平台特定模块定义了C类型，如 <code>c_int</code>、<code>timespec</code>、<code>fd_t</code> 和平台常量，然后与libc接口（当指定 <code>-lc</code> 时）或直接系统调用（在Linux上）接口。重要的是，Zig自己的标准库（<code>std.fs</code>、<code>std.net</code>、<code>std.process</code>）使用相同的C互操作层——当你调用 <code>std.posix.open()</code> 时，它在内部解析为 <code>std.c.open()</code>。理解此架构有助于你推理为什么某些C类型在某些平台上可用但在其他平台上不可用，为什么需要 <code>-lc</code> 来链接libc符号，以及你的 <code>@cImport</code> 代码如何与Zig内置的C互操作并存。</simpara>
+</section>
+</chapter>
+
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用 <code>@cImport</code> 和内置C工具链将Zig可执行文件连接到C头文件和配套源文件。</simpara>
+</listitem>
+<listitem>
+<simpara>导出具有C ABI的Zig函数，以便现有C代码可以在没有胶水的情况下调用它们。</simpara>
+</listitem>
+<listitem>
+<simpara>将C结构体映射到Zig <code>extern</code> 结构体，并确认布局、大小和调用语义在边界两侧对齐。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="importing-c-apis">
+<title>将C API导入Zig</title>
+<simpara><code>@cImport</code> 将C代码片段与你的Zig模块一起编译，遵循你在命令行上传递的包含路径、定义和额外的C源文件。这让一个可执行文件可以在没有单独构建系统的情况下依赖于两种语言。</simpara>
+
+<section xml:id="c-roundtrip">
+<title>通过 <code>@cImport</code> 往返</title>
+<simpara>第一个示例拉入一个头文件和C源文件，它们将两个整数相乘，然后演示从同一头文件中的内联C调用Zig导出的函数。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 33__c-interop-import-export-abi.adoc - include::example$chapters-data/code/33__c-interop-import-export-abi/01_c_roundtrip.zig[]</programlisting>
+<simpara>该程序通过 <code>@cInclude</code> 包含 <code>bridge.h</code>，链接配套的 <code>bridge.c</code>，并导出 <code>zig_add</code> 与平台的C调用约定，以便内联C可以回调到Zig。</simpara>
+<sidebar>
+<title>运行</title>
+<screen>$ zig run \
+    -Ichapters-data/code/33__c-interop-import-export-abi \
+    chapters-data/code/33__c-interop-import-export-abi/01_c_roundtrip.zig \
+    chapters-data/code/33__c-interop-import-export-abi/bridge.c</screen>
+</sidebar>
+<sidebar>
+<title>输出</title>
+<screen>c_mul(6, 7) = 42
+call_zig_add(19, 23) = 42</screen>
+</sidebar>
+<simpara>重要：传递 <code>-I</code> 使头文件可发现，并在同一命令行列出C文件指示Zig编译器将其编译并链接到运行工件中。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/build.zig">build.zig</link></simpara>
+</section>
+
+<section xml:id="exporting-zig">
+<title>将Zig函数导出到C</title>
+<simpara>当你将它们标记为 <code>export</code> 并选择 <code>callconv(.c)</code> 时，Zig函数获得C ABI，它会扩展为目标默认的C调用约定。任何可以通过 <code>@cImport</code> 从内联C调用的东西也可以从具有相同原型的单独编译的C对象调用，因此这种模式在你发布共享库时同样适用。</simpara>
+
+<section xml:id="understanding-c-calling-conventions">
+<title>理解C调用约定</title>
+<simpara><code>callconv(.c)</code> 注释不是一个单一的通用调用约定——它根据目标架构解析为平台特定的约定。下图显示了此解析的工作原理：</simpara>
+<informalfigure>
+<mediaobject>
+<textobject role="monospaced"><![CDATA[graph LR
+    subgraph "C调用约定解析"
+        TARGET["target.cCallingConvention()"]
+
+        TARGET --> X86["x86_64: SysV or Win64"]
+        TARGET --> ARM["aarch64: AAPCS"]
+        TARGET --> WASM["wasm32/64: C"]
+        TARGET --> RISCV["riscv64: C"]
+        TARGET --> SPIRV["spirv: unsupported"]
+    end
+
+    subgraph "平台细节"
+        X86 --> SYSV["SysV<br/>Linux, macOS, BSD"]
+        X86 --> WIN64["Win64<br/>Windows"]
+        ARM --> AAPCS["AAPCS<br/>标准ARM ABI"]
+    end]]></textobject>
+</mediaobject>
+</informalfigure>
+<simpara>当你编写 <code>callconv(.c)</code> 时，Zig会自动为你的目标选择适当的C调用约定。在x86_64 Linux、macOS或BSD系统上，这解析为System V ABI——参数通过寄存器 <code>rdi</code>、<code>rsi</code>、<code>rdx</code>、<code>rcx</code>、<code>r8</code>、<code>r9</code> 传递，然后是栈；返回值使用 <code>rax</code>。在x86_64 Windows上，它成为Win64调用约定——参数通过 <code>rcx</code>、<code>rdx</code>、<code>r8</code>、<code>r9</code> 传递，然后是栈；调用者必须保留阴影空间。在ARM（aarch64）上，它是AAPCS（ARM架构过程调用标准）及其自己的寄存器使用规则。这种自动解析就是为什么相同的 <code>export fn zig_add(a: i32, b: i32) callconv(.c) i32</code> 无需修改即可在平台上正确工作的原因——Zig为每个目标生成正确的前导、结尾和寄存器使用。在调试调用约定不匹配或编写汇编互操作时，了解哪个约定处于活动状态有助于你正确匹配寄存器分配和栈布局。</simpara>
+</section>
+</section>
+
+<chapter xml:id="abi-compatibility">
+<title>匹配数据布局和ABI保证</title>
+<simpara>可调用只是工作的一半；你还需要就布局规则达成一致，以便结构体和聚合在边界的两侧具有相同的大小、对齐和字段顺序。</simpara>
+
+<section xml:id="understanding-abis-and-object-formats">
+<title>理解ABI和对象格式</title>
+<simpara>应用程序二进制接口（ABI）定义了调用约定、名称重整、结构体布局规则以及类型如何在函数之间传递。不同的ABI有不同的规则，这会影响C互操作兼容性：</simpara>
+<informalfigure>
+<mediaobject>
+<textobject role="monospaced"><![CDATA[graph TB
+    subgraph "常见ABI"
+        ABI["Abi枚举"]
+
+        ABI --> GNU["gnu<br/>GNU工具链"]
+        ABI --> MUSL["musl<br/>musl libc"]
+        ABI --> MSVC["msvc<br/>Microsoft Visual C++"]
+        ABI --> NONE["none<br/>独立"]
+        ABI --> ANDROID["android, gnueabi, etc<br/>平台变体"]
+    end
+
+    subgraph "对象格式"
+        OFMT["ObjectFormat枚举"]
+
+        OFMT --> ELF["elf<br/>Linux, BSD"]
+        OFMT --> MACHO["macho<br/>Darwin系统"]
+        OFMT --> COFF["coff<br/>Windows PE"]
+        OFMT --> WASM["wasm<br/>WebAssembly"]
+        OFMT --> C["c<br/>C源输出"]
+        OFMT --> SPIRV["spirv<br/>着色器"]
+    end]]></textobject>
+</mediaobject>
+</informalfigure>
+<simpara>ABI选择影响 <code>extern struct</code> 字段的布局方式。<strong>gnu</strong> ABI（GNU工具链，在大多数Linux系统上使用）遵循GCC的特定结构体填充和对齐规则。<strong>msvc</strong> ABI（Microsoft Visual C++）有不同的规则——例如，<code>long</code> 在Windows x64上是32位，但在Linux x64上是64位。<strong>musl</strong> ABI以与glibc稍有不同的调用约定为目标musl libc。当声明 <code>extern struct SensorData</code> 时，Zig使用目标的ABI规则来计算字段偏移和填充，确保它们与C生成的内容匹配。对象格式（ELF、Mach-O、COFF、WASM）确定使用哪个链接器以及如何编码符号，但ABI确定实际内存布局。这就是为什么本章强调 <code>@sizeOf</code> 检查的原因——如果Zig和C在结构体大小上不一致，你很可能有ABI不匹配或错误的目标规范。</simpara>
+</section>
+
+<section xml:id="extern-structs">
+<title><code>extern struct</code> 用于共享布局</title>
+<simpara>此示例镜像传感器固件发布的C结构体。我们导入头文件，声明一个具有匹配字段的 <code>extern struct</code>，并仔细检查Zig和C在调用从C编译的辅助例程之前对大小达成一致。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 33__c-interop-import-export-abi.adoc - include::example$chapters-data/code/33__c-interop-import-export-abi/02_abi_layout.zig[]</programlisting>
+<simpara>辅助函数源自 <code>abi.c</code>，因此运行命令链接两个文件，并将C聚合例程暴露给Zig。</simpara>
+<sidebar>
+<title>运行</title>
+<screen>$ zig run \
+    -Ichapters-data/code/33__c-interop-import-export-abi \
+    chapters-data/code/33__c-interop-import-export-abi/02_abi_layout.zig \
+    chapters-data/code/33__c-interop-import-export-abi/abi.c</screen>
+</sidebar>
+<sidebar>
+<title>输出</title>
+<screen>sizeof(C struct) = 8
+sizeof(Zig extern struct) = 8
+left port 7: 258 status bits, 42.50 °C
+right port 9: 4 status bits, 38.00 °C
+combined_voltage = 1.067</screen>
+</sidebar>
+<simpara>提示：如果 <code>@sizeOf</code> 断言不一致，请仔细检查填充字节，并优先选择 <code>extern struct</code> 而不是 <code>packed</code>，除非你有明确的理由更改ABI规则。</simpara>
+</section>
+
+<section xml:id="tooling-translate-c">
+<title><code>translate-c</code> 和构建集成</title>
+<simpara>对于更大的头文件，请考虑运行 <code>zig translate-c</code> 将它们快照到Zig源文件中。构建系统还可以通过 <code>addCSourceFile</code> 和 <code>addIncludeDir</code> 注册C对象和头文件，使上面的 <code>zig run</code> 调用成为可重复包的一部分，而不是临时命令。</simpara>
+</section>
+</chapter>
+
+<chapter xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara>Zig不会自动链接平台库；在导入项目外部的API时传递 <code>-lc</code> 或添加适当的构建选项。</simpara>
+</listitem>
+<listitem>
+<simpara><code>@cImport</code> 发出一个翻译单元；将头文件包装在 <code>#pragma once</code> 或包含保护中，以避免重复定义，就像你在纯C项目中所做的那样。</simpara>
+</listitem>
+<listitem>
+<simpara>避免 <code>packed</code>，除非你控制两个编译器和目标；打包字段可以更改对齐保证，并在禁止它们的架构上导致未对齐加载。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展 <code>bridge.h</code> 用一个按值返回结构体的函数，并演示从Zig消费它，而不通过指针复制。</simpara>
+</listitem>
+<listitem>
+<simpara>导出一个用调用者提供的C缓冲区填充的Zig函数，并用 <code>zig build-obj</code> 加上 <code>llvm-nm</code> 或你平台的等效工具检查其符号。</simpara>
+</listitem>
+<listitem>
+<simpara>在ABI示例中用 <code>packed struct</code> 替换 <code>extern struct</code>，并在具有严格对齐的目标上运行它，以观察发出的机器代码中的差异。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>警告、替代方案、边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>某些C ABI重整名称（例如，Windows <code>__stdcall</code>）；在与非默认ABI互操作时覆盖调用约定或使用具有显式符号名称的 <code>@export</code>。</simpara>
+</listitem>
+<listitem>
+<simpara><code>@cImport</code> 无法编译C++——用 <code>extern "C"</code> 包装器翻译头文件或在绑定C++库时使用C shim。</simpara>
+</listitem>
+<listitem>
+<simpara>在桥接可变参数函数时，优先选择显式编组参数的Zig包装器；Zig的可变参数仅涵盖C的默认提升，而不是自定义省略号语义。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+</book>

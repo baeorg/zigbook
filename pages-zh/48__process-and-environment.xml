@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>进程与环境</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>在上一章通过计时、日志与进度条构建可观测性之后（见<link xl:href="47__time-logging-and-progress.xml">上一章</link>），我们走进 Zig 程序与其操作系统上下文交互的机制。这包括枚举命令行参数、检查与塑造环境变量、管理工作目录与生成子进程——全部通过 Zig 0.15.2 的<literal>std.process</literal>实现。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/process.zig">process.zig</link></simpara>
+<simpara>掌握这些 API 让工具在每台机器上都如鱼得水：标志解析可预测，配置流畅进入，子进程协作而不是挂起或泄漏句柄。在第六部分中，我们将扩大范围到构建目标，因此这里的模式形成了可移植的构建基础。<link xl:href="41__cross-compilation-and-wasm.xml">41</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>导航 <literal>std.process</literal> 迭代器以检查程序参数而不泄漏分配。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 Zig 的哨兵感知字符串安全地捕获、克隆和修改环境映射。<link xl:href="03__data-fundamentals.xml">3</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用确定性错误处理查询和更新当前工作目录。</simpara>
+</listitem>
+<listitem>
+<simpara>以可移植的方式启动子进程，收获输出，并解释退出条件。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/process/Child.zig">Child.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>构建尊重用户覆盖的小型实用程序，同时保持可预测的默认值。<link xl:href="05__project-tempconv-cli.xml">5</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="process-basics">
+<title>进程基础：参数、环境与工作目录</title>
+<simpara>Zig 保持进程状态显式：参数迭代、环境快照和工作目录查找都作为返回切片或专用结构的函数出现，而不是隐藏的全局变量。这反映了第一部分的数据优先思维，同时添加了足够的操作系统抽象以保持可移植性。<link xl:href="01__boot-basics.xml">1</link></simpara>
+<section xml:id="process-basics-args">
+<title>无意外的命令行参数</title>
+<simpara><literal>std.process.argsAlloc</literal> 将空终止的参数列表复制到分配器拥有的内存中，以便您可以安全地计算长度、获取基名或复制字符串。<link xl:href="05__project-tempconv-cli.xml">5</link> 对于轻量级扫描，<literal>argsWithAllocator</literal> 暴露一个重用缓冲区的迭代器。只需记得在完成后调用 <literal>deinit</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 48__process-and-environment.adoc - include::example$chapters-data/code/48__process-and-environment/args_overview.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run args_overview.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">argv[0].basename = args_overview
+argc = 1
+user args absent</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>将<literal>[:0]u8</literal>条目传递给其他 API 时，使用<literal>std.mem.sliceTo(arg, 0)</literal>去除哨兵而不复制；这既保持分配器所有权，又不损害 Unicode 正确性。</simpara>
+</tip>
+</section>
+<section xml:id="process-basics-envmap">
+<title>环境映射作为显式快照</title>
+<simpara>Environment variables become predictable once you work on a local <literal>EnvMap</literal> copy. The map deduplicates keys, provides case-insensitive lookups on Windows, and makes ownership rules clear. <link xl:href="28__filesystem-and-io.xml">28</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 48__process-and-environment.adoc - include::example$chapters-data/code/48__process-and-environment/env_map_playground.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run env_map_playground.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">pairs = 3
+APP_MODE = override
+THREADS present? no</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>当您已经拥有堆分配的字符串并希望映射采用它们时，请使用 <literal>putMove</literal>。它避免了额外的复制，并反映了<link xl:href="44__collections-and-algorithms.xml">集合章节</link>中介绍的 <literal>ArrayList.put</literal> 语义。</simpara>
+</note>
+</section>
+<section xml:id="process-basics-cwd">
+<title>当前工作目录助手</title>
+<simpara><literal>std.process.getCwdAlloc</literal> 在堆切片中提供工作目录，而 <literal>getCwd</literal> 写入调用者提供的缓冲区。在热循环中选择后者以避免搅动。将此与<link xl:href="28__filesystem-and-io.xml">文件系统章节</link>中的 <literal>std.fs.cwd()</literal> 结合用于路径连接或作用域目录更改。</simpara>
+</section>
+</chapter>
+<chapter xml:id="child-processes">
+<title>管理子进程</title>
+<simpara>进程编排以 <literal>std.process.Child</literal> 为中心，它在一致接口中包装特定于操作系统的危险（句柄继承、Unicode 命令行、信号竞争）。<link xl:href="22__build-system-deep-dive.xml">22</link> 您决定每个流的行为方式（继承、忽略、管道或关闭），然后等待一个 <literal>Term</literal>，它阐明子进程是退出、发出信号还是停止。</simpara>
+<section xml:id="child-processes-capture">
+<title>确定性捕获 stdout</title>
+<simpara>生成 <literal>zig version</literal> 制作可移植演示：我们管道 stdout/stderr，将数据收集到 <literal>ArrayList</literal> 缓冲区，并且只接受退出代码零。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 48__process-and-environment.adoc - include::example$chapters-data/code/48__process-and-environment/child_process_capture.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run child_process_capture.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">zig version -&gt; 0.15.2
+stderr bytes -&gt; 0</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>对“发出即忘”的命令，请始终设置<literal>stdin_behavior = .Ignore</literal>。否则子进程会继承父进程的标准输入，并可能因意外读取而阻塞（在 shell 或 REPL 中常见）。</simpara>
+</tip>
+</section>
+<section xml:id="child-processes-exits">
+<title>退出语义与诊断</title>
+<simpara><literal>Child.wait()</literal> 返回一个 <literal>Term</literal> 联合体。检查 <literal>Term.Exited</literal> 以获取数字代码，并详细报告 <literal>Term.Signal</literal> 或 <literal>Term.Stopped</literal>，以便用户知道何时有信号介入。将这些诊断绑定到<link xl:href="47__time-logging-and-progress.xml">第47章</link>的结构化日志记录规范，以实现统一的 CLI 错误报告。</simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>argsWithAllocator</literal> 借用缓冲区。在调用 <literal>deinit</literal> 之前存放迭代之外所需的任何数据。</simpara>
+</listitem>
+<listitem>
+<simpara>在 Windows 上环境键不区分大小写。避免存储仅因大小写不同的重复项。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>Child.spawn</literal> 在 <literal>fork</literal>/<literal>CreateProcess</literal> 之后仍可能失败。在接触管道之前，始终通过 <literal>wait()</literal> 隐式调用 <literal>waitForSpawn</literal>。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>编写一个包装器，仅使用迭代器接口打印 <literal>(index, argument, length)</literal> 的表格。不允许堆复制。</simpara>
+</listitem>
+<listitem>
+<simpara>扩展 <literal>EnvMap</literal> 示例以合并来自 <literal>.env</literal> 文件的覆盖变量，同时拒绝安全关键键（例如 <literal>PATH</literal>）的重复项。<link xl:href="28__filesystem-and-io.xml">28</link></simpara>
+</listitem>
+<listitem>
+<simpara>构建一个小型任务运行器，按顺序生成三个命令，将 stdout 管道到<link xl:href="47__time-logging-and-progress.xml">第47章</link>的进度记录器中。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>没有 libc 的 WASI 禁用动态参数/环境访问。在针对浏览器或无服务器运行时，使用 <literal>builtin.os.tag</literal> 检查来控制代码。</simpara>
+</listitem>
+<listitem>
+<simpara>在 Windows 上，批处理文件需要 <literal>cmd.exe</literal> 引号规则。依赖 <literal>argvToScriptCommandLineWindows</literal> 而不是手动制作字符串。<link xl:href="41__cross-compilation-and-wasm.xml">41</link></simpara>
+</listitem>
+<listitem>
+<simpara>高输出子进程可能耗尽管道。将 <literal>collectOutput</literal> 与合理的 <literal>max_output_bytes</literal> 一起使用，或流式传输到磁盘以避免 <literal>StdoutStreamTooLong</literal>。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

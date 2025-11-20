@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>概念入门</title>
+<subtitle>模块 vs 程序 vs 包 vs 库</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara><link xl:href="19__modules-and-imports-root-builtin-discovery.xml">第19章</link>映射了编译器的模块图；本章命名这些模块可以扮演的角色，以便你知道文件何时仅仅是助手，何时升级为程序，何时成为可重用包或库的核心。</simpara>
+<simpara>我们还将预览Zig CLI如何为消费者注册模块，为<link xl:href="21__zig-init-and-package-metadata.xml">第21章</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/build.zig">build.zig</link>中的构建图编写奠定基础。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>区分模块、程序、包和库，并解释Zig在编译期间如何处理每个。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>--dep</literal>和<literal>-M</literal>标志（及其构建图等价物）为消费者注册命名模块。</simpara>
+</listitem>
+<listitem>
+<simpara>应用实用清单，在开始新工件或重构现有工件时选择正确的单元。<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="vocabulary">
+<title>构建共享词汇</title>
+<simpara><emphasis role="strong">在你连接构建脚本或注册依赖项之前，先确定一致的语言：</emphasis>在Zig中，<emphasis role="strong">模块</emphasis>是<literal>@import</literal>返回的任何编译单元，<emphasis role="strong">程序</emphasis>是具有入口点的模块图，<emphasis role="strong">包</emphasis>捆绑模块加元数据，<emphasis role="strong">库</emphasis>是旨在重用但没有根<literal>main</literal>的包。
+<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/start.zig">start.zig</link></simpara>
+<section xml:id="modules-programs">
+<title>实践中的模块和程序</title>
+<simpara>此演示从根模块开始，该模块导出库的清单，但也声明<literal>main</literal>，因此运行时将图视为程序，而助手模块内省公共符号以保持术语诚实。<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.adoc - include::example$chapters-data/code/20__concept-primer-modules-vs-programs-vs-packages-vs-libraries/module_role_map.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run module_role_map.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">== 模块词汇演示 ==
+root exports main? yes → treat as program
+</programlisting>
+</para>
+</formalpara>
+<simpara>要点：模块和程序之间的区别取决于是否存在<literal>main</literal>。助手模块可以内省这种关系，从而实现自记录代码。</simpara>
+</section>
+</chapter>
+<chapter xml:id="packages-libraries">
+<title>包和库：重用边界</title>
+<simpara>包添加元数据（版本、依赖项、入口点），而库是专门为外部使用设计的包。Zig的构建系统通过<literal>--dep</literal>和<literal>-M</literal>标志管理这些边界，允许你注册命名模块供消费者导入。</simpara>
+<section xml:id="package-registration">
+<title>使用CLI标志注册命名模块</title>
+<simpara><literal>register_modules.zig</literal>演示了如何使用<literal>--dep math_utils=./math_utils.zig -M math_utils</literal>注册模块。这创建了一个命名导入<literal>@import("math_utils")</literal>，可由程序中的任何文件使用。注册将文件路径与逻辑名称分离，从而实现更清晰的依赖管理。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.adoc - include::example$chapters-data/code/20__concept-primer-modules-vs-programs-vs-packages-vs-libraries/register_modules.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run --dep math_utils=./math_utils.zig -M math_utils register_modules.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">== 命名模块注册 ==
+通过--dep导入的math_utils
+42 + 13 = 55
+</programlisting>
+</para>
+</formalpara>
+<simpara>专业提示：使用命名模块注册来创建干净的API边界。消费者导入逻辑名称（<literal>math_utils</literal>），而不是文件路径，从而实现重构而不破坏调用者。</simpara>
+</section>
+</chapter>
+<chapter xml:id="classification-checklist">
+<title>分类的实用清单</title>
+<simpara>使用这些标准来确定代码应作为模块、程序、包还是库存在：</simpara>
+<section xml:id="checklist-items">
+<title>何时使用什么</title>
+<simpara><literal>classification_checklist.zig</literal>实现了一个决策树，用于对代码单元进行分类。关键问题包括："它有main吗？"（程序）、"它会被导入吗？"（模块/库）、"它需要版本控制吗？"（包/库）。该示例还演示了如何记录这些决策以供将来维护。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.adoc - include::example$chapters-data/code/20__concept-primer-modules-vs-programs-vs-packages-vs-libraries/classification_checklist.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run classification_checklist.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">== 分类清单 ==
+[✓] 有main → 程序
+[✓] 将被导入 → 也是模块
+[✓] 需要版本控制 → 包候选
+[✓] 为重用设计 → 库材料
+
+决策：具有库潜力的程序
+建议：拆分为二进制+库对</programlisting>
+</para>
+</formalpara>
+<simpara>记住：这些分类不是互斥的。一个工件可以根据上下文扮演多个角色——程序可以将其部分作为库导出，模块可以成为多个包的一部分。</simpara>
+</section>
+</chapter>
+<chapter xml:id="common-patterns">
+<title>常见模式和反模式</title>
+<simpara>理解这些术语有助于避免常见的架构陷阱：</simpara>
+<section xml:id="patterns-good">
+<title>良好实践</title>
+<itemizedlist>
+<listitem>
+<simpara>将可重用逻辑分离到库中，即使最初只有一个程序使用它。</simpara>
+</listitem>
+<listitem>
+<simpara>使用命名模块注册创建稳定的API，不受文件组织更改的影响。</simpara>
+</listitem>
+<listitem>
+<simpara>在模块文档中记录分类意图（"这是一个助手模块"、"这是主程序"）。</simpara>
+</listitem>
+<listitem>
+<simpara>设计包边界以匹配逻辑域，而不是文件系统结构。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+<section xml:id="patterns-bad">
+<title>需要避免的反模式</title>
+<itemizedlist>
+<listitem>
+<simpara>单体程序将所有内容耦合到单个main中——阻碍可测试性和重用。</simpara>
+</listitem>
+<listitem>
+<simpara>循环依赖关系，其中模块相互导入，创建紧密耦合。</simpara>
+</listitem>
+<listitem>
+<simpara>隐式依赖关系，其中模块期望特定的文件路径而不是逻辑名称。</simpara>
+</listitem>
+<listitem>
+<simpara>包边界不一致，使消费者难以理解依赖关系。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+</chapter>
+<chapter xml:id="transitioning">
+<title>过渡工件</title>
+<simpara>随着项目的发展，你可能需要重新分类工件：</simpara>
+<section xml:id="transition-examples">
+<title>常见转换</title>
+<simpara><literal>transition_demo.zig</literal>展示了如何从单体程序演变为程序+库对。该过程涉及：1）将可重用逻辑提取到单独的文件中，2）通过<literal>--dep</literal>注册它，3）更新导入以使用逻辑名称而不是相对路径。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.adoc - include::example$chapters-data/code/20__concept-primer-modules-vs-programs-vs-packages-vs-libraries/transition_demo.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run --dep utils=./utils.zig -M utils transition_demo.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">== 转换演示 ==
+前：单体程序
+后：程序 + 注册库
+相同功能，更好的架构</programlisting>
+</para>
+</formalpara>
+<simpara>转换通过更清晰的分离改进了架构，同时保持相同的功能。关键是一次一步地进行，保持测试通过。</simpara>
+</section>
+</chapter>
+<chapter xml:id="summary-next-steps">
+<title>总结和后续步骤</title>
+<simpara>我们现在有了共享的词汇和实用工具，用于在Zig中分类和组织代码。这些概念为<link xl:href="21__zig-init-and-package-metadata.xml">第21章</link>奠定了基础，我们将在该章中使用<literal>zig init</literal>创建适当的包结构并管理元数据。</simpara>
+<simpara>关键要点：从清晰的分类开始，使用命名模块注册，并设计重用边界以匹配逻辑域而不是文件系统方便性。</simpara>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>分析现有项目并使用分类清单记录每个工件的当前角色。</simpara>
+</listitem>
+<listitem>
+<simpara>使用命名模块注册将单体程序重构为程序+库对。</simpara>
+</listitem>
+<listitem>
+<simpara>创建决策树图，帮助团队成员对新代码进行分类。</simpara>
+</listitem>
+<listitem>
+<simpara>设计具有清晰API边界的包结构，用于多组件项目。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

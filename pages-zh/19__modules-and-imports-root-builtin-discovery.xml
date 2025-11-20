@@ -1,0 +1,446 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>模块与导入</title>
+<subtitle>根模块/内置/发现</subtitle>
+<date>2025-11-15</date>
+</info>
+<chapter xml:id="overview">
+<title>Overview</title>
+<simpara>第18章将泛型优先级队列包装在可重用模块中；现在我们将视野扩展到编译器的完整模块图。我们将清晰界定根模块、标准库以及暴露编译元数据的特殊<literal>builtin</literal>命名空间之间的界限。在此过程中，我们将拥抱Zig 0.15.2的I/O重构，实践可选助手的发现，并预览自定义入口点如何挂接到<literal>std.start</literal>，以便需要绕过默认运行时前导的程序使用。更多详细信息，请参见<link xl:href="18__project-generic-priority-queue.xml">18</link>、<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/start.zig">start.zig</link>和<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>映射根模块、<literal>std</literal>和<literal>builtin</literal>如何交互以形成编译时模块图并安全共享声明。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/std.zig">std.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>从<literal>builtin</literal>中获取目标、优化和构建模式元数据，以指导配置和诊断。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>@import</literal>和<literal>@hasDecl</literal>控制可选助手，保持发现显式化，同时支持策略驱动的模块。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="module-graph">
+<title>遍历模块图</title>
+<simpara>编译器将每个源文件视为命名空间结构体。当您<literal>@import</literal>路径时，返回的结构体暴露任何<literal>pub</literal>声明供下游使用。根模块简单地对应于您的顶层文件；它导出的任何内容都可以通过<literal>@import("root")</literal>立即访问，无论调用者是另一个模块还是测试块。我们将通过一组小型文件检查这种关系，以显示跨模块的值共享，同时捕获构建元数据。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fs/File.zig">File.zig</link>。</simpara>
+<section xml:id="module-graph-example">
+<title>在助手模块间共享根导出</title>
+<simpara><literal>module_graph_report.zig</literal>在三个文件之间实例化类似队列的报告：根导出一个<literal>Features</literal>数组，<literal>build_config.zig</literal>助手格式化元数据，<literal>service/metrics.zig</literal>模块消费根导出来构建目录。该示例还演示了0.15.2中引入的新写入器API，我们借用堆栈缓冲区并通过<literal>std.fs.File.stdout().writer</literal>接口刷新。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io.zig">Io.zig</link>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 19__modules-and-imports-root-builtin-discovery.adoc - include::example$chapters-data/code/19__modules-and-imports-root-builtin-discovery/module_graph_report.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run module_graph_report.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">== Module graph walkthrough ==
+root.Version -&gt; 1.4.0
+mode=Debug target=x86_64-linux
+features: root-module-export builtin-introspection module-catalogue
+Features exported by root (3):
+   1. root-module-export
+   2. builtin-introspection
+   3. module-catalogue</programlisting>
+</para>
+</formalpara>
+<simpara>助手模块引用<literal>@import("root")</literal>来读取<literal>Features</literal>，它们格式化<literal>builtin.target</literal>信息以证明元数据正确流动。将此模式视为共享配置而不依赖全局变量或单例状态的基础。</simpara>
+</section>
+<section xml:id="module-graph-import-tracking">
+<title><literal>@import</literal>调用如何在内部被跟踪</title>
+<simpara>在编译器级别，每个<literal>@import("path")</literal>表达式在AST到ZIR降级过程中成为导入映射中的一个条目。此映射对路径进行去重，保留令牌位置用于诊断，并最终在ZIR额外数据中提供打包的<literal>Imports</literal>有效载荷。</simpara>
+<literallayout class="monospaced">graph TB
+   ImportExpr["@import(&amp;quot;path&amp;quot;)"] --&gt; CheckImports["Check imports map"]
+
+   CheckImports --&gt;|Exists| UseExisting["Reuse existing import"]
+   CheckImports --&gt;|Not exists| AddImport["Add to imports map"]
+
+   AddImport --&gt; StoreToken["Map string_index -&gt; token"]
+   StoreToken --&gt; GenerateInst["Generate import instruction"]
+
+   GenerateInst --&gt; Finalize["At end of AstGen"]
+   Finalize --&gt; StoreImports["Store Imports payload&lt;br/&gt;in extra array"]</literallayout>
+</section>
+</chapter>
+<chapter xml:id="builtin-metadata">
+<title>通过<literal>builtin</literal>检查构建元数据</title>
+<simpara><literal>builtin</literal>命名空间由编译器为每个翻译单元组装。它暴露字段如<literal>mode</literal>、<literal>target</literal>、<literal>single_threaded</literal>和<literal>link_libc</literal>，允许您定制诊断或将昂贵功能保护在编译时开关后面。下一个示例练习这些字段，并展示如何将可选导入隔离在<literal>comptime</literal>检查后面，以便它们永远不会在发布构建中触发。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 19__modules-and-imports-root-builtin-discovery.adoc - include::example$chapters-data/code/19__modules-and-imports-root-builtin-discovery/builtin_probe.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run builtin_probe.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">zig version (compiler): 0.15.2
+optimize mode: Debug — debug symbols and runtime safety checks enabled
+target triple: x86_64-linux-gnu
+single-threaded build: false
+linking libc: false</programlisting>
+</para>
+</formalpara>
+<simpara>关键要点：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>std.fs.File.stdout().writer(&amp;buffer)</literal>提供与新的<literal>std.Io.Writer</literal> API兼容的缓冲写入器；始终在退出前刷新以避免截断输出。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>builtin.is_test</literal>是一个编译时常量。将该标志后面的<literal>@import("test_helpers.zig")</literal>门控确保仅测试助手从发布构建中消失，同时保持覆盖率检测集中。</simpara>
+</listitem>
+<listitem>
+<simpara>在类似枚举的字段（<literal>mode</literal>、<literal>target.cpu.arch</literal>）上使用<literal>@tagName</literal>产生无堆分配的字符串，使它们成为横幅消息或功能切换的理想选择。</simpara>
+</listitem>
+</itemizedlist>
+<section xml:id="builtin-optimization-modes">
+<title>实践中的优化模式</title>
+<simpara>在探测器中观察到的<literal>builtin.mode</literal>字段对应于当前模块的优化器配置。每种模式在安全检查、调试信息、速度和二进制大小之间进行权衡；理解这些权衡有助于您决定何时启用发现钩子或昂贵的诊断。</simpara>
+<informaltable frame="all" rowsep="1" colsep="1">
+<tgroup cols="6">
+<colspec colname="col_1" colwidth="16.6666*"/>
+<colspec colname="col_2" colwidth="16.6666*"/>
+<colspec colname="col_3" colwidth="16.6666*"/>
+<colspec colname="col_4" colwidth="16.6666*"/>
+<colspec colname="col_5" colwidth="16.6666*"/>
+<colspec colname="col_6" colwidth="16.667*"/>
+<thead>
+<row>
+<entry align="left" valign="top">模式</entry>
+<entry align="left" valign="top">优先级</entry>
+<entry align="left" valign="top">安全检查</entry>
+<entry align="left" valign="top">速度</entry>
+<entry align="left" valign="top">二进制大小</entry>
+<entry align="left" valign="top">使用场景</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry align="left" valign="top"><simpara><literal>Debug</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>安全 + 调试信息</simpara></entry>
+<entry align="left" valign="top"><simpara>全部启用</simpara></entry>
+<entry align="left" valign="top"><simpara>最慢</simpara></entry>
+<entry align="left" valign="top"><simpara>最大</simpara></entry>
+<entry align="left" valign="top"><simpara>开发和调试</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>ReleaseSafe</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>速度 + 安全</simpara></entry>
+<entry align="left" valign="top"><simpara>全部启用</simpara></entry>
+<entry align="left" valign="top"><simpara>快速</simpara></entry>
+<entry align="left" valign="top"><simpara>大</simpara></entry>
+<entry align="left" valign="top"><simpara>带安全性的生产环境</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>ReleaseFast</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>最大速度</simpara></entry>
+<entry align="left" valign="top"><simpara>禁用</simpara></entry>
+<entry align="left" valign="top"><simpara>最快</simpara></entry>
+<entry align="left" valign="top"><simpara>中等</simpara></entry>
+<entry align="left" valign="top"><simpara>性能关键的生产环境</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>ReleaseSmall</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>最小大小</simpara></entry>
+<entry align="left" valign="top"><simpara>禁用</simpara></entry>
+<entry align="left" valign="top"><simpara>快速</simpara></entry>
+<entry align="left" valign="top"><simpara>最小</simpara></entry>
+<entry align="left" valign="top"><simpara>嵌入式系统，大小受限环境</simpara></entry>
+</row>
+</tbody>
+</tgroup>
+</informaltable>
+<simpara>优化模式按模块指定并影响：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>运行时安全检查（溢出、边界检查、空指针检查）</simpara>
+</listitem>
+<listitem>
+<simpara>堆栈跟踪和调试信息生成</simpara>
+</listitem>
+<listitem>
+<simpara>LLVM优化级别（使用LLVM后端时）</simpara>
+</listitem>
+<listitem>
+<simpara>内联启发式和代码生成策略</simpara>
+</listitem>
+</itemizedlist>
+<literallayout class="monospaced">graph TB
+   subgraph "优化模式影响"
+      OptMode["optimize_mode: OptimizeMode"]
+
+      OptMode --&gt; SafetyChecks["运行时安全检查"]
+      OptMode --&gt; DebugInfo["调试信息"]
+      OptMode --&gt; CodegenStrategy["代码生成策略"]
+      OptMode --&gt; LLVMOpt["LLVM优化级别"]
+
+      SafetyChecks --&gt; Overflow["整数溢出检查"]
+      SafetyChecks --&gt; Bounds["边界检查"]
+      SafetyChecks --&gt; Null["空指针检查"]
+      SafetyChecks --&gt; Unreachable["不可达断言"]
+
+      DebugInfo --&gt; StackTraces["堆栈跟踪"]
+      DebugInfo --&gt; DWARF["DWARF调试信息"]
+      DebugInfo --&gt; LineInfo["源代码行信息"]
+
+      CodegenStrategy --&gt; Inlining["内联启发式"]
+      CodegenStrategy --&gt; Unrolling["循环展开"]
+      CodegenStrategy --&gt; Vectorization["SIMD向量化"]
+
+      LLVMOpt --&gt; O0["Debug: -O0"]
+      LLVMOpt --&gt; O2Safe["ReleaseSafe: -O2 + safety"]
+      LLVMOpt --&gt; O3["ReleaseFast: -O3"]
+      LLVMOpt --&gt; Oz["ReleaseSmall: -Oz"]
+   end</literallayout>
+</section>
+<section xml:id="builtin-test-config">
+<title>案例研究：<literal>builtin</literal>驱动的测试配置</title>
+<simpara>标准库的测试框架广泛使用<literal>builtin</literal>字段来决定何时跳过不支持的后端、平台或优化模式的测试。下面的流程反映了在连接可选助手时您可以在自己的模块中采用的条件模式。</simpara>
+<literallayout class="monospaced">graph TB
+
+   subgraph "条件执行"
+      BACKEND_CHECK["后端检查&lt;br/&gt;if (builtin.zig_backend == .stage2_X)&lt;br/&gt;return error.SkipZigTest;"]
+      PLATFORM_CHECK["平台检查&lt;br/&gt;if (builtin.os.tag == .X)&lt;br/&gt;return error.SkipZigTest;"]
+      MODE_CHECK["模式检查&lt;br/&gt;if (builtin.mode == .ReleaseFast)&lt;br/&gt;return error.SkipZigTest;"]
+   end
+
+   subgraph "测试类型"
+      RUNTIME["运行时测试&lt;br/&gt;var x = computeValue();"]
+      COMPTIME["编译时测试&lt;br/&gt;try comptime testFunction();"]
+      MIXED["混合测试&lt;br/&gt;try testFn();&lt;br/&gt;try comptime testFn();"]
+   end
+
+   BODY --&gt; BACKEND_CHECK
+   BODY --&gt; PLATFORM_CHECK
+   BODY --&gt; MODE_CHECK
+   BODY --&gt; RUNTIME
+   BODY --&gt; COMPTIME
+   BODY --&gt; MIXED</literallayout>
+</section>
+</chapter>
+<chapter xml:id="optional-discovery">
+<title>使用<literal>@import</literal>和<literal>@hasDecl</literal>进行可选发现</title>
+<simpara>大型系统经常提供仅调试工具或实验性适配器。Zig鼓励显式发现而不是静默探测文件系统：在策略启用时在编译时导入助手模块，然后使用<literal>@hasDecl</literal>查询其导出的API。下面的示例通过在Debug模式下有条件地将<literal>tools/dev_probe.zig</literal>连接到构建中来实现这一点。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 19__modules-and-imports-root-builtin-discovery.adoc - include::example$chapters-data/code/19__modules-and-imports-root-builtin-discovery/discovery_probe.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run discovery_probe.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">discovery mode: Debug
+dev hooks: debug-only instrumentation active
+built with zig 0.15.2</programlisting>
+</para>
+</formalpara>
+<simpara>因为<literal>DevHooks</literal>本身是一个编译时<literal>if</literal>，Release构建将导入替换为一个存根结构体，其API记录了开发功能的缺失。结合<literal>@hasDecl</literal>，根模块可以发出摘要而无需手动枚举每个可选钩子，保持编译时发现的显式和可重现性。</simpara>
+</chapter>
+<chapter xml:id="entrypoints">
+<title>入口点和<literal>std.start</literal></title>
+<simpara><literal>std.start</literal>检查根模块以决定是否导出<literal>main</literal>、<literal>_start</literal>或平台特定的入口符号。如果您提供<literal>pub fn _start() noreturn</literal>，默认的启动垫片会退让，让您手动连接系统调用或自定义运行时。</simpara>
+<section xml:id="entrypoints-symbol-table">
+<title>入口点符号表</title>
+<simpara><literal>std.start</literal>选择的导出符号取决于平台、链接模式和配置标志，如<literal>link_libc</literal>。下表总结了最重要的组合。</simpara>
+<informaltable frame="all" rowsep="1" colsep="1">
+<tgroup cols="5">
+<colspec colname="col_1" colwidth="20*"/>
+<colspec colname="col_2" colwidth="20*"/>
+<colspec colname="col_3" colwidth="20*"/>
+<colspec colname="col_4" colwidth="20*"/>
+<colspec colname="col_5" colwidth="20*"/>
+<thead>
+<row>
+<entry align="left" valign="top">平台</entry>
+<entry align="left" valign="top">链接模式</entry>
+<entry align="left" valign="top">条件</entry>
+<entry align="left" valign="top">导出符号</entry>
+<entry align="left" valign="top">处理函数</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry align="left" valign="top"><simpara>POSIX/Linux</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行文件</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_start</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_start()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>POSIX/Linux</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行文件</simpara></entry>
+<entry align="left" valign="top"><simpara>链接libc</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>main</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>main()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>Windows</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行文件</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>wWinMainCRTStartup</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>WinStartup()</literal> / <literal>wWinMainCRTStartup()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>Windows</simpara></entry>
+<entry align="left" valign="top"><simpara>动态库</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_DllMainCRTStartup</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_DllMainCRTStartup()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>UEFI</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行文件</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>EfiMain</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>EfiMain()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>WASI</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行文件（命令）</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_start</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>wasi_start()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>WASI</simpara></entry>
+<entry align="left" valign="top"><simpara>可执行文件（反应器）</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_initialize</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>wasi_start()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>WebAssembly</simpara></entry>
+<entry align="left" valign="top"><simpara>独立环境</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>_start</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>wasm_freestanding_start()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>WebAssembly</simpara></entry>
+<entry align="left" valign="top"><simpara>链接libc</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>__main_argc_argv</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>mainWithoutEnv()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>OpenCL/Vulkan</simpara></entry>
+<entry align="left" valign="top"><simpara>内核</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>main</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>spirvMain2()</literal></simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara>MIPS</simpara></entry>
+<entry align="left" valign="top"><simpara>任意</simpara></entry>
+<entry align="left" valign="top"><simpara>默认</simpara></entry>
+<entry align="left" valign="top"><simpara><literal>__start</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>（与<literal>_start</literal>相同）</simpara></entry>
+</row>
+</tbody>
+</tgroup>
+</informaltable>
+</section>
+<section xml:id="entrypoints-logic">
+<title>编译时入口点逻辑</title>
+<simpara>在内部，<literal>std.start</literal>使用<literal>builtin</literal>字段，如<literal>output_mode</literal>、<literal>os</literal>、<literal>link_libc</literal>和目标架构来决定导出哪个符号。编译时流程反映了符号表中的情况。</simpara>
+<literallayout class="monospaced">graph TB
+   Start["comptime block&lt;br/&gt;(start.zig:28)"]
+   CheckMode["Check builtin.output_mode"]
+   CheckSimplified["simplified_logic?&lt;br/&gt;(stage2 backends)"]
+
+   CheckLinkC["link_libc or&lt;br/&gt;object_format == .c?"]
+   CheckWindows["builtin.os == .windows?"]
+   CheckUEFI["builtin.os == .uefi?"]
+   CheckWASI["builtin.os == .wasi?"]
+   CheckWasm["arch.isWasm() &amp;&amp;&lt;br/&gt;os == .freestanding?"]
+
+   ExportMain["@export(&amp;main, 'main')"]
+   ExportWinMain["@export(&amp;WinStartup,&lt;br/&gt;'wWinMainCRTStartup')"]
+   ExportStart["@export(&amp;_start, '_start')"]
+   ExportEfi["@export(&amp;EfiMain, 'EfiMain')"]
+   ExportWasi["@export(&amp;wasi_start,&lt;br/&gt;wasm_start_sym)"]
+   ExportWasmStart["@export(&amp;wasm_freestanding_start,&lt;br/&gt;'_start')"]
+
+   Start --&gt; CheckMode
+   CheckMode --&gt;|".Exe or has main"| CheckSimplified
+   CheckSimplified --&gt;|"true"| Simple["Simplified logic&lt;br/&gt;(lines 33-51)"]
+   CheckSimplified --&gt;|"false"| CheckLinkC
+
+   CheckLinkC --&gt;|"yes"| ExportMain
+   CheckLinkC --&gt;|"no"| CheckWindows
+   CheckWindows --&gt;|"yes"| ExportWinMain
+   CheckWindows --&gt;|"no"| CheckUEFI
+   CheckUEFI --&gt;|"yes"| ExportEfi
+   CheckUEFI --&gt;|"no"| CheckWASI
+   CheckWASI --&gt;|"yes"| ExportWasi
+   CheckWASI --&gt;|"no"| CheckWasm
+   CheckWasm --&gt;|"yes"| ExportWasmStart
+   CheckWasm --&gt;|"no"| ExportStart</literallayout>
+<simpara><literal>std.start</literal>检查根模块以决定是否导出<literal>main</literal>、<literal>_start</literal>或平台特定的入口符号。如果您提供<literal>pub fn _start() noreturn</literal>，默认的启动垫片会退让，让您手动连接系统调用或自定义运行时。为了保持工具链满意：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>使用<literal>-fno-entry</literal>构建，以便链接器不期望C运行时的<literal>main</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara>通过系统调用或轻量级包装器发出诊断信息；标准I/O堆栈假设<literal>std.start</literal>已执行其初始化。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/os/linux.zig">linux.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>可选地将低级入口点包装在调用更高级别Zig函数的薄兼容垫片中，以便您的业务逻辑仍然存在于符合人体工程学的可测试代码中。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>在下一章中，我们将把这些想法概括为区分模块、程序、包和库的词汇表，为我们在不混淆命名空间边界的情况下扩展编译时配置做好准备。<link xl:href="20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.xml">20</link></simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>在共享配置结构体时，优先使用<literal>@import("root")</literal>而不是全局单例；它保持依赖关系显式化，并与Zig的编译时评估良好配合。</simpara>
+</listitem>
+<listitem>
+<simpara>0.15.2写入器API需要显式缓冲区；调整缓冲区大小以匹配您的输出量，并在返回前始终刷新。</simpara>
+</listitem>
+<listitem>
+<simpara>可选导入应位于策略强制声明之后，以便生产工件不会意外将仅开发代码拖入发布构建中。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展<literal>module_graph_report.zig</literal>，使<literal>Features</literal>数组变为结构体的结构体，然后更新目录打印机以格式化带缩进的嵌套能力。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+<listitem>
+<simpara>修改<literal>builtin_probe.zig</literal>以发出描述目标的JSON片段；使用<literal>std.json.stringify</literal>并在每个优化模式下验证输出。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json.zig">json.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>为<literal>discovery_probe.zig</literal>添加一个仅ReleaseFast的助手模块，用于跟踪构建时间戳；使用<literal>if (builtin.mode == .ReleaseFast)</literal>进行门控，并通过测试证明ReleaseSafe构建永远不会导入它。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>当在同一文件中组合<literal>@import("root")</literal>和<literal>@This()</literal>时，注意循环引用；前向声明或中间助手结构体可以打破循环。</simpara>
+</listitem>
+<listitem>
+<simpara>在<literal>std.fs.File.stdout()</literal>可能不存在的交叉编译目标上（例如独立WASM），在刷新前回退到特定目标的写入器或遥测缓冲区。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/os/wasi.zig">wasi.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>如果您禁用<literal>std.start</literal>，您也选择退出Zig的自动恐慌处理程序和参数解析助手；显式重新引入等效项或为消费者记录新契约。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

@@ -1,0 +1,400 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>错误和资源清理</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>第3章给了我们塑造数据的工具；现在我们需要严格的方式来报告操作何时失败，并可预测地清理资源。Zig的错误联合让您定义精确的失败词汇表，用 <literal>try</literal> 传播它们，并在不依赖异常的情况下提供信息性名称，如 <link xl:href="https://ziglang.org/documentation/master/#Error-Set-Type">#错误集类型</link> 和 <link xl:href="https://ziglang.org/documentation/master/#try">#try</link> 中所述。</simpara>
+<simpara>我们还探索 <literal>defer</literal> 和 <literal>errdefer</literal>，这对语句保持清理与获取相邻，这样当错误强制提前返回时，您永远不会丢失文件句柄、缓冲区或其他稀缺资源的跟踪；参考 <link xl:href="https://ziglang.org/documentation/master/#defer">#defer</link> 和 <link xl:href="https://ziglang.org/documentation/master/#errdefer">#errdefer</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>声明专用错误集，根据需要合并它们，并用 <literal>try</literal> 传播失败，以便调用者明确承认可能出错的地方。</simpara>
+</listitem>
+<listitem>
+<simpara>使用 <literal>catch</literal> 将错误转换为可恢复状态，包括日志记录、回退值和结构化控制流退出，如 <link xl:href="https://ziglang.org/documentation/master/#catch">#catch</link> 中所述。</simpara>
+</listitem>
+<listitem>
+<simpara>配对 <literal>defer</literal> 和 <literal>errdefer</literal> 以保证确定性清理，即使在使用 <literal>catch unreachable</literal> 等结构有意静默错误时也是如此；参考 <link xl:href="https://ziglang.org/documentation/master/#unreachable">#unreachable</link>。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="section-1">
+<title>错误集和传播</title>
+<simpara>Zig中错误感知的API采用显式联合：可能失败的函数返回 <literal>E!T</literal>，它调用的每个助手都使用 <literal>try</literal> 向上冒泡错误，直到某个站点决定如何恢复。这保持了控制流的可观察性，同时仍然让成功路径看起来简单明了，如 <link xl:href="https://ziglang.org/documentation/master/#Error-Handling">#错误处理</link> 中所述。</simpara>
+<section xml:id="section-1-sub-a">
+<title>声明错误集并用try传播</title>
+<simpara>通过命名函数可以返回的确切错误，调用者获得编译时详尽性和值出错时的可读诊断。<literal>try</literal> 自动转发这些错误，避免样板代码，同时保持对失败模式的诚实。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 04__errors-resource-cleanup.adoc - include::example$chapters-data/code/04__errors-resource-cleanup/propagation_basics.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run propagation_basics.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">input "27" -&gt; 27
+input "9x" failed with InvalidDigit
+input "120" failed with Overflow</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>循环继续移动，因为每个 <literal>catch</literal> 分支都记录了其意图——报告并继续——这反映了生产代码如何跳过格式错误的记录，同时仍然暴露其名称。</simpara>
+</tip>
+<section xml:id="_how_error_sets_work_internally">
+<title>错误集在内部如何工作</title>
+<simpara>当您在Zig中声明错误集时，您正在创建编译器维护的全局错误注册表的子集。理解这种架构可以阐明为什么错误操作很快以及错误集合并如何工作：</simpara>
+<literallayout class="monospaced">graph LR
+    subgraph "全局错误集"
+        GES["global_error_set"]
+        NAMES["错误名称字符串&lt;br/&gt;索引 0 = 空"]
+
+        GES --&gt; NAMES
+
+        NAMES --&gt; ERR1["索引 1: 'OutOfMemory'"]
+        NAMES --&gt; ERR2["索引 2: 'FileNotFound'"]
+        NAMES --&gt; ERR3["索引 3: 'AccessDenied'"]
+        NAMES --&gt; ERRN["索引 N: 'CustomError'"]
+    end
+
+    subgraph "错误值"
+        ERRVAL["值{&lt;br/&gt;  err: {name: 索引}&lt;br/&gt;}"]
+
+        ERRVAL --&gt;|"name = 1"| ERR1
+    end
+
+    subgraph "错误集类型"
+        ERRSET["类型{&lt;br/&gt;  error_set_type: {&lt;br/&gt;    names: [1,2,3]&lt;br/&gt;  }&lt;br/&gt;}"]
+
+        ERRSET --&gt; ERR1
+        ERRSET --&gt; ERR2
+        ERRSET --&gt; ERR3
+    end</literallayout>
+<simpara><emphasis role="strong">关键见解：</emphasis></simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">全局注册表</emphasis>：整个程序中的所有错误名称都存储在具有唯一索引的单个全局注册表中。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">轻量级值</emphasis>：错误值只是指向此注册表的 <literal>u16</literal> 标签——比较错误与比较整数一样快。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">错误集类型</emphasis>：当您编写 <literal>error{InvalidDigit, Overflow}</literal> 时，您正在创建引用全局注册表子集的类型。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">合并很简单</emphasis>：<literal>||</literal> 运算符通过创建具有索引并集的新类型来组合错误集——无需字符串操作。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">唯一性保证</emphasis>：错误名称是全局唯一的，因此 <literal>error.InvalidDigit</literal> 始终引用相同的注册表项。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>这种设计使Zig中的错误处理极其高效，同时为调试保留信息性错误名称。基于标签的表示意味着错误联合与普值相比增加的开销极小。</simpara>
+</section>
+</section>
+<section xml:id="section-1-sub-b">
+<title>用catch塑造恢复</title>
+<simpara><literal>catch</literal> 块可以分支特定错误、选择回退值，或决定失败是否结束当前迭代。标记循环阐明了我们在处理超时与断开连接后恢复哪个控制路径。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 04__errors-resource-cleanup.adoc - include::example$chapters-data/code/04__errors-resource-cleanup/catch_and_recover.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run catch_and_recover.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">probe 0 -&gt; 42
+probe 1 timed out; using fallback 200
+probe 1 -&gt; 200
+probe 2 disconnected; skipping sample
+probe 3 -&gt; 88
+aggregate total = 330</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>超时降级为缓存的数字，而断开连接则完全放弃样本——代码中明确的两种不同恢复策略。</simpara>
+</tip>
+</section>
+<section xml:id="section-1-sub-c">
+<title>将错误集合并到稳定API中</title>
+<simpara>当可重用的助手来自不同领域——解析、网络、存储——您可以用 <literal>||</literal> 联合它们的错误集来发布单个契约，同时仍然让内部代码 <literal>try</literal> 每个步骤。保持合并集狭窄意味着下游调用者只考虑您实际打算暴露的失败。</simpara>
+<section xml:id="_inferred_error_sets">
+<title>推断错误集</title>
+<simpara>通常您不需要显式列出函数可能返回的每个错误。Zig使用 <literal>!T</literal> 语法支持<strong>推断错误集</strong>，编译器通过分析函数体自动确定可以返回哪些错误：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "推断错误集结构"
+        IES["InferredErrorSet"]
+        FUNC["func: 索引&lt;br/&gt;所属函数"]
+        ERRORS["errors: NameMap&lt;br/&gt;直接错误"]
+        INFERREDSETS["inferred_error_sets&lt;br/&gt;依赖IES"]
+        RESOLVED["resolved: 索引&lt;br/&gt;最终错误集"]
+    end
+    
+    subgraph "错误来源"
+        DIRECTRET["return error.Foo&lt;br/&gt;直接错误返回"]
+        FUNCALL["foo() catch&lt;br/&gt;被调用函数错误"]
+        IESCALL["bar() catch&lt;br/&gt;IES函数调用"]
+    end
+    
+    subgraph "解析过程"
+        BODYANAL["分析函数体"]
+        COLLECTERRS["收集所有错误"]
+        RESOLVEDEPS["解析依赖IES"]
+        CREATESET["创建错误集类型"]
+    end
+    
+    DIRECTRET --&gt; ERRORS
+    FUNCALL --&gt; ERRORS
+    IESCALL --&gt; INFERREDSETS
+    
+    BODYANAL --&gt; COLLECTERRS
+    COLLECTERRS --&gt; ERRORS
+    COLLECTERRS --&gt; INFERREDSETS
+    RESOLVEDEPS --&gt; CREATESET
+    CREATESET --&gt; RESOLVED
+    
+    FUNC --&gt; BODYANAL
+    ERRORS --&gt; COLLECTERRS
+    INFERREDSETS --&gt; RESOLVEDEPS</literallayout>
+<simpara><emphasis role="strong">它的工作原理：</emphasis></simpara>
+<orderedlist numeration="arabic">
+<listitem>
+<simpara><emphasis role="strong">分析期间</emphasis>：当编译器分析函数体时：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>每个 <literal>return error.Name</literal> 添加到直接 <literal>errors</literal> 集合</simpara>
+</listitem>
+<listitem>
+<simpara>对每个具有自己推断错误集的函数的调用添加对 <literal>inferred_error_sets</literal> 的依赖</simpara>
+</listitem>
+<listitem>
+<simpara>对具有显式错误集的函数的调用将这些错误添加到 <literal>errors</literal></simpara>
+</listitem>
+</itemizedlist>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">体分析之后</emphasis>：一旦函数体被完全分析：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>所有直接错误都从 <literal>errors</literal> 收集</simpara>
+</listitem>
+<listitem>
+<simpara>依赖推断错误集被递归解析</simpara>
+</listitem>
+<listitem>
+<simpara>创建最终错误集类型组合所有可能的错误</simpara>
+</listitem>
+<listitem>
+<simpara>此类型存储在 <literal>resolved</literal> 中，并成为函数的错误集</simpara>
+</listitem>
+</itemizedlist>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">特殊情况</emphasis>：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>内联和编译时调用使用不绑定到任何特定函数的"临时"推断错误集</simpara>
+</listitem>
+<listitem>
+<simpara>您在前几章中看到的 <literal>!void</literal> 返回类型使用此机制</simpara>
+</listitem>
+</itemizedlist>
+</listitem>
+</orderedlist>
+<simpara><emphasis role="strong">为什么要使用推断错误集？</emphasis></simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">更少的维护</emphasis>：添加 <literal>try</literal> 调用时错误自动传播</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">重构友好</emphasis>：添加错误返回调用不需要更新签名</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">仍然是类型安全的</emphasis>：调用者通过类型推断看到完整的错误集</simpara>
+</listitem>
+</itemizedlist>
+<simpara>当您想要对API契约进行显式控制时，声明错误集。当内部实现细节应该确定错误时，使用 <literal>!T</literal> 并让编译器推断它们。</simpara>
+</section>
+</section>
+</chapter>
+<chapter xml:id="section-2">
+<title>使用defer进行确定性清理</title>
+<simpara>资源生命周期清晰度来自于将获取、使用和释放在一个词法块中。<literal>defer</literal> 确保释放按注册顺序的相反顺序发生，而 <literal>errdefer</literal> 补充它用于部分设置序列，当错误中断进度时必须回滚。</simpara>
+<section xml:id="workflow-1">
+<title>defer让释放紧邻获取</title>
+<simpara>在获取资源后立即使用 <literal>defer</literal> 记录所有权，并保证在成功和失败时都进行清理，这对于可能早期失败的可失败工作尤其有价值。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 04__errors-resource-cleanup.adoc - include::example$chapters-data/code/04__errors-resource-cleanup/defer_cleanup.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run defer_cleanup.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">-- cycle alpha --
+acquiring alpha
+working with alpha
+job alpha succeeded
+release alpha
+-- cycle beta --
+acquiring beta
+working with beta
+job beta failed
+release beta
+beta bubbled up CalibrateFailed</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>即使在失败的工作上也会触发释放调用，证明defers在错误到达调用者之前执行。</simpara>
+</note>
+<section xml:id="_how_defer_execution_order_works">
+<title>defer执行顺序如何工作</title>
+<simpara>理解 <literal>defer</literal> 和 <literal>errdefer</literal> 语句的执行顺序对于编写正确的清理代码至关重要。Zig以<strong>LIFO（后进先出）</strong>顺序执行这些语句——与它们的注册顺序相反：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "函数执行"
+        ENTER["函数入口"]
+        ACQUIRE1["步骤1：获取资源A&lt;br/&gt;defer cleanup_A()"]
+        ACQUIRE2["步骤2：获取资源B&lt;br/&gt;defer cleanup_B()"]
+        ACQUIRE3["步骤3：获取资源C&lt;br/&gt;errdefer cleanup_C()"]
+        WORK["步骤4：执行工作（可能出错）"]
+        EXIT["函数退出"]
+    end
+    
+    subgraph "成功路径"
+        SUCCESS["工作成功"]
+        DEFER_C["步骤3：运行 cleanup_C()"]
+        DEFER_B["步骤2：运行 cleanup_B()"]
+        DEFER_A["步骤1：运行 cleanup_A()"]
+        RETURN_OK["返回成功"]
+    end
+    
+    subgraph "错误路径"
+        ERROR["工作出错"]
+        ERRDEFER_C["步骤3：通过 errdefer 运行 cleanup_C()"]
+        ERRDEFER_B["步骤2：通过 defer 运行 cleanup_B()"]
+        ERRDEFER_A["步骤1：通过 defer 运行 cleanup_A()"]
+        RETURN_ERR["返回错误"]
+    end
+    
+    ENTER --&gt; ACQUIRE1
+    ACQUIRE1 --&gt; ACQUIRE2
+    ACQUIRE2 --&gt; ACQUIRE3
+    ACQUIRE3 --&gt; WORK
+    
+    WORK --&gt;|"success"| SUCCESS
+    WORK --&gt;|"error"| ERROR
+    
+    SUCCESS --&gt; DEFER_C
+    DEFER_C --&gt; DEFER_B
+    DEFER_B --&gt; DEFER_A
+    DEFER_A --&gt; RETURN_OK
+    
+    ERROR --&gt; ERRDEFER_C
+    ERRDEFER_C --&gt; ERRDEFER_B
+    ERRDEFER_B --&gt; ERRDEFER_A
+    ERRDEFER_A --&gt; RETURN_ERR
+    
+    RETURN_OK --&gt; EXIT
+    RETURN_ERR --&gt; EXIT</literallayout>
+<simpara><emphasis role="strong">关键执行规则：</emphasis></simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">LIFO顺序</emphasis>：Defers以相反的注册顺序执行——最后注册的首先运行。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">镜像设置</emphasis>：这自然地镜像初始化顺序，因此清理按获取的相反顺序发生。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong"><literal>defer</literal> 始终运行</emphasis>：常规 <literal>defer</literal> 语句在成功和错误路径上都执行。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong"><literal>errdefer</literal> 条件性</emphasis>：<literal>errdefer</literal> 语句仅在作用域通过错误退出时执行。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">基于作用域</emphasis>：Defers绑定到它们的封闭作用域（函数、块等）。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>这种LIFO保证确保资源按获取的相反顺序清理。当资源相互依赖时，这尤其重要，因为它可以防止清理期间的使用后释放场景。</simpara>
+</section>
+</section>
+<section xml:id="workflow-2">
+<title>errdefer回滚部分初始化</title>
+<simpara><literal>errdefer</literal> 非常适合分阶段设置：它仅在周围作用域以错误退出时运行，为您提供一个单一位置来撤消失败之前成功的任何操作。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 04__errors-resource-cleanup.adoc - include::example$chapters-data/code/04__errors-resource-cleanup/errdefer_recovery.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run errdefer_recovery.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">-- success path --
+opening "primary"
+registering "primary"
+-- register failure --
+opening "backup"
+registering "backup"
+rollback "backup"
+closing "backup"
+setup failed with RegisterFailed
+-- open failure --
+opening ""
+setup failed with OpenFailed
+deregister "primary"
+closing "primary"</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>分阶段函数仅清理部分初始化的 <literal>backup</literal> 通道，而让未触及的空名称保持原样，并推迟成功 <literal>primary</literal> 的真正拆解，直到调用者退出。</simpara>
+</note>
+</section>
+<section xml:id="section-2-sub-c">
+<title>有意地忽略错误</title>
+<simpara>有时您决定错误是不可能的——也许您早些时候验证了输入——因此您编写 <literal>try foo() catch unreachable;</literal> 如果不变量被破坏，立即崩溃。谨慎使用：在调试和ReleaseSafe构建中，<literal>unreachable</literal> 会捕获，因此这种假设在运行时会被大声地重新验证。</simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>说明与注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>倾向于小型、描述性的错误集，以便API消费者读取类型并立即掌握他们必须处理的所有失败分支。</simpara>
+</listitem>
+<listitem>
+<simpara>记住defers以相反顺序执行；将最基本的清理放在最后，以便关闭镜像设置。</simpara>
+</listitem>
+<listitem>
+<simpara>将 <literal>catch unreachable</literal> 视为调试断言——而不是静默合法失败的方式——因为安全模式将其转换为运行时陷阱。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展 <literal>propagation_basics.zig</literal>，使 <literal>accumulate</literal> 通过在乘法前检查溢出接受任意长度的输入，并为"太多数字"表面新的错误变体。</simpara>
+</listitem>
+<listitem>
+<simpara>用记录发生多少超时的结构增强 <literal>catch_and_recover.zig</literal>，将其从 <literal>main</literal> 返回，以便测试可以断言恢复策略。</simpara>
+</listitem>
+<listitem>
+<simpara>修改 <literal>errdefer_recovery.zig</literal> 以注入由其自己的 <literal>defer</literal> 守卫的额外配置步骤，然后观察当初化中途停止时 <literal>defer</literal> 和 <literal>errdefer</literal> 如何协作。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

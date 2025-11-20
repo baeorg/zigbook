@@ -1,0 +1,361 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>数据基础</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>控制流只有在它操作的数据有用时才有效，因此本章将Zig的核心集合类型——数组、切片和哨兵终止字符串——基于实际使用，同时保持值语义的显式性。参见<link xl:href="https://ziglang.org/documentation/master/#Arrays">#Arrays</link>和<link xl:href="https://ziglang.org/documentation/master/#Slices">#Slices</link>作为参考。</simpara>
+<simpara>我们还使指针、可选类型和友好对齐的转换变得常规，展示如何在保留边界检查和对可变性的清晰性的同时安全地重新解释内存。参见<link xl:href="https://ziglang.org/documentation/master/#Pointers">#Pointers</link>和<link xl:href="https://ziglang.org/documentation/master/#alignCast">#alignCast</link>获取详细信息。</simpara>
+<section xml:id="type-system-context">
+<title>Zig的类型系统类别</title>
+<simpara>在深入探讨特定的集合类型之前，了解数组、切片和指针在Zig类型系统中的位置是有帮助的。Zig中的每个类型都属于一个类别，每个类别提供特定的操作：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "Type Categories"
+        PRIMITIVE["Primitive Types&lt;br/&gt;bool, u8, i32, f64, void, ..."]
+        POINTER["Pointer Types&lt;br/&gt;*T, [*]T, []T, [:0]T"]
+        AGGREGATE["Aggregate Types&lt;br/&gt;struct, array, tuple"]
+        FUNCTION["Function Types&lt;br/&gt;fn(...) ReturnType"]
+        SPECIAL["Special Types&lt;br/&gt;anytype, type, comptime_int"]
+    end
+
+    subgraph "Common Type Operations"
+        ABISIZE["abiSize()&lt;br/&gt;Byte size in memory"]
+        ABIALIGN["abiAlignment()&lt;br/&gt;Required alignment"]
+        HASRUNTIME["hasRuntimeBits()&lt;br/&gt;Has runtime storage?"]
+        ELEMTYPE["elemType()&lt;br/&gt;Element type (arrays/slices)"]
+    end
+
+    PRIMITIVE --&gt; ABISIZE
+    POINTER --&gt; ABISIZE
+    AGGREGATE --&gt; ABISIZE
+
+    PRIMITIVE --&gt; ABIALIGN
+    POINTER --&gt; ABIALIGN
+    AGGREGATE --&gt; ABIALIGN
+
+    POINTER --&gt; ELEMTYPE
+    AGGREGATE --&gt; ELEMTYPE</literallayout>
+<simpara>本章的关键见解：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">数组</emphasis>是具有编译时已知长度的聚合类型——它们的大小是<literal>element_size * length</literal></simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">切片</emphasis>是存储指针和运行时长度的指针类型——始终是2 × 指针大小</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">指针</emphasis>有多种形状（单项目<literal>*T</literal>、多项目<literal>[*]T</literal>、切片<literal>[]T</literal>），具有不同的安全保证</simpara>
+</listitem>
+<listitem>
+<simpara>所有类型都暴露它们的大小和对齐方式，这会影响结构体布局和内存分配</simpara>
+</listitem>
+</itemizedlist>
+<simpara>这种类型感知设计让编译器能够在切片上强制执行边界检查，同时在你明确选择退出安全性时允许在多项目指针上进行指针算术。</simpara>
+</section>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>区分数组值语义与切片视图，包括用于安全回退的零长度惯用法。</simpara>
+</listitem>
+<listitem>
+<simpara>导航指针形状（<literal>*T</literal>、<literal>[*]T</literal>、<literal>?*T</literal>）并在不牺牲安全工具的情况下解包可选类型（参见<link xl:href="https://ziglang.org/documentation/master/#Optionals">#Optionals</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>在与其他API互操作时应用哨兵终止字符串和对齐感知转换（<literal>@alignCast</literal>、<literal>@bitCast</literal>、<literal>@intCast</literal>）（参见<link xl:href="https://ziglang.org/documentation/master/#Sentinel-Terminated-Pointers">#Sentinel-Terminated-Pointers</link>和<link xl:href="https://ziglang.org/documentation/master/#Explicit-Casts">#Explicit-Casts</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="section-1">
+<title>在内存中结构化集合</title>
+<simpara>数组拥有存储而切片借用它，因此编译器在长度、可变性和生命周期方面强制执行不同的保证；掌握它们的相互作用使迭代可预测，并将大多数边界检查移到调试构建中。</simpara>
+<section xml:id="section-1-sub-a">
+<title>数组作为拥有的存储</title>
+<simpara>数组在其类型中携带长度，按值复制，并为你提供一个可变基线，从中可以切出只读和读写切片。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 03__data-fundamentals.adoc - include::example$chapters-data/code/03__data-fundamentals/arrays_and_slices.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run arrays_and_slices.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">array len=4 allows mutation
+mutable_slice: len=4 head=-3
+prefix: len=2 head=-3
+values[0] after slice write = -3
+empty slice len=0 is zero-length
+copy[0]=-1 owned[0]=1
+zero slice len=0 from literal</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>可变切片和原始数组共享存储，而<literal>[]const</literal>前缀阻止写入——这是一个有意的边界，强制只读消费者保持诚实。</simpara>
+</note>
+<section xml:id="_memory_layout_arrays_vs_slices">
+<title>内存布局：数组与切片</title>
+<simpara>理解数组和切片在内存中的布局方式阐明了为什么"数组拥有存储而切片借用它"以及为什么数组到切片的强制转换是一个廉价操作：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "Array in Memory"
+        ARRAY_DECL["const values: [4]i32 = .{1, 2, 3, 4}"]
+        ARRAY_MEM["Memory Layout (16 bytes)\n\nstack frame\n| 1 | 2 | 3 | 4 |"]
+
+        ARRAY_DECL --&gt; ARRAY_MEM
+    end
+
+    subgraph "Slice in Memory"
+        SLICE_DECL["const slice: []const i32 = &amp;values"]
+        SLICE_MEM["Memory Layout (16 bytes on 64-bit)\n\nstack frame\n|    ptr    |   len=4   |"]
+        POINTS["ptr points to array data"]
+
+        SLICE_DECL --&gt; SLICE_MEM
+        SLICE_MEM --&gt; POINTS
+    end
+
+    POINTS -.-&gt;|"references"| ARRAY_MEM
+
+    subgraph "Key Differences"
+        DIFF1["Array: Stores data inline&lt;br/&gt;Size = elem_size × length"]
+        DIFF2["Slice: Stores pointer + length&lt;br/&gt;Size = 2 × pointer_size (16 bytes on 64-bit)"]
+        DIFF3["Coercion: &amp;array → slice&lt;br/&gt;Just creates {ptr, len} pair"]
+    end</literallayout>
+<simpara><emphasis role="strong">为什么这很重要：</emphasis></simpara>
+<itemizedlist>
+<listitem>
+<simpara>数组具有<emphasis role="strong">值语义</emphasis>：分配数组会复制所有元素</simpara>
+</listitem>
+<listitem>
+<simpara>切片具有<emphasis role="strong">引用语义</emphasis>：分配切片只复制指针和长度</simpara>
+</listitem>
+<listitem>
+<simpara>数组到切片的强制转换（<literal>&amp;array</literal>）是廉价的——它不复制数据，只是创建一个描述符</simpara>
+</listitem>
+<listitem>
+<simpara>切片是"胖指针"：它们携带运行时长度信息，启用边界检查</simpara>
+</listitem>
+</itemizedlist>
+<simpara>这就是为什么函数通常接受切片作为参数——它们可以与数组、切片以及两者的部分一起工作，而无需复制底层数据。</simpara>
+</section>
+</section>
+<section xml:id="section-1-sub-b">
+<title>实践中的字符串和哨兵</title>
+<simpara>哨兵终止数组在不牺牲切片安全性的情况下桥接到C API；你可以使用<literal>std.mem.span</literal>重新解释字节流，并在保留哨兵约定时仍然可以改变底层缓冲区。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 03__data-fundamentals.adoc - include::example$chapters-data/code/03__data-fundamentals/sentinel_strings.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run sentinel_strings.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">literal len=17 contents="data fundamentals"
+trimmed slice len=4 -&gt; Labe
+full label after mutation: LabeX</programlisting>
+</para>
+</formalpara>
+<simpara>哨兵切片保持尾随零完整，因此即使在局部突变后，为FFI获取<literal>[*:0]u8</literal>仍然有效，而普通切片在Zig内部提供符合人体工程学的迭代（参见<link xl:href="https://ziglang.org/documentation/master/#Type-Coercion">#Type-Coercion</link>）。</simpara>
+<tip>
+<simpara><literal>std.mem.span</literal>将哨兵指针转换为普通切片而不克隆数据，当你在返回指针API之前暂时需要边界检查或切片助手时，这使其成为理想选择。</simpara>
+</tip>
+</section>
+<section xml:id="section-1-sub-c">
+<title>不可变和可变视图</title>
+<simpara>当调用者只检查数据时，优先使用<literal>[]const T</literal>——Zig很乐意将可变切片强制转换为const视图，为你提供API清晰度，并从一开始就防止意外写入编译。</simpara>
+</section>
+</chapter>
+<chapter xml:id="section-2">
+<title>指针模式和转换工作流</title>
+<simpara>当你共享存储、与外部布局互操作或超出切片边界时，指针就会出现；通过依赖可选包装器和显式转换，你可以保持意图清晰，并在假设被打破时触发安全检查。</simpara>
+<section xml:id="pointer-shapes">
+<title>指针形状参考</title>
+<simpara>Zig提供多种指针类型，每种都有不同的安全保证和用例。理解何时使用每种形状对于编写安全、高效的代码至关重要：</simpara>
+<literallayout class="monospaced">graph TB
+    subgraph "Pointer Shapes"
+        SINGLE["*T&lt;br/&gt;Single-Item Pointer"]
+        MANY["[*]T&lt;br/&gt;Many-Item Pointer"]
+        SLICE["[]T&lt;br/&gt;Slice"]
+        OPTIONAL["?*T&lt;br/&gt;Optional Pointer"]
+        SENTINEL_PTR["[*:0]T&lt;br/&gt;Sentinel Many-Item"]
+        SENTINEL_SLICE["[:0]T&lt;br/&gt;Sentinel Slice"]
+    end
+
+    subgraph "Characteristics"
+        SINGLE --&gt; S_BOUNDS["✓ Bounds: Single element&lt;br/&gt;✓ Safety: Dereference checked&lt;br/&gt;📍 Use: Function parameters, references"]
+
+        MANY --&gt; M_BOUNDS["⚠ Bounds: Unknown length&lt;br/&gt;✗ Safety: No bounds checking&lt;br/&gt;📍 Use: C interop, tight loops"]
+
+        SLICE --&gt; SL_BOUNDS["✓ Bounds: Runtime length&lt;br/&gt;✓ Safety: Bounds checked&lt;br/&gt;📍 Use: Most Zig code, iteration"]
+
+        OPTIONAL --&gt; O_BOUNDS["✓ Bounds: May be null&lt;br/&gt;✓ Safety: Must unwrap first&lt;br/&gt;📍 Use: Optional references"]
+
+        SENTINEL_PTR --&gt; SP_BOUNDS["✓ Bounds: Until sentinel&lt;br/&gt;~ Safety: Sentinel must exist&lt;br/&gt;📍 Use: C strings, null-terminated"]
+
+        SENTINEL_SLICE --&gt; SS_BOUNDS["✓ Bounds: Length + sentinel&lt;br/&gt;✓ Safety: Both length and sentinel&lt;br/&gt;📍 Use: Zig ↔ C string bridge"]
+    end</literallayout>
+<simpara><emphasis role="strong">比较表格：</emphasis></simpara>
+<informaltable frame="all" rowsep="1" colsep="1">
+<tgroup cols="5">
+<colspec colname="col_1" colwidth="20*"/>
+<colspec colname="col_2" colwidth="20*"/>
+<colspec colname="col_3" colwidth="20*"/>
+<colspec colname="col_4" colwidth="20*"/>
+<colspec colname="col_5" colwidth="20*"/>
+<thead>
+<row>
+<entry align="left" valign="top">形状</entry>
+<entry align="left" valign="top">示例</entry>
+<entry align="left" valign="top">长度已知？</entry>
+<entry align="left" valign="top">边界检查？</entry>
+<entry align="left" valign="top">常见用途</entry>
+</row>
+</thead>
+<tbody>
+<row>
+<entry align="left" valign="top"><simpara><literal>*T</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>*i32</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>单个元素</simpara></entry>
+<entry align="left" valign="top"><simpara>是（隐式）</simpara></entry>
+<entry align="left" valign="top"><simpara>引用单个项目</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>[*]T</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>[*]i32</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>未知</simpara></entry>
+<entry align="left" valign="top"><simpara><emphasis role="strong">否</emphasis></simpara></entry>
+<entry align="left" valign="top"><simpara>C数组，指针算术</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>[]T</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>[]i32</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>运行时（在切片中）</simpara></entry>
+<entry align="left" valign="top"><simpara><emphasis role="strong">是</emphasis></simpara></entry>
+<entry align="left" valign="top"><simpara>主要的Zig集合类型</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>?*T</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>?*i32</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>单个（如果非空）</simpara></entry>
+<entry align="left" valign="top"><simpara>是 + null检查</simpara></entry>
+<entry align="left" valign="top"><simpara>可选引用</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>[*:0]T</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>[*:0]u8</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>直到哨兵</simpara></entry>
+<entry align="left" valign="top"><simpara>哨兵必须存在</simpara></entry>
+<entry align="left" valign="top"><simpara>C字符串（<literal>char*</literal>）</simpara></entry>
+</row>
+<row>
+<entry align="left" valign="top"><simpara><literal>[:0]T</literal></simpara></entry>
+<entry align="left" valign="top"><simpara><literal>[:0]u8</literal></simpara></entry>
+<entry align="left" valign="top"><simpara>运行时 + 哨兵</simpara></entry>
+<entry align="left" valign="top"><simpara>是 + 哨兵保证</simpara></entry>
+<entry align="left" valign="top"><simpara>用于C API的Zig字符串</simpara></entry>
+</row>
+</tbody>
+</tgroup>
+</informaltable>
+<simpara><emphasis role="strong">指南：</emphasis></simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">默认使用切片</emphasis> (<literal>[]T</literal>) 用于所有Zig代码——它们提供安全性和便利性</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">使用单项目指针</emphasis> (<literal>*T</literal>) 当你需要改变单个值或通过引用传递时</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">避免多项目指针</emphasis> (<literal>[*]T</literal>) 除非与C接口交互或在性能关键的内循环中</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">使用可选指针</emphasis> (<literal>?*T</literal>) 当null是有意义的状态时，不用于错误处理</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">使用哨兵类型</emphasis> (<literal>[*:0]T</literal>, <literal>[:0]T</literal>) 在C边界处，在内部转换为切片</simpara>
+</listitem>
+</itemizedlist>
+</section>
+<section xml:id="workflow-1">
+<title>用于共享可变性的可选指针</title>
+<simpara>可选单项目指针暴露可变性而无需猜测生命周期——仅在存在时捕获它们，通过解引用进行突变，并在指针不存在时优雅地回退。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 03__data-fundamentals.adoc - include::example$chapters-data/code/03__data-fundamentals/pointers_and_optionals.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run pointers_and_optionals.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">alias -&gt; reading 42
+optional pointer empty
+optional pointer mutated to 52
+slice view len=4
+samples[2] via many pointer = 42</programlisting>
+</para>
+</formalpara>
+<simpara><literal>?*Sensor</literal>门将突变保持在模式匹配之后，而多项目指针（<literal>[*]i32</literal>）通过丢弃边界检查来记录别名风险——这是为紧密循环和FFI保留的故意权衡。</simpara>
+</section>
+<section xml:id="workflow-2">
+<title>对齐和重新解释数据</title>
+<simpara>当你必须重新解释原始字节时，使用转换内置函数来提升对齐方式，更改指针元素类型，并保持整数/浮点数转换的显式性，以便调试构建可以捕获未定义的假设（参见<link xl:href="https://ziglang.org/documentation/master/#bitCast">#bitCast</link>）。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 03__data-fundamentals.adoc - include::example$chapters-data/code/03__data-fundamentals/alignment_and_casts.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run alignment_and_casts.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">32-bit value = 0x11223344
+bitcast copy = 0x11223344
+truncate -&gt; 0x44, widen -&gt; 287454020
+floatCast ratio -&gt; 1.875</programlisting>
+</para>
+</formalpara>
+<simpara>通过链接<literal>@alignCast</literal>、<literal>@ptrCast</literal>和<literal>@bitCast</literal>，你可以显式地断言布局关系，而后续的<literal>@truncate</literal>/<literal>@intCast</literal>转换在跨API缩小或扩大时保持整数宽度的诚实性。</simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>哨兵终止指针非常适合C桥接，但在Zig内部优先使用切片，以便边界检查保持可用并且API暴露长度。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>@alignCast</literal>升级指针对齐方式在Debug模式下如果地址未对齐仍然会陷入陷阱——在提升之前证明前提条件。</simpara>
+</listitem>
+<listitem>
+<simpara>多项目指针（<literal>[*]T</literal>）丢弃边界检查；谨慎使用它们并记录安全切片会强制执行的不变量。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展<literal>arrays_and_slices.zig</literal>以从运行时数组创建零长度可变切片，然后通过<literal>std.ArrayList</literal>追加以观察切片视图如何保持有效。</simpara>
+</listitem>
+<listitem>
+<simpara>修改<literal>sentinel_strings.zig</literal>以接受用户提供的<literal>[:0]u8</literal>，并通过返回错误联合来防止缺少哨兵的输入。</simpara>
+</listitem>
+<listitem>
+<simpara>通过添加一个在截断前拒绝低字节为零的值的分支来增强<literal>alignment_and_casts.zig</literal>，展示<literal>@intCast</literal>如何依赖于调用者提供的范围保证。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

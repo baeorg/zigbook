@@ -1,0 +1,356 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>泛型API与类型擦除</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>Zig中的泛型不过是由<literal>comptime</literal>值参数化的普通函数，然而这种简单性隐藏了显著的表达能力。在本章中，我们将<link xl:href="15__comptime-and-reflection.xml">15</link>中的反射技术转化为规范的API设计模式：构建能力契约、使用<literal>anytype</literal>转发具体类型，并在不牺牲正确性的情况下保持调用站点的人体工程学。</simpara>
+<simpara>我们还涵盖了频谱的另一端——运行时类型擦除——其中不透明指针和手写虚函数表让您可以在统一容器中存储异构行为。这些技术补充了<link xl:href="16__project-table-generator.xml">16</link>中的查找表生成，并为我们准备后续的完全泛型优先级队列项目。有关发布说明，请参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>构建编译时契约，在代码生成前验证用户提供的类型，提供清晰的诊断信息。</simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>anytype</literal>包装任意写入器和策略，保持零成本抽象的同时保持调用站点的整洁。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/io/Writer.zig">Writer.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>应用<literal>anyopaque</literal>指针和显式虚函数表安全地擦除类型，对齐状态并处理生命周期而不产生未定义行为。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="comptime-contracts">
+<title>编译时契约作为接口</title>
+<simpara>Zig函数在接受<literal>comptime</literal>参数的那一刻就变成了泛型。通过将这种灵活性与能力检查——<literal>@hasDecl</literal>、<literal>@TypeOf</literal>甚至自定义谓词——配对，您可以在没有重量级特征系统的情况下编码丰富的结构接口。<link xl:href="15__comptime-and-reflection.xml">15</link>我们首先看看一个指标聚合器契约如何将错误推到编译时而不是依赖运行时断言。</simpara>
+<section xml:id="contracts-validate">
+<title>验证结构要求</title>
+<simpara>下面的<literal>computeReport</literal>接受一个分析器类型，该类型必须暴露<literal>State</literal>、<literal>Summary</literal>、<literal>init</literal>、<literal>observe</literal>和<literal>summarize</literal>。<literal>validateAnalyzer</literal>助手使这些要求显式化；忘记一个方法会给出精确的<literal>@compileError</literal>而不是神秘的实例化失败。我们使用<literal>RangeAnalyzer</literal>和<literal>MeanVarianceAnalyzer</literal>演示这种模式。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 17__generic-apis-and-type-erasure.adoc - include::example$chapters-data/code/17__generic-apis-and-type-erasure/comptime_contract.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/17__generic-apis-and-type-erasure/comptime_contract.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Range -&gt; min=21.00 max=24.00 spread=3.00
+Mean/variance -&gt; mean=22.70 variance=1.124</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>契约保持零成本：一旦验证，分析器方法会像您编写了专门代码一样内联，同时仍然为下游用户提供可读的诊断信息。</simpara>
+</tip>
+</section>
+<section xml:id="contracts-diagnostics">
+<title>诊断能力差距</title>
+<simpara>因为<literal>validateAnalyzer</literal>集中了检查，您可以随时间扩展接口——例如，通过要求<literal>pub const SummaryFmt = []const u8</literal>——而无需触及每个调用站点。当采用者升级并错过新的声明时，编译器会精确报告缺少哪个要求。这种"快速失败，具体失败"策略特别适用于内部框架，并防止模块之间的静默漂移。<link xl:href="36__style-and-best-practices.xml">37</link></simpara>
+</section>
+<section xml:id="contracts-tradeoffs">
+<title>权衡与批处理考虑</title>
+<simpara>保持契约谓词廉价。任何超过少量<literal>@hasDecl</literal>检查或直接类型比较的内容都应该放在可选功能标志后面或在<literal>comptime var</literal>中缓存。在广泛实例化的助手中进行繁重分析会迅速膨胀编译时间——如果泛型花费的时间比预期长，请使用<literal>zig build --verbose-cc</literal>进行分析。<link xl:href="38__zig-cli-deep-dive.xml">40</link></simpara>
+</section>
+<section xml:id="contracts-internpool">
+<title>底层原理：InternPool与泛型实例</title>
+<simpara>当<literal>computeReport</literal>使用具体分析器实例化时，编译器通过共享的<literal>InternPool</literal>解析所有涉及的类型和值。这种结构保证每个唯一的分析器<literal>State</literal>、<literal>Summary</literal>和函数类型在代码生成前具有单个规范标识。</simpara>
+<literallayout class="monospaced">graph TB
+	IP["InternPool"]
+
+	subgraph "Threading"
+		LOCALS["locals: []Local&lt;br/&gt;(one per thread)"]
+		SHARDS["shards: []Shard&lt;br/&gt;(concurrent writes)"]
+		TIDWIDTH["tid_width / tid_shift_*"]
+	end
+
+	subgraph "Core Storage"
+		ITEMS["items: []Item"]
+		EXTRADATA["extra_data: []u32"]
+		STRINGS["string_bytes"]
+		LIMBS["limbs: []Limb"]
+	end
+
+	subgraph "Dependency Tracking"
+		SRCHASHDEPS["src_hash_deps"]
+		NAVVALDEPS["nav_val_deps"]
+		NAVTYDEPS["nav_ty_deps"]
+		INTERNEDDEPS["interned_deps"]
+	end
+
+	subgraph "Symbol Tables"
+		NAVS["navs: []Nav"]
+		NAMESPACES["namespaces: []Namespace"]
+		CAUS["caus: []Cau"]
+	end
+
+	subgraph "Special Indices"
+		NONE["Index.none"]
+		UNREACHABLE["Index.unreachable_value"]
+		TYPEINFO["Index.type_info_type"]
+		ANYERROR["Index.anyerror_type"]
+	end
+
+	IP --&gt; LOCALS
+	IP --&gt; SHARDS
+	IP --&gt; TIDWIDTH
+	IP --&gt; ITEMS
+	IP --&gt; EXTRADATA
+	IP --&gt; STRINGS
+	IP --&gt; LIMBS
+	IP --&gt; SRCHASHDEPS
+	IP --&gt; NAVVALDEPS
+	IP --&gt; NAVTYDEPS
+	IP --&gt; INTERNEDDEPS
+	IP --&gt; NAVS
+	IP --&gt; NAMESPACES
+	IP --&gt; CAUS
+	IP --&gt; NONE
+	IP --&gt; UNREACHABLE
+	IP --&gt; TYPEINFO
+	IP --&gt; ANYERROR</literallayout>
+<simpara>关键属性：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>内容寻址存储：每个唯一的类型/值存储一次，由<literal>Index</literal>标识。</simpara>
+</listitem>
+<listitem>
+<simpara>线程安全：<literal>shards</literal>通过细粒度锁定允许并发写入。</simpara>
+</listitem>
+<listitem>
+<simpara>依赖跟踪：从源哈希、Navs和内部值映射到依赖的分析单元。</simpara>
+</listitem>
+<listitem>
+<simpara>特殊值：为常见类型预分配的索引，如<literal>anyerror_type</literal>、<literal>type_info_type</literal>等。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+</chapter>
+<chapter xml:id="anytype-forwarding">
+<title>使用<literal>anytype</literal>包装器进行转发</title>
+<simpara>一旦您信任具体类型的能力，您通常希望包装或适配它而不具体化特征对象。<literal>anytype</literal>是完美的工具：它将具体类型复制到包装器的签名中，保持单态化性能的同时允许您构建装饰器链。<link xl:href="15__comptime-and-reflection.xml">15</link>下一个示例显示了一个可重用的"前缀写入器"，它同样适用于固定缓冲区和可增长列表。</simpara>
+<section xml:id="anytype-wrapper">
+<title>可重用的前缀写入器</title>
+<simpara>我们制造两个接收器：一个来自重新组织的<literal>std.Io</literal>命名空间的固定缓冲区流，以及一个具有自己的<literal>GenericWriter</literal>的堆支持<literal>ArrayList</literal>包装器。<literal>withPrefix</literal>通过<literal>@TypeOf</literal>捕获它们的具体写入器类型，返回一个结构体，其<literal>print</literal>方法在转发到内部写入器之前添加标签。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 17__generic-apis-and-type-erasure.adoc - include::example$chapters-data/code/17__generic-apis-and-type-erasure/prefixed_writer.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/17__generic-apis-and-type-erasure/prefixed_writer.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Fixed buffer stream captured:
+[stream] value = 42
+[stream] tuple = .{ 1, 2, 3 }
+ArrayList writer captured:
+[array] flags = .{ true, false }
+[array] label = generic</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>std.Io.fixedBufferStream</literal>和<literal>std.io.GenericWriter</literal>都在Zig 0.15.2中进行了完善，以强调显式写入器上下文，这就是为什么我们每次都将分配器传递给<literal>ListSink.writer()</literal>的原因。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/fixed_buffer_stream.zig">fixed_buffer_stream.zig</link></simpara>
+</note>
+</section>
+<section xml:id="anytype-guardrails">
+<title><literal>anytype</literal>的防护措施</title>
+<simpara>在仅转发调用的助手函数中优先使用<literal>anytype</literal>；导出公共API时使用显式的<literal>comptime T: type</literal>参数，以便文档和工具保持诚实。如果包装器接受<literal>anytype</literal>但深度检查<literal>@TypeInfo</literal>，请记录期望并考虑将谓词移动到可重用的验证器中，就像我们对分析器所做的那样。这样未来的重构可以在不重写包装器的情况下升级约束。<link xl:href="36__style-and-best-practices.xml">37</link></simpara>
+</section>
+<section xml:id="anytype-meta">
+<title>结构契约的<literal>std.meta</literal>助手</title>
+<simpara>当<literal>anytype</literal>包装器需要理解它正在转发的值的形状时，<literal>std.meta</literal>提供了小型、可组合的"视图"函数。它们在标准库中被普遍使用，用于实现在编译时适应数组、切片、可选类型和联合体的通用助手。</simpara>
+<literallayout class="monospaced">graph TB
+	subgraph "Type Extractors"
+		CHILD["Child(T)"]
+		ELEM["Elem(T)"]
+		SENTINEL["sentinel(T)"]
+		TAG["Tag(T)"]
+		ACTIVETAG["activeTag(union)"]
+	end
+
+	subgraph "Input Types"
+		ARRAY["array"]
+		VECTOR["vector"]
+		POINTER["pointer"]
+		OPTIONAL["optional"]
+		UNION["union"]
+		ENUM["enum"]
+	end
+
+	ARRAY --&gt; CHILD
+	VECTOR --&gt; CHILD
+	POINTER --&gt; CHILD
+	OPTIONAL --&gt; CHILD
+
+	ARRAY --&gt; ELEM
+	VECTOR --&gt; ELEM
+	POINTER --&gt; ELEM
+
+	ARRAY --&gt; SENTINEL
+	POINTER --&gt; SENTINEL
+
+	UNION --&gt; TAG
+	ENUM --&gt; TAG
+	UNION --&gt; ACTIVETAG</literallayout>
+<simpara>关键类型提取函数：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>Child(T)</literal>：从数组、向量、指针和可选类型中提取子类型（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig#L83-91">meta.zig:83-91</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>Elem(T)</literal>：从内存跨度类型中获取元素类型（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig#L102-118">meta.zig:102-118</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>sentinel(T)</literal>：返回哨兵值（如果存在）（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig#L134-150">meta.zig:134-150</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>Tag(T)</literal>：从枚举和联合体中获取标签类型（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig#L628-634">meta.zig:628-634</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>activeTag(u)</literal>：返回联合体值的活动标签（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig#L651-654">meta.zig:651-654</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+<section xml:id="anytype-inline">
+<title>内联成本与专门化</title>
+<simpara>每个不同的具体写入器都会实例化包装器的新副本。利用这一点——附加编译时已知的前缀、烘焙字段偏移量，或者为仅对小型对象触发的<literal>inline for</literal>设置门控。如果包装器可能应用于数十种类型，请使用<literal>zig build-exe -femit-bin=</literal>仔细检查代码大小，以避免二进制文件膨胀。<link xl:href="39__performance-and-inlining.xml">41</link></simpara>
+</section>
+</chapter>
+<chapter xml:id="type-erasure">
+<title>使用虚函数表的运行时类型擦除</title>
+<simpara>有时您需要在运行时持有一组异构的策略：日志记录后端、诊断过程或通过配置发现的数据接收器。Zig的答案是显式的虚函数表，包含函数指针加上您自己分配的<literal>*anyopaque</literal>状态。编译器停止强制执行结构，因此维护对齐、生命周期和错误传播成为您的责任。</simpara>
+<section xml:id="erasure-demo">
+<title>类型化状态，擦除句柄</title>
+<simpara>下面的注册表管理两个文本处理器。每个工厂分配一个强类型状态，将其转换为<literal>*anyopaque</literal>，并将其与函数指针的虚函数表一起存储。辅助函数<literal>statePtr</literal>和<literal>stateConstPtr</literal>使用<literal>@alignCast</literal>恢复原始类型，确保我们从不违反对齐要求。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 17__generic-apis-and-type-erasure.adoc - include::example$chapters-data/code/17__generic-apis-and-type-erasure/type_erasure_registry.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run chapters-data/code/17__generic-apis-and-type-erasure/type_erasure_registry.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">[char-tally] vowels=30 digits=0
+[word-stats] chars=97 sentences=2 longest-word=10</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>跟踪生命周期——竞技场分配器比处理器存活时间更长，因此擦除的指针保持有效。切换到作用域分配器需要在虚函数表中添加匹配的<literal>destroy</literal>钩子以避免悬空指针。<link xl:href="10__allocators-and-memory-management.xml">10</link>, <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem/Allocator.zig">Allocator.zig</link></simpara>
+</important>
+</section>
+<section xml:id="erasure-allocator-vtable">
+<title>标准分配器作为虚函数表案例研究</title>
+<simpara>标准库的<literal>std.mem.Allocator</literal>本身就是一个类型擦除接口：每个分配器实现都提供一个具体状态指针加上函数指针的虚函数表。这反映了上面的注册表模式，但以一种整个生态系统依赖的形式。</simpara>
+<literallayout class="monospaced">graph TB
+	ALLOC["Allocator"]
+	PTR["ptr: *anyopaque"]
+	VTABLE["vtable: *VTable"]
+
+	ALLOC --&gt; PTR
+	ALLOC --&gt; VTABLE
+
+	subgraph "VTable Functions"
+		ALLOCFN["alloc(*anyopaque, len, alignment, ret_addr)"]
+		RESIZEFN["resize(*anyopaque, memory, alignment, new_len, ret_addr)"]
+		REMAPFN["remap(*anyopaque, memory, alignment, new_len, ret_addr)"]
+		FREEFN["free(*anyopaque, memory, alignment, ret_addr)"]
+	end
+
+	VTABLE --&gt; ALLOCFN
+	VTABLE --&gt; RESIZEFN
+	VTABLE --&gt; REMAPFN
+	VTABLE --&gt; FREEFN
+
+	subgraph "High-Level API"
+		CREATE["create(T)"]
+		DESTROY["destroy(ptr)"]
+		ALLOCAPI["alloc(T, n)"]
+		FREE["free(slice)"]
+		REALLOC["realloc(slice, new_len)"]
+	end
+
+	ALLOC --&gt; CREATE
+	ALLOC --&gt; DESTROY
+	ALLOC --&gt; ALLOCAPI
+	ALLOC --&gt; FREE
+	ALLOC --&gt; REALLOC</literallayout>
+<simpara><literal>Allocator</literal>类型在<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem/Allocator.zig#L7-20">Allocator.zig:7-20</link>中定义为带有指针和虚函数表的类型擦除接口。虚函数表包含四个基本操作：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><literal>alloc</literal>：返回指向具有指定对齐方式的<literal>len</literal>字节的指针，失败时返回null（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem/Allocator.zig#L29">Allocator.zig:29</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>resize</literal>：尝试在原地扩展或缩小内存（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem/Allocator.zig#L48">Allocator.zig:48</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>remap</literal>：尝试扩展或缩小内存，允许重新定位（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem/Allocator.zig#L69">Allocator.zig:69</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>free</literal>：释放并使内存区域无效（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem/Allocator.zig#L81">Allocator.zig:81</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</section>
+<section xml:id="erasure-safety">
+<title><literal>anyopaque</literal>的安全说明</title>
+<simpara><literal>anyopaque</literal>声明的对齐方式为一，因此每次向下转换都必须使用<literal>@alignCast</literal>断言真实的对齐方式。即使指针在运行时恰好正确对齐，跳过该断言也是非法行为。当所有权跨越多个模块时，考虑在虚函数表中存储分配器和清理函数。</simpara>
+</section>
+<section xml:id="erasure-interop">
+<title>何时升级到模块或包</title>
+<simpara>手动虚函数表适用于小型、封闭的行为集合。一旦表面积增长，迁移到模块级注册表，该注册表暴露返回类型化句柄的构造函数。消费者仍然接收擦除的指针，但模块可以强制执行不变量并共享用于对齐、清理和恐慌诊断的辅助代码。<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link></simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>优先使用小型、意图明确的验证助手——长的<literal>validateX</literal>函数适合提取为可重用的编译时实用程序。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>anytype</literal>包装器为每个具体类型生成一个实例化。在广泛使用的库中暴露它们时，请分析二进制大小。<link xl:href="39__performance-and-inlining.xml">41</link></simpara>
+</listitem>
+<listitem>
+<simpara>类型擦除将正确性推给程序员。在开发构建中添加断言、日志记录或调试开关，以证明向下转换和生命周期保持有效。<link xl:href="37__illegal-behavior-and-safety-modes.xml">39</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展<literal>validateAnalyzer</literal>以要求可选的<literal>summarizeError</literal>函数，并在测试中演示自定义错误集。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+<listitem>
+<simpara>向<literal>PrefixedWriter</literal>添加<literal>flush</literal>能力，在编译时检测内部写入器是否暴露该方法并相应适配。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig">meta.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>引入第三个处理器，将哈希流式传输到<literal>std.crypto.hash.sha2.Sha256</literal>上下文中，然后在完成时以十六进制打印摘要。<link xl:href="50__random-and-math.xml">52</link>, <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/crypto/sha2.zig">sha2.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>如果编译时验证依赖于来自其他包的用户提供类型，请添加冒烟测试，以便在集成构建之前发现回归。<link xl:href="22__build-system-deep-dive.xml">22</link></simpara>
+</listitem>
+<listitem>
+<simpara>当只有少数策略存在时，优先使用带有有效载荷变体的<literal>union(enum)</literal>；一旦从"少数"跨越到"多数"，虚函数表就会发挥作用。<link xl:href="08__user-types-structs-enums-unions.xml">08</link></simpara>
+</listitem>
+<listitem>
+<simpara>对于从共享对象加载的插件系统，将擦除状态与显式的ABI安全跳板配对，以保持可移植性可管理。<link xl:href="33__c-interop-import-export-abi.xml">33</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

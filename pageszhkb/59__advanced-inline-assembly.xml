@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>附录E. 高级内联汇编</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>当你需要个别指令、兼容遗留 ABI，或访问尚未由标准库封装的处理器特性时，内联汇编让你能穿透 Zig 的抽象层。<link xl:href="33__c-interop-import-export-abi.xml">33</link> Zig 0.15.2 通过对指针转换强制对齐检查与更清晰的约束诊断强化了内联汇编，使其相比过去版本更安全、也更易调试。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>识别 Zig 的 GNU 风格内联汇编块结构，并将操作数映射到寄存器或内存。</simpara>
+</listitem>
+<listitem>
+<simpara>应用寄存器与 clobber 约束，编排 Zig 变量与机器指令之间的数据流。</simpara>
+</listitem>
+<listitem>
+<simpara>用编译期检查保护架构特定片段，使不受支持目标的构建尽早失败。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="asm-shapes">
+<title>塑造汇编块</title>
+<simpara>Zig 采用熟悉的 GCC/Clang 内联汇编布局：模板字符串后跟以冒号分隔的输出、输入与 clobber。先从简单算术入手以熟悉操作数绑定，再触及更“异域”的指令。第一个示例使用 <literal>addl</literal> 合并两个 32 位值，将两端操作数都绑定到寄存器而不触及内存。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/os/plan9/x86_64.zig">x86_64.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 59__advanced-inline-assembly.adoc - include::example$chapters-data/code/59__advanced-inline-assembly/01_inline_add.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/59__advanced-inline-assembly/01_inline_add.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>%[lhs]</literal> 等操作数占位符引用你在约束列表中赋予的符号名；当模板扩展到多条指令时，保持这些名称具备助记性很有价值。<link xl:href="58__mapping-c-rust-idioms.xml">58</link></simpara>
+</tip>
+</chapter>
+<chapter xml:id="register-choreography">
+<title>无“坑”的寄存器编舞</title>
+<simpara>更复杂的片段常需要双向（读/写）操作数，或在指令完成后进行额外簿记。下方的 <literal>xchg</literal> 序列仅在寄存器内交换两个整数，然后把更新写回 Zig 管理的内存。<link xl:href="04__errors-resource-cleanup.xml">4</link> 用 <literal>@compileError</literal> 保护函数可防止在非 x86 平台意外使用，<literal>+r</literal> 约束则表示每个操作数同时被读与写。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/pie.zig">pie.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 59__advanced-inline-assembly.adoc - include::example$chapters-data/code/59__advanced-inline-assembly/02_xchg_swap.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/59__advanced-inline-assembly/02_xchg_swap.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>因为交换仅在寄存器上进行，你可避开棘手的内存约束；当确实需要直接触及内存时，请显式加入 <literal>"memory"</literal> clobber，避免 Zig 的优化器重排周边的加载或存储。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</note>
+</chapter>
+<chapter xml:id="observability">
+<title>可观测性与护栏</title>
+<simpara>一旦你信任语法，内联汇编就成为硬件计数器或尚未在其他处暴露的指令的精密工具。用 <literal>rdtsc</literal> 读取 x86 时间戳计数器可提供“周期级”计时，同时演示多输出约束与 0.15.x 引入的新对齐断言。<link xl:href="39__performance-and-inlining.xml">39</link> 示例将高低位组合为 <literal>u64</literal>，并在非 x86_64 目标上回落到编译错误。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 59__advanced-inline-assembly.adoc - include::example$chapters-data/code/59__advanced-inline-assembly/03_rdtsc.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test chapters-data/code/59__advanced-inline-assembly/03_rdtsc.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+<caution>
+<simpara><literal>rdtsc</literal> 等指令可能与其他操作发生重排；在需要精确测量时考虑与序列化指令（如 <literal>lfence</literal>）或显式内存 clobber 搭配。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</caution>
+</chapter>
+<chapter xml:id="patterns">
+<title>随手可用的模式</title>
+<itemizedlist>
+<listitem>
+<simpara>用 <literal>if (builtin.cpu.arch != …) @compileError</literal> 保护架构特定块，让交叉编译尽早失败。<link xl:href="41__cross-compilation-and-wasm.xml">41</link></simpara>
+</listitem>
+<listitem>
+<simpara>原型阶段优先使用“仅寄存器”操作数——一旦逻辑正确，再有意识地引入内存操作数与 clobber。<link xl:href="33__c-interop-import-export-abi.xml">33</link></simpara>
+</listitem>
+<listitem>
+<simpara>把内联汇编视作“逃生舱门”；若标准库（或内建）已暴露该指令，优先更高级的API以保持可移植性。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem.zig">mem.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与告诫</title>
+<itemizedlist>
+<listitem>
+<simpara>内联汇编与目标相关；始终记录所需的最低 CPU 特性，并在执行前考虑进行特性探测。<link xl:href="29__threads-and-atomics.xml">29</link></simpara>
+</listitem>
+<listitem>
+<simpara>clobber 列表至关重要——忘记 <literal>"cc"</literal> 或 <literal>"memory"</literal> 可能导致只在优化下才暴露的误编译。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+<listitem>
+<simpara>混用 Zig 与外部 ABI 时，务必再次核对调用约定与寄存器保留规则；编译器不会替你保存寄存器。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>在 <literal>rdtsc</literal> 前加入 <literal>lfence</literal> 并测量稳定性影响；比较 Debug 与 ReleaseFast 构建下的结果。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</listitem>
+<listitem>
+<simpara>为 <literal>swapXchg</literal> 添加 <literal>"memory"</literal> clobber，并在紧循环中基准对比交换性能差异。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/time.zig">time.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>用编译期格式字符串重写 <literal>addAsm</literal>，根据布尔参数生成 <literal>add</literal> 或 <literal>sub</literal>。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>某些指令（如特权系统调用）需要更高权限——用运行时检查包装它们，避免被意外执行。<link xl:href="48__process-and-environment.xml">48</link></simpara>
+</listitem>
+<listitem>
+<simpara>在乱序执行的微架构上，将时间读取与 fence 配对，避免偏斜测量。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</listitem>
+<listitem>
+<simpara>若需可移植计时，优先 <literal>std.time.Timer</literal> 或平台API，并将内联汇编保留给真正架构特定的热点路径。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

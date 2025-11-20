@@ -1,0 +1,338 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>分配器与内存管理</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>Zig的动态内存方法是显式的、可组合的和可测试的。API接受一个<literal>std.mem.Allocator</literal>并将所有权清晰地返回给调用者，而不是将分配隐藏在隐式全局变量后面。本章展示了核心分配器接口（<literal>alloc</literal>、<literal>free</literal>、<literal>realloc</literal>、<literal>resize</literal>、<literal>create</literal>、<literal>destroy</literal>），介绍了最常见的分配器实现（页分配器、带泄漏检测的Debug/GPA、竞技场和固定缓冲区），并建立了通过你自己的API传递分配器的模式（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/mem/Allocator.zig">Allocator.zig</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/heap.zig">heap.zig</link>）。</simpara>
+<simpara>你将学习何时优先使用批量释放竞技场，如何使用固定堆栈缓冲区来消除堆流量，以及如何安全地增长和缩小分配。这些技能支撑了本书的其余部分——从集合到I/O适配器——并将使后续项目更快、更健壮（参见<link xl:href="03__data-fundamentals.xml">03</link>）。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用<literal>std.mem.Allocator</literal>来分配、释放和调整类型化切片和单个项目的大小。</simpara>
+</listitem>
+<listitem>
+<simpara>选择分配器：页分配器、Debug/GPA（泄漏检测）、竞技场、固定缓冲区或堆栈回退组合。</simpara>
+</listitem>
+<listitem>
+<simpara>设计接受分配器并将拥有的内存返回给调用者的函数（参见<link xl:href="08__user-types-structs-enums-unions.xml">08</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="interface">
+<title>分配器接口</title>
+<simpara>Zig的分配器是一个小巧的值类型接口，具有类型化分配和显式释放的方法。包装器处理哨兵和对齐，因此大部分时间你可以保持在<literal>[]T</literal>级别。</simpara>
+<section xml:id="interface-basics">
+<title>alloc/free、create/destroy和哨兵</title>
+<simpara>基本操作：分配一个类型化切片，修改其元素，然后释放。对于单个项目，优先使用<literal>create</literal>/<literal>destroy</literal>。当需要C互操作的null终止符时，使用<literal>allocSentinel</literal>（或<literal>dupeZ</literal>）。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 10__allocators-and-memory-management.adoc - include::example$chapters-data/code/10__allocators-and-memory-management/alloc_free_basics.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run alloc_free_basics.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">buf: abcde
+point: (x=7, y=-3)
+zstr: hello</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>优先使用<literal>{s}</literal>来打印<literal>[]const u8</literal>切片（不需要终止符）。当与需要尾随<literal>\0</literal>的API进行互操作时，使用<literal>allocSentinel</literal>或<literal>dupeZ</literal>。</simpara>
+</tip>
+<section xml:id="allocator-vtable">
+<title>分配器接口底层工作原理</title>
+<simpara><literal>std.mem.Allocator</literal>类型是一个使用指针和虚函数表的类型擦除接口。这种设计允许任何分配器实现通过相同的接口传递，为常见情况启用运行时多态性而无需虚拟分派开销。</simpara>
+<literallayout class="monospaced">graph TB
+    ALLOC["Allocator"]
+    PTR["ptr: *anyopaque"]
+    VTABLE["vtable: *VTable"]
+
+    ALLOC --&gt; PTR
+    ALLOC --&gt; VTABLE
+
+    subgraph "VTable Functions"
+        ALLOCFN["alloc(*anyopaque, len, alignment, ret_addr)"]
+        RESIZEFN["resize(*anyopaque, memory, alignment, new_len, ret_addr)"]
+        REMAPFN["remap(*anyopaque, memory, alignment, new_len, ret_addr)"]
+        FREEFN["free(*anyopaque, memory, alignment, ret_addr)"]
+    end
+
+    VTABLE --&gt; ALLOCFN
+    VTABLE --&gt; RESIZEFN
+    VTABLE --&gt; REMAPFN
+    VTABLE --&gt; FREEFN
+
+    subgraph "High-Level API"
+        CREATE["create(T)"]
+        DESTROY["destroy(ptr)"]
+        ALLOCAPI["alloc(T, n)"]
+        FREE["free(slice)"]
+        REALLOC["realloc(slice, new_len)"]
+    end
+
+    ALLOC --&gt; CREATE
+    ALLOC --&gt; DESTROY
+    ALLOC --&gt; ALLOCAPI
+    ALLOC --&gt; FREE
+    ALLOC --&gt; REALLOC</literallayout>
+<simpara>虚函数表包含四个基本操作：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">alloc</emphasis>：返回指向<literal>len</literal>字节的指针，具有指定的对齐方式，失败时返回错误</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">resize</emphasis>：尝试原地扩展或缩小内存，返回<literal>bool</literal></simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">remap</emphasis>：尝试扩展或缩小内存，允许重新定位（由<literal>realloc</literal>使用）</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">free</emphasis>：释放并使内存区域无效</simpara>
+</listitem>
+</itemizedlist>
+<simpara>高级API（<literal>create</literal>、<literal>destroy</literal>、<literal>alloc</literal>、<literal>free</literal>、<literal>realloc</literal>）使用类型安全、符合人体工程学的方法包装这些虚函数表函数。这种两层设计使分配器实现保持简单，同时为用户提供方便的类型化分配（参见<link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/mem/Allocator.zig">Allocator.zig</link>）。</simpara>
+</section>
+</section>
+<section xml:id="gpa-arena">
+<title>Debug/GPA和竞技场分配器</title>
+<simpara>对于整个程序工作，Debug/GPA是默认选择：它跟踪分配并在<literal>deinit()</literal>时报告泄漏。对于作用域内的临时分配，竞技场在<literal>deinit()</literal>期间一次性返回所有内容。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 10__allocators-and-memory-management.adoc - include::example$chapters-data/code/10__allocators-and-memory-management/gpa_arena.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run gpa_arena.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">gpa sum: 10
+arena msg len: 31</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>在Zig 0.15.x中，<literal>std.heap.GeneralPurposeAllocator</literal>是Debug分配器的薄别名。始终检查<literal>deinit()</literal>的返回值：<literal>.leak</literal>表示某些内容未被释放。</simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="composition">
+<title>选择和组合分配器</title>
+<simpara>分配器是常规值：你可以传递它们、包装它们和组合它们。两个主力工具是固定缓冲区分配器（用于栈支持的分配突发）和用于动态增长和缩小的<literal>realloc</literal>/<literal>resize</literal>。</simpara>
+<section xml:id="allocator-wrapping">
+<title>包装分配器以增强安全性和调试</title>
+<simpara>因为分配器只是具有公共接口的值，你可以<emphasis role="strong">包装</emphasis>一个分配器来添加功能。<literal>std.mem.validationWrap</literal>函数通过在委托给底层分配器之前添加安全检查来演示这种模式。</simpara>
+<literallayout class="monospaced">graph TB
+    VA["ValidationAllocator(T)"]
+    UNDERLYING["underlying_allocator: T"]
+
+    VA --&gt; UNDERLYING
+
+    subgraph "Validation Checks"
+        CHECK1["Assert n &gt; 0 in alloc"]
+        CHECK2["Assert alignment is correct"]
+        CHECK3["Assert buf.len &gt; 0 in resize/free"]
+    end
+
+    VA --&gt; CHECK1
+    VA --&gt; CHECK2
+    VA --&gt; CHECK3
+
+    UNDERLYING_PTR["getUnderlyingAllocatorPtr()"]
+    VA --&gt; UNDERLYING_PTR</literallayout>
+<simpara><literal>ValidationAllocator</literal>包装器验证：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>分配大小大于零</simpara>
+</listitem>
+<listitem>
+<simpara>返回的指针具有正确的对齐方式</simpara>
+</listitem>
+<listitem>
+<simpara>内存长度在resize/free操作中有效</simpara>
+</listitem>
+</itemizedlist>
+<tip>
+<simpara><emphasis role="strong">这种模式很强大：</emphasis>你可以构建自定义分配器包装器，添加日志记录、指标收集、内存限制或其他横切关注点，而无需修改底层分配器。包装器在执行其检查或副作用后简单地委托给<literal>underlying_allocator</literal>。<link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/mem.zig">mem.zig</link></simpara>
+</tip>
+</section>
+<section xml:id="fixed-buffer">
+<title>栈上的固定缓冲区</title>
+<simpara>使用<literal>FixedBufferAllocator</literal>从栈数组获取快速、零系统调用的分配。当你用完时，你会得到<literal>error.OutOfMemory</literal>——这正是你需要回退或修剪输入的确切信号。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 10__allocators-and-memory-management.adoc - include::example$chapters-data/code/10__allocators-and-memory-management/fixed_buffer.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run fixed_buffer.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">fixed buffer OOM as expected</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>为了优雅地回退，使用<literal>std.heap.stackFallback(N, fallback)</literal>在较慢的分配器上组合固定缓冲区。返回的对象有一个<literal>.get()</literal>方法，每次都会产生一个新的<literal>Allocator</literal>。</simpara>
+</tip>
+</section>
+<section xml:id="resize-realloc">
+<title>使用realloc/resize安全地增长和缩小</title>
+<simpara><literal>realloc</literal>返回一个新的切片（可能会移动分配）。<literal>resize</literal>尝试原地改变长度并返回<literal>bool</literal>；成功后记得也要更新切片的<literal>len</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 10__allocators-and-memory-management.adoc - include::example$chapters-data/code/10__allocators-and-memory-management/resize_and_realloc.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run resize_and_realloc.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">len=4 contents=ABCD
+grown len=8 contents=ABCDabcd
+shrunk (realloc) len=3 contents=ABC</programlisting>
+</para>
+</formalpara>
+<warning>
+<simpara>在<literal>resize(buf, n) == true</literal>之后，旧的<literal>buf</literal>仍然保持其先前的<literal>len</literal>。重新切片它（<literal>buf = buf[0..n]</literal>）以便下游代码看到新的长度。</simpara>
+</warning>
+<section xml:id="alignment-system">
+<title>对齐系统底层工作原理</title>
+<simpara>Zig的内存系统使用紧凑的2的幂次方对齐表示。<literal>std.mem.Alignment</literal>枚举将对齐存储为log₂值，允许高效存储同时提供丰富的实用方法。</simpara>
+<literallayout class="monospaced">graph LR
+    ALIGNMENT["对齐枚举"]
+
+    subgraph "对齐值"
+        A1["@'1' = 0"]
+        A2["@'2' = 1"]
+        A4["@'4' = 2"]
+        A8["@'8' = 3"]
+        A16["@'16' = 4"]
+    end
+
+    ALIGNMENT --&gt; A1
+    ALIGNMENT --&gt; A2
+    ALIGNMENT --&gt; A4
+    ALIGNMENT --&gt; A8
+    ALIGNMENT --&gt; A16
+
+    subgraph "关键方法"
+        TOBYTES["toByteUnits() -&gt; usize"]
+        FROMBYTES["fromByteUnits(n) -&gt; Alignment"]
+        OF["of(T) -&gt; Alignment"]
+        FORWARD["forward(address) -&gt; usize"]
+        BACKWARD["backward(address) -&gt; usize"]
+        CHECK["check(address) -&gt; bool"]
+    end
+
+    ALIGNMENT --&gt; TOBYTES
+    ALIGNMENT --&gt; FROMBYTES
+    ALIGNMENT --&gt; OF
+    ALIGNMENT --&gt; FORWARD
+    ALIGNMENT --&gt; BACKWARD
+    ALIGNMENT --&gt; CHECK</literallayout>
+<simpara>这种紧凑表示提供了以下实用方法：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">与字节单位之间的转换</emphasis>：<literal>@"16".toByteUnits()</literal>返回<literal>16</literal>，<literal>fromByteUnits(16)</literal>返回<literal>@"16"</literal></simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">向前对齐地址</emphasis>：<literal>forward(addr)</literal>向上舍入到下一个对齐边界</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">向后对齐地址</emphasis>：<literal>backward(addr)</literal>向下舍入到前一个对齐边界</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">检查对齐</emphasis>：<literal>check(addr)</literal>如果地址满足对齐要求则返回<literal>true</literal></simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">类型对齐</emphasis>：<literal>of(T)</literal>返回类型<literal>T</literal>的对齐方式</simpara>
+</listitem>
+</itemizedlist>
+<simpara>当你看到<literal>alignedAlloc(T, .@"16", n)</literal>或在自定义分配器中使用对齐时，你正在使用这种log₂表示。紧凑的存储允许Zig高效地跟踪对齐而不会浪费空间（参见<link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/mem.zig">mem.zig</link>）。</simpara>
+</section>
+</section>
+<section xml:id="allocator-param">
+<title>分配器作为参数模式</title>
+<simpara>你的API应该接受一个分配器并将拥有的内存返回给调用者。这保持了生命周期的明确性，并让你的用户根据其上下文选择合适的分配器（临时使用竞技场，一般用途使用GPA，可用时使用固定缓冲区）。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 10__allocators-and-memory-management.adoc - include::example$chapters-data/code/10__allocators-and-memory-management/allocator_parameter.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run allocator_parameter.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">gpa: zig-likes-allocators
+fba: OOM as expected</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>返回<literal>[]u8</literal>（或<literal>[]T</literal>）将所有权清晰地转移给调用者；记录调用者必须<literal>free</literal>。如果可以，提供一个<literal>comptime</literal>友好的变体，写入调用者提供的缓冲区。<link xl:href="04__errors-resource-cleanup.xml">04</link></simpara>
+</note>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>释放你分配的内容。在本书中，示例在成功的<literal>alloc</literal>后立即使用<literal>defer allocator.free(buf)</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara>缩小：优先使用<literal>resize</literal>进行原地缩小；如果返回<literal>false</literal>则回退到<literal>realloc</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara>竞技场：永远不要将竞技场拥有的内存返回给长生命周期的调用者。竞技场内存在<literal>deinit()</literal>时死亡。</simpara>
+</listitem>
+<listitem>
+<simpara>GPA/Debug：检查<literal>deinit()</literal>并将泄漏检测集成到使用<literal>std.testing</literal>的测试中（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/testing.zig">testing.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>固定缓冲区：适用于有界工作负载；与<literal>stackFallback</literal>结合使用以优雅降级。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>实现<literal>splitJoin(allocator, s: []const u8, needle: u8) ![]u8</literal>，按字节分割并用<literal>'-'</literal>重新连接。添加一个写入调用者缓冲区的变体。</simpara>
+</listitem>
+<listitem>
+<simpara>重写你之前的一个CLI工具以接受来自<literal>main</literal>的分配器并贯穿使用。尝试使用<literal>ArenaAllocator</literal>处理临时缓冲区。<link xl:href="06__project-grep-lite.xml">06</link></simpara>
+</listitem>
+<listitem>
+<simpara>用<literal>stackFallback</literal>包装<literal>FixedBufferAllocator</literal>，并展示相同的函数如何在小输入上成功但在较大输入上回退。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>对齐敏感分配：使用<literal>alignedAlloc(T, .@"16", n)</literal>或传播对齐的类型化助手。</simpara>
+</listitem>
+<listitem>
+<simpara>接口支持零大小类型和零长度切片；不要特殊处理它们。</simpara>
+</listitem>
+<listitem>
+<simpara>C互操作：链接libc时，考虑使用<literal>c_allocator</literal>/<literal>raw_c_allocator</literal>以匹配外部分配语义；否则优先使用页分配器/GPA。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

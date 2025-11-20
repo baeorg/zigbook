@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>TempConv CLI</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>我们的第一个项目将第1-4章的语言基础转化为一个手持命令行实用程序，可以在摄氏度、华氏度和开尔文之间转换温度。我们将参数解析、枚举和浮点数学组合成一个单一程序，同时保持对最终用户友好的诊断信息，如<link xl:href="https://ziglang.org/documentation/master/#Command-line-flags">#命令行标志</link>和<link xl:href="https://ziglang.org/documentation/master/#Floats">#浮点数</link>中所述。</simpara>
+<simpara>在此过程中，我们强化了前一章的错误处理理念：验证产生人类可读的提示，进程以意图退出而不是堆栈跟踪；参见<link xl:href="https://ziglang.org/documentation/master/#Error-Handling">#错误处理</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>构建一个最小的CLI框架，读取参数，处理<literal>--help</literal>，并发出使用指南。</simpara>
+</listitem>
+<listitem>
+<simpara>使用枚举表示温度单位，并使用<literal>switch</literal>来规范化转换，如<link xl:href="https://ziglang.org/documentation/master/#switch">#switch</link>中所述。</simpara>
+</listitem>
+<listitem>
+<simpara>在通过简洁诊断而不是展开堆栈跟踪来显示验证失败的同时，呈现转换结果。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="section-1">
+<title>塑造命令接口</title>
+<simpara>在接触任何数学运算之前，我们需要一个可预测的契约：三个参数（<literal>value</literal>、<literal>from-unit</literal>、<literal>to-unit</literal>）加上用于文档的<literal>--help</literal>。程序应该提前解释错误，这样调用者永远不会看到panic。</simpara>
+<section xml:id="section-1-sub-a-pre">
+<title>CLI参数如何到达你的程序</title>
+<simpara>当你从命令行运行程序时，操作系统在你的<literal>main()</literal>函数运行之前通过明确定义的启动序列传递参数。理解这个流程阐明了<literal>std.process.args()</literal>从哪里获取其数据：</simpara>
+<literallayout class="monospaced">graph TB
+    OS["操作系统"]
+    EXEC["execve() 系统调用"]
+    KERNEL["内核加载 ELF"]
+    STACK["堆栈设置:&lt;br/&gt;argc, argv[], envp[]"]
+
+    START["_start 入口点&lt;br/&gt;(裸汇编)"]
+    POSIX["posixCallMainAndExit&lt;br/&gt;(argc_argv_ptr)"]
+
+    PARSE["解析堆栈布局:&lt;br/&gt;argc 在 [0]&lt;br/&gt;argv 在 [1..argc+1]&lt;br/&gt;envp 在 NULL 之后"]
+
+    GLOBALS["设置全局状态:&lt;br/&gt;std.os.argv = argv[0..argc]&lt;br/&gt;std.os.environ = envp"]
+
+    CALLMAIN["callMainWithArgs&lt;br/&gt;(argc, argv, envp)"]
+    USERMAIN["你的 main() 函数"]
+    ARGS["std.process.args()&lt;br/&gt;读取 std.os.argv"]
+
+    OS --&gt; EXEC
+    EXEC --&gt; KERNEL
+    KERNEL --&gt; STACK
+    STACK --&gt; START
+    START --&gt; POSIX
+    POSIX --&gt; PARSE
+    PARSE --&gt; GLOBALS
+    GLOBALS --&gt; CALLMAIN
+    CALLMAIN --&gt; USERMAIN
+    USERMAIN --&gt; ARGS</literallayout>
+<simpara><emphasis role="strong">关键点：</emphasis></simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">操作系统准备</emphasis>：操作系统在将控制权转移到你的程序之前，将<literal>argc</literal>（参数计数）和<literal>argv</literal>（参数数组）放在堆栈上。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">汇编入口</emphasis>：<literal>_start</literal>符号（用内联汇编编写）是真正的入口点，而不是<literal>main()</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">堆栈解析</emphasis>：<literal>posixCallMainAndExit</literal>读取堆栈布局以提取<literal>argc</literal>、<literal>argv</literal>和环境变量。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">全局状态</emphasis>：在调用你的<literal>main()</literal>之前，运行时用解析的数据填充<literal>std.os.argv</literal>和<literal>std.os.environ</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">用户访问</emphasis>：当你调用<literal>std.process.args()</literal>时，它只是返回一个迭代器，遍历已经填充的<literal>std.os.argv</literal>切片。</simpara>
+</listitem>
+</itemizedlist>
+<simpara><emphasis role="strong">这对CLI程序的重要性：</emphasis></simpara>
+<itemizedlist>
+<listitem>
+<simpara>参数从<literal>main()</literal>运行的那一刻起就可用——不需要单独的初始化。</simpara>
+</listitem>
+<listitem>
+<simpara>第一个参数（<literal>argv[0]</literal>）始终是程序名称。</simpara>
+</listitem>
+<listitem>
+<simpara>参数解析在启动期间发生一次，而不是每次访问时。</simpara>
+</listitem>
+<listitem>
+<simpara>无论你使用<literal>zig run</literal>还是编译后的二进制文件，这个序列都是相同的。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>这种基础设施意味着你的TempConv CLI可以立即开始解析参数，而无需担心它们如何到达的低级细节。</simpara>
+</section>
+<section xml:id="section-1-sub-a">
+<title>使用防护栏解析参数</title>
+<simpara>入口点分配完整的参数向量，检查<literal>--help</literal>，并验证参数数量。当违反规则时，我们打印使用横幅并以失败代码退出，依靠<literal>std.process.exit</literal>来避免嘈杂的堆栈跟踪。</simpara>
+</section>
+<section xml:id="section-1-sub-b">
+<title>单位和验证助手</title>
+<simpara>我们使用枚举和<literal>parseUnit</literal>助手来描述支持的单元，该助手接受大写或小写标记。无效标记会触发友好的诊断并立即退出，当嵌入脚本时保持CLI的弹性，如<link xl:href="https://ziglang.org/documentation/master/#enum">#枚举</link>中所述。</simpara>
+</section>
+</chapter>
+<chapter xml:id="section-2">
+<title>转换和报告结果</title>
+<simpara>接口就位后，程序的其余部分依赖于确定性转换：每个值都归一化为开尔文，然后投影到请求的单位，保证无论输入组合如何都能获得一致的结果。</simpara>
+<section xml:id="workflow-1">
+<title>完整的TempConv清单</title>
+<simpara>下面的清单包括参数解析、单位助手和转换逻辑。重点关注CLI结构如何使每个失败路径显而易见，同时保持成功路径的简洁性。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 05__project-tempconv-cli.adoc - include::example$chapters-data/code/05__project-tempconv-cli/tempconv_cli.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run tempconv_cli.zig -- 32 F C</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">32.00 f -&gt; 0.00 c</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>程序在检测到无效值或单位时会在退出前打印诊断信息，因此脚本可以依赖非零退出状态而无需解析堆栈跟踪。</simpara>
+</tip>
+</section>
+<section xml:id="workflow-2">
+<title>练习额外转换</title>
+<simpara>你可以对开尔文或摄氏度输入运行相同的二进制文件——共享的转换助手保证对称性，因为所有内容都通过开尔文流动。</simpara>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run tempconv_cli.zig -- 273.15 K C</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">273.15 k -&gt; 0.00 c</programlisting>
+</para>
+</formalpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项</title>
+<itemizedlist>
+<listitem>
+<simpara>参数解析在设计上保持最小化；生产工具可能会使用相同的防护模式添加长格式标志或更丰富的帮助文本。</simpara>
+</listitem>
+<listitem>
+<simpara>温度转换是线性的，因此双精度浮点数足够；如果你添加像兰金温标这样的特殊温标，请仔细调整公式。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.debug.print</literal>写入stderr，这保持了脚本管道的安全性——如果你需要干净的stdout输出，请切换到缓冲的stdout写入器；参见<link xl:href="https://ziglang.org/documentation/master/#Debug">#Debug</link>。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展<literal>parseUnit</literal>以识别完整的单词<literal>celsius</literal>、<literal>fahrenheit</literal>和<literal>kelvin</literal>以及它们的单字母缩写。</simpara>
+</listitem>
+<listitem>
+<simpara>添加一个标志，在四舍五入输出（<literal>{d:.2}</literal>）和完整精度之间切换，使用Zig的格式化动词；参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link>。</simpara>
+</listitem>
+<listitem>
+<simpara>引入一个<literal>--table</literal>模式，打印一系列值的转换，通过<literal>for</literal>加强切片迭代，如<link xl:href="https://ziglang.org/documentation/master/#for">#for</link>中所述。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案与边缘情况：</title>
+<itemizedlist>
+<listitem>
+<simpara>开尔文永远不会低于零；如果你的CLI应该拒绝负的开尔文输入而不是接受数学值，请附加一个防护。</simpara>
+</listitem>
+<listitem>
+<simpara>国际受众有时期望逗号小数；如果你需要这种行为，请将<literal>std.fmt.formatFloat</literal>与本地化感知的后处理连接起来。</simpara>
+</listitem>
+<listitem>
+<simpara>为了支持脚本使用而不调用<literal>zig run</literal>，请使用<literal>zig build-exe</literal>打包程序，并将二进制文件放在你的<literal>PATH</literal>上。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

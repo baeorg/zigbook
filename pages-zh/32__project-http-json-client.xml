@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>HTTP JSON 客户端</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>本项目章将<link xl:href="31__networking-http-and-json.xml">31</link>中的网络原语扩展为一个自包含客户端：轮询服务、解析 JSON，并打印健康报告。前一章聚焦原始套接字握手与最小 HTTP 示例，而本章结合<literal>std.http.Client.fetch</literal>、<literal>std.json.parseFromSlice</literal>与格式化终端输出，构建面向用户的工作流（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/http/Client.zig">Client.zig</link>与<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json/static.zig">static.zig</link>）。</simpara>
+<simpara>示例特意在同一进程内启动本地服务器，使客户端可离线运行并处于测试环境。该夹具便于在使用更安全的 Reader 与 Writer API（Zig 0.15.2 引入）时迭代请求分帧与解析逻辑（参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html">v0.15.2</link>）。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>使用<literal>std.net.Address.listen</literal>启动轻量 HTTP 夹具，并通过<literal>std.Thread.ResetEvent</literal>协调就绪。</simpara>
+</listitem>
+<listitem>
+<simpara>在<literal>std.json.parseFromSlice</literal>之上叠加线协议表示，捕获并解码 JSON 载荷为类型化的 Zig 结构体与标记联合。</simpara>
+</listitem>
+<listitem>
+<simpara>以表格呈现结果，使用现代 Writer API 显式管理缓冲并突出受影响的服务。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>每个目标都直接基于前一章引入的客户端原语与 Zig 标准库提供的 HTTP 组件（参见<link xl:href="31__networking-http-and-json.xml">31</link>与<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/http/Server.zig">Server.zig</link>）。</simpara>
+</chapter>
+<chapter xml:id="project-architecture">
+<title>项目架构</title>
+<simpara>程序分为三部分：提供状态端点的本地 HTTP 服务器、将响应建模为类型化数据的解码层，以及打印简明摘要的呈现层。这映射了内容计划中提到的“抓取 → 解析 → 报告”工作流，同时将整个项目保持在单个 Zig 可执行中。<link xl:href="00__content_plan.adoc">link</link></simpara>
+<section xml:id="local-fixture">
+<title>本地服务夹具</title>
+<simpara>夹具线程绑定到<literal>127.0.0.1</literal>、接受单个客户端，并以预设 JSON 回应<literal>GET /api/status</literal>。它复用上一章的<literal>std.http.Server</literal>适配器，因此所有 TCP 细节都留在标准库中，其余程序可将该服务视为在外部运行（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/net.zig">net.zig</link>）。</simpara>
+</section>
+<section xml:id="typed-decoding">
+<title>类型化解码策略</title>
+<simpara>JSON 文档使用可选字段描述不同事件类型，因此程序先将其解析为一个镜像这些可选字段的“线协议”结构体，随后基于<literal>kind</literal>属性将数据提升为 Zig 的<literal>union(enum)</literal>。该模式使<literal>std.json</literal>解析保持简洁，同时为下游逻辑提供符合人体工学的领域模型（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/meta.zig">meta.zig</link>）。</simpara>
+</section>
+</chapter>
+<chapter xml:id="fetch-decode-present">
+<title>抓取、解码与呈现</title>
+<simpara>下方完整程序将夹具、解码器与渲染器连接在一起。可直接使用<literal>zig run</literal>运行，并打印服务表以及所有活动事件。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 32__project-http-json-client.adoc - include::example$chapters-data/code/32__project-http-json-client/main.zig[]</programlisting>
+<simpara>该程序依赖现代的 Reader/Writer API 以及 Zig 0.15.2 引入的 HTTP 客户端组件（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/Writer.zig">Writer.zig</link>）。</simpara>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run main.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Fetching http://127.0.0.1:46211/api/status...
+Parsed 2 regions.
+
+SERVICE SUMMARY
+Region        Service        State       Latency (ms)
+-----------------------------------------------------
+us-east      auth          up              2.7
+us-east      billing       degraded      184.0
+us-east      search        up              5.1
+eu-central   auth          up              3.1
+eu-central   billing       outage          0.0
+
+ACTIVE INCIDENTS
+- us-east: maintenance window starts 2025-11-06T01:00Z, 45 min
+- eu-central: outage since 2025-11-05T08:12Z (severity: critical)</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara>每次运行端口号都会变化，因为服务器监听<literal>0</literal>并让操作系统选择空闲端口。客户端根据<literal>server.listen_address.in.getPort()</literal>动态构造 URL。</simpara>
+</note>
+<section xml:id="walkthrough">
+<title>讲解</title>
+<orderedlist numeration="arabic">
+<listitem>
+<simpara><emphasis role="strong">服务器引导。</emphasis><literal>serveStatus</literal>在接受的 TCP 流上启动<literal>std.http.Server</literal>，比较请求目标，并以 JSON 或 404 响应。摘要载荷位于多行字符串中，你也可以通过<literal>std.json.Stringify</literal>同样轻松地发射它。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">线协议解码与提升。</emphasis>抓取后，客户端将其解析为<literal>SummaryWire</literal>，这是一个由切片与可选项组成、反映 JSON 形状的结构。随后<literal>buildSummary</literal>在 arena 中分配类型化切片，并将事件的<literal>kind</literal>字符串映射到联合变体。arena 与固定 writer 都利用 Writergate 之后的 I/O API 以显式控制分配。</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">渲染。</emphasis><literal>renderSummary</literal>通过<literal>Writer.print</literal>打印服务表，并迭代事件，展示每个区域的严重程度与调度细节。</simpara>
+</listitem>
+</orderedlist>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>std.http.Client.fetch</literal>会将整个响应缓冲到固定 writer；对于更大的载荷，请换用由 arena 支撑的构建器，或使用<literal>std.json.Scanner</literal>进行令牌流式处理（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json/Scanner.zig">Scanner.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>解码逻辑假定事件对象包含其<literal>kind</literal>所需字段。校验失败将以<literal>error.MissingField</literal>冒泡；若预期为部分填充数据，请调整错误处理以降级或记录日志。</simpara>
+</listitem>
+<listitem>
+<simpara>arena 分配器在报告生命周期内保持所有解码切片存活。若需要长期所有权，请以更长寿命的分配器替换 arena，并在报告过期时手动释放切片。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/heap/arena_allocator.zig">arena_allocator.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>添加<literal>--region</literal>参数以将打印的表格过滤到指定区域。复用网络章节之前的 CLI 章节中的参数解析模式（参见<link xl:href="05__project-tempconv-cli.xml">05</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>扩展 JSON 载荷以包含历史延迟分位数，并绘制文本火花线或最小/中位/最大摘要。查阅<literal>std.fmt</literal>获取格式化助手（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/fmt.zig">fmt.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>将预设数据替换为你选择的在线端点，但请设置超时并在必要时回退到夹具以保持测试可预测。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>若响应超过<literal>response_buffer</literal>大小，<literal>client.fetch</literal>会报告<literal>error.WriteFailed</literal>。通过改用由堆支撑的 writer 重试，或将正文流式写入磁盘来处理该情况。</simpara>
+</listitem>
+<listitem>
+<simpara>针对联合提升，考虑将原始<literal>SummaryWire</literal>与类型化数据并存，以便在诊断时暴露原始 JSON 字段而无需重新解析。</simpara>
+</listitem>
+<listitem>
+<simpara>在生产代码中，你可能希望跨多次抓取复用一个<literal>std.http.Client</literal>；本示例在一次请求后即丢弃它，但该 API 暴露了可复用的连接池。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>多包工作区与本地引入</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara><link xl:href="26__build-system-advanced-topics.xml">第 26 章</link>探讨了用于协调工作区与矩阵构建的高级<literal>std.Build</literal>技巧。本项目章将这些工具付诸实践：我们将组装一个三包工作区，包含两个可复用库、一个引入的 ANSI 调色板，以及一个渲染延迟仪表盘的应用。过程中，我们使用具名写入文件捕获元数据，并将制品安装到<literal>zig-out</literal>，展示本地引入优先的工作流如何与面向注册表的模块并存（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build.zig">Build.zig</link>与<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build/Step/InstallDir.zig">Dir.zig</link>）。</simpara>
+<simpara>示例刻意保持紧凑且贴近真实——<literal>libA</literal>进行统计分析，<literal>libB</literal>格式化状态行，引入的调色板使终端配色在工作区内保持私有。构建图只注册我们希望消费者看到的契约，呼应前述概念章节中的卫生准则。<link xl:href="25__module-resolution-and-discovery-deep.xml">25</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>通过共享的<literal>deps.zig</literal>注册函数，将多个库与一个引入的助手接线到同一工作区（参见<link xl:href="26__build-system-advanced-topics.xml">26</link>与<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build/Module.zig">Module.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>使用具名写入文件生成可复现制品（依赖映射），并安装到<literal>zig-out</literal>以供 CI 检查（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build/Step/WriteFile.zig">File.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>通过<literal>zig build test</literal>验证组件库，确保引入代码与注册表包使用同一测试框架（参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/testing.zig">testing.zig</link>）。</simpara>
+</listitem>
+<listitem>
+<simpara>在消费工作区模块的应用中使用 Zig 0.15.2 的缓冲写入 API（参见<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#upgrading-stdiogetstdoutwriterprint">升级说明</link>）。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="workspace-blueprint">
+<title>工作区蓝图</title>
+<simpara>工作区位于<literal>chapters-data/code/27__project-multi-package-workspace-and-vendor/</literal>。一个最小清单声明包名以及随发布携带的目录，使引入的源显式可见（参见<link xl:href="https://github.com/ziglang/zig/blob/master/lib/init/build.zig.zon">build.zig.zon 模板</link>）。</simpara>
+<section xml:id="manifest-layout">
+<title>清单与布局</title>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 27__project-multi-package-workspace-and-vendor.adoc - include::example$chapters-data/code/27__project-multi-package-workspace-and-vendor/build.zig.zon[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build --build-file build.zig map</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">no output</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>运行<literal>map</literal>会安装<literal>zig-out/workspace-artifacts/dependency-map.txt</literal>，无需遍历源码树即可审计包的外部接口。</simpara>
+</tip>
+</section>
+<section xml:id="deps-pattern">
+<title>使用<literal>deps.zig</literal>接线各包</title>
+<simpara><literal>deps.zig</literal>集中管理模块注册，使所有消费者（测试、可执行或未来示例）获得一致的接线。我们以公共名称注册<literal>libA</literal>与<literal>libB</literal>，而 ANSI 调色板通过<literal>b.createModule</literal>保持匿名。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 27__project-multi-package-workspace-and-vendor.adoc - include::example$chapters-data/code/27__project-multi-package-workspace-and-vendor/deps.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build --build-file build.zig test</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">no output</programlisting>
+</para>
+</formalpara>
+<important>
+<simpara>返回模块句柄可约束调用方——只有<literal>build.zig</literal>决定哪些名称成为公共导入；该做法与第 25 章的命名空间规则一致。<link xl:href="25__module-resolution-and-discovery-deep.xml">25</link></simpara>
+</important>
+</section>
+<section xml:id="build-orchestration">
+<title>构建图编排</title>
+<simpara>构建脚本安装可执行文件，暴露<literal>run</literal>、<literal>test</literal>与<literal>map</literal>步骤，并将生成的依赖映射复制到<literal>zig-out/workspace-artifacts/</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 27__project-multi-package-workspace-and-vendor.adoc - include::example$chapters-data/code/27__project-multi-package-workspace-and-vendor/build.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build --build-file build.zig run</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">dataset      status    mean       range      samples
+------------------------------------------------------
+frontend     stable    111.80     3.90       5
+checkout     stable    100.60     6.40       5
+analytics    alert     77.42      24.00      5</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>map</literal>步骤写出的依赖映射渲染结果如下：</simpara>
+</note>
+<screen>Modules registered in build.zig:
+  libA      -&gt; packages/libA/analytics.zig
+  libB      -&gt; packages/libB/report.zig (imports libA, palette)
+  palette   -&gt; vendor/palette/palette.zig (anonymous)
+  executable -&gt; app/main.zig</screen>
+</section>
+</chapter>
+<chapter xml:id="library-modules">
+<title>库模块</title>
+<simpara>两个库分担职责：<literal>libA</literal>执行数值分析，<literal>libB</literal>将这些统计转换为着色行。测试与各模块并置，使构建图无需额外粘合即可执行它们。</simpara>
+<section xml:id="libA-analytics">
+<title>分析核心（<literal>libA</literal>）</title>
+<simpara><literal>libA</literal>实现了用于稳定方差计算的 Welford 算法，并提供<literal>relativeSpread</literal>、<literal>zScore</literal>等便捷助手。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/math.zig">math.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 27__project-multi-package-workspace-and-vendor.adoc - include::example$chapters-data/code/27__project-multi-package-workspace-and-vendor/packages/libA/analytics.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test packages/libA/analytics.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+</section>
+<section xml:id="libB-report">
+<title>报告外层（<literal>libB</literal>）</title>
+<simpara><literal>libB</literal>依赖<literal>libA</literal>提供统计，并依赖引入的调色板进行样式化。它为每个数据集计算状态标签，并渲染适用于仪表盘或 CI 日志的紧凑表格。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 27__project-multi-package-workspace-and-vendor.adoc - include::example$chapters-data/code/27__project-multi-package-workspace-and-vendor/packages/libB/report.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build --build-file build.zig test</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">no output</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>通过<literal>zig build test</literal>进行测试，确保模块通过与可执行相同的导入看到<literal>libA</literal>与调色板，消除直接<literal>zig test</literal>与构建编排运行之间的差异。</simpara>
+</tip>
+</section>
+<section xml:id="vendor-palette">
+<title>引入的主题调色板</title>
+<simpara>ANSI 调色板在工作区内保持私有——<literal>deps.zig</literal>在需要处注入它，而不注册公共名称。即使工作区后来引入具有冲突助手的注册表依赖，这也能保持颜色码稳定。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 27__project-multi-package-workspace-and-vendor.adoc - include::example$chapters-data/code/27__project-multi-package-workspace-and-vendor/vendor/palette/palette.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig test vendor/palette/palette.zig</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">All 1 tests passed.</programlisting>
+</para>
+</formalpara>
+</section>
+</chapter>
+<chapter xml:id="application-entry">
+<title>应用入口</title>
+<simpara>可执行仅导入公共模块，构造数据集，并使用 Zig 0.15.2 引入的缓冲写入 API 打印表格。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 27__project-multi-package-workspace-and-vendor.adoc - include::example$chapters-data/code/27__project-multi-package-workspace-and-vendor/app/main.zig[]</programlisting>
+<formalpara><title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build --build-file build.zig run</programlisting>
+</para>
+</formalpara>
+<formalpara><title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">dataset      status     mean       range      samples
+------------------------------------------------------
+frontend     stable     111.80     3.90       5
+checkout     stable     100.60     6.40       5
+analytics    alert      77.42      24.00      5</programlisting>
+</para>
+</formalpara>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>工作区仅暴露<literal>libA</literal>与<literal>libB</literal>；引入的模块因<literal>b.createModule</literal>而保持匿名，防止下游消费者依赖内部助手。</simpara>
+</listitem>
+<listitem>
+<simpara>具名写入文件产生可确定制品。将<literal>map</literal>步骤与 CI 配合，以在进入生产前检测意外的命名空间变化。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>zig build test</literal>将多个模块测试组合到同一命令下；若添加新包，记得通过<literal>deps.zig</literal>穿线其模块，使其加入套件。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展依赖映射，使其在文本文件旁额外生成 JSON。提示：添加第二个<literal>mapping.add("dependency-map.json", &#8230;&#8203;)</literal>并复用<literal>std.json</literal>序列化结构。<link xl:href="26__build-system-advanced-topics.xml">26</link>，<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/json.zig">json.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>通过<literal>b.dependency("logger", .{})</literal>添加一个注册表依赖，在<literal>deps.zig</literal>中重新导出其模块，并更新映射以记录新的命名空间。<link xl:href="24__zig-package-manager-deep.xml">24</link></simpara>
+</listitem>
+<listitem>
+<simpara>引入<literal>-Dalert-spread</literal>选项以覆盖默认阈值。通过<literal>deps.zig</literal>转发该选项，使可执行与任何测试看到相同策略。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>当引入的调色板最终演进为独立包时，将<literal>b.createModule</literal>替换为<literal>b.addModule</literal>并在<literal>build.zig.zon</literal>中列出，以确保消费者通过哈希获取。</simpara>
+</listitem>
+<listitem>
+<simpara>若工作区增长到超出少数模块，考虑按职责（<literal>observability</literal>、<literal>storage</literal>等）在<literal>deps.zig</literal>中分组注册表，以保持构建脚本可导航。<link xl:href="26__build-system-advanced-topics.xml">26</link></simpara>
+</listitem>
+<listitem>
+<simpara>跨编译仪表盘需要确保每个目标支持 ANSI 转义；若面向不启用 VT 处理的 Windows 控制台发布，请通过<literal>builtin.os.tag</literal>检查来控制调色板使用。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/builtin.zig">builtin.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="summary">
+<title>总结</title>
+<itemizedlist>
+<listitem>
+<simpara><literal>deps.zig</literal>集中模块注册，使工作区可重复且仅暴露经批准的命名空间。</simpara>
+</listitem>
+<listitem>
+<simpara>具名写入文件与安装目录将构建元数据转化为可版本化的制品，适于 CI 检查。</simpara>
+</listitem>
+<listitem>
+<simpara>引入的助手可与可复用库并存，在保持内部配色私有的同时使公共 API 保持整洁。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>通过本项目，你现拥有组织多包 Zig 工作区的具体模板，在保持构建图透明与可测试的同时平衡引入代码与可复用库。</simpara>
+</chapter>
+</book>

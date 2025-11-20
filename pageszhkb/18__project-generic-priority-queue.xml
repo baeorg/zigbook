@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>泛型优先队列</subtitle>
+<date>2025-11-15</date>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>泛型API让我们在编译时描述能力；优先队列是这些能力与时间敏感调度现实交汇的地方。在这个项目中，我们用丰富的比较器和上下文感知策略包装<literal>std.PriorityQueue</literal>，这些策略可以被测试和调整，而不会牺牲零成本抽象。参见<link xl:href="17__generic-apis-and-type-erasure.xml">17</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/priority_queue.zig">priority_queue.zig</link>。</simpara>
+<simpara>我们将构建三个工件：一个在比较器中编码排序规则的基础调度器，一个在更改策略上下文时重用相同队列的公平性模拟器，以及一个跟踪流中违规者的分析包装器。在此过程中，我们重新审视分配器选择，权衡排空、重新调优和内省堆的策略。参见<link xl:href="10__allocators-and-memory-management.xml">10</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/sort.zig">sort.zig</link>。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>将业务规则转换为编译时比较器契约，驱动<literal>std.PriorityQueue</literal>排序。</simpara>
+</listitem>
+<listitem>
+<simpara>使用队列的<literal>Context</literal>参数建模动态调度启发式方法，同时保持内存变化可预测。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+<listitem>
+<simpara>从同一堆派生流分析（top-K，滚动统计），无需复制粘贴逻辑或牺牲稳定性。<link xl:href="45__text-formatting-and-unicode.xml">47</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="architect-core">
+<title>架构可重用的队列核心</title>
+<simpara>优先队列API接受值类型、用户定义的上下文和返回<literal>std.math.Order</literal>的比较器。这一个函数决定哪个元素冒泡到前面，因此我们将它视为由测试支持的契约。</simpara>
+<section xml:id="core-comparator-contract">
+<title>比较器设计作为API表面</title>
+<simpara>我们的第一个示例构建了一个简单的构建和发布调度器。紧急程度是主要键；提交时间打破平局，以避免让旧任务饿死。比较器是一个纯函数，在实例化队列类型时完全在编译时调用，但它足够表达，能够捕获细微的排序逻辑。参见<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/math.zig">math.zig</link>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 18__project-generic-priority-queue.adoc - include::example$chapters-data/code/18__project-generic-priority-queue/task_queue_basics.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run task_queue_basics.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">调度顺序：
+  - compile pointer.zig (urgency 0)
+  - run tests (urgency 1)
+  - prepare changelog (urgency 1)
+  - deploy preview (urgency 2)</programlisting>
+</para>
+</formalpara>
+<simpara>提示：因为比较器返回<literal>std.math.Order</literal>，我们可以在不改变队列类型的情况下分层次要键；堆简单地服从你编码的契约。</simpara>
+</section>
+<section xml:id="core-growth-allocation">
+<title>增长和分配策略</title>
+<simpara>每次调用<literal>add</literal>如果底层切片需要更多容量，可能会重新分配。对于热路径，使用<literal>ensureUnusedCapacity</literal>保留，或从预大小切片初始化，然后排空以摊销分配。只要你使分配器生命周期明确，队列的<literal>deinit</literal>就很便宜，反映了我们分配器深入探讨中的内存卫生实践。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</section>
+</chapter>
+<chapter xml:id="policy-driven">
+<title>策略驱动的重新优先级排序</title>
+<simpara>接下来，我们将更丰富的数据输入同一队列：具有SLA的服务请求、一天中的时间上下文和VIP提示。队列本身是不可知的；所有细微差别都存在于策略结构和比较器中。这种设计即使在分层公平规则时也能保持队列可重用。<link xl:href="17__generic-apis-and-type-erasure.xml">17</link></simpara>
+<section xml:id="policy-aging">
+<title>老化和VIP加权</title>
+<simpara>比较器通过测量松弛（直到截止时间的剩余时间）、乘以逾期请求以升级它们，并减去VIP奖励来计算标量"分数"。因为<literal>Context</literal>只是一个结构体，策略被编译到队列中，可以通过用不同的权重构建新实例来交换。我们前向声明辅助函数，以保持比较器可读和可测试。</simpara>
+</section>
+<section xml:id="policy-scenarios">
+<title>模拟操作模式</title>
+<simpara>我们运行两个场景：班中分流和晚期升级。唯一的区别是我们传递给<literal>init</literal>的策略结构；其他一切（任务、队列类型）保持不变。打印的顺序显示了逾期乘法和VIP提升如何改变弹出序列。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 18__project-generic-priority-queue.adoc - include::example$chapters-data/code/18__project-generic-priority-queue/sla_fairness.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run sla_fairness.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">班中分流 (now=350ms)
+  -> INC-993 score=-20 deadline=520 vip=true
+  -> INC-511 score=95 deadline=400 vip=false
+  -> INC-742 score=140 deadline=460 vip=false
+  -> INC-482 score=270 deadline=500 vip=false
+
+升级窗口 (now=520ms)
+  -> INC-511 score=-435 deadline=400 vip=false
+  -> INC-742 score=-210 deadline=460 vip=false
+  -> INC-993 score=-40 deadline=520 vip=true
+  -> INC-482 score=40 deadline=500 vip=false</programlisting>
+</para>
+</formalpara>
+<simpara>重要：在排队现有项目后更改策略需要重建堆——排空到切片，更改策略，然后重新插入或调用<literal>fromOwnedSlice</literal>以在新比较器下重新堆化。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</section>
+</chapter>
+<chapter xml:id="analytics-topk">
+<title>分析和top-K报告</title>
+<simpara>优先队列也是出色的滚动聚合。通过将"最差"元素保留在堆中并积极修剪，我们可以以最少的开销维护延迟峰值的top-K视图。排序当前堆快照让我们直接为仪表板或日志渲染结果。<link xl:href="45__text-formatting-and-unicode.xml">47</link></simpara>
+<section xml:id="analytics-wrapper">
+<title>可组合的<literal>TopK</literal>包装器</title>
+<simpara><literal>TopK</literal>包装<literal>std.PriorityQueue</literal>并使用比较器形成分数的min-堆。每次插入在堆超过限制时调用<literal>remove</literal>，确保我们只保留最高分数。当堆超过限制时，<literal>snapshotDescending</literal>辅助函数将堆复制到临时缓冲区，并用<literal>std.sort.heap</literal>排序，使队列准备好进行进一步插入。<link xl:href="17__generic-apis-and-type-erasure.xml">17</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 18__project-generic-priority-queue.adoc - include::example$chapters-data/code/18__project-generic-priority-queue/topk_latency.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run topk_latency.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Top延迟违规者（按分数降序）：
+   1. /v1/ledger   latency=420ms payload=540B score=417.30
+   2. /v1/ledger   latency=362ms payload=480B score=359.60
+   3. /v1/payments latency=305ms payload=1500B score=297.50
+   4. /v1/users    latency=275ms payload=980B score=270.10
+   5. /v1/orders   latency=210ms payload=1200B score=204.00</programlisting>
+</para>
+</formalpara>
+<simpara>注意：快照复制堆，以便将来的插入保持便宜；重用临时分配器或竞技场进行大批量遥测作业，以避免碎片化长寿命堆。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</section>
+</chapter>
+<chapter xml:id="closing-loop">
+<title>从队列到模块边界</title>
+<simpara>我们现在有可重用的队列包装器，可以存在于它们自己的模块中。下一章将形式化这一步，展示如何将队列作为包级模块展示，并通过<literal>@import</literal>边界公开策略。<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link></simpara>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意事项和警告</title>
+<itemizedlist>
+<listitem>
+<simpara>在专用辅助函数中定义比较器，以便它们可以独立进行单元测试，并在队列实例中重用。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+<listitem>
+<simpara>策略结构是值类型——更改检测意味着重建堆或创建新队列；否则，你的排序不再匹配比较器的假设。</simpara>
+</listitem>
+<listitem>
+<simpara>复制堆内容进行报告会分配内存；回收缓冲区或在集成遥测服务时使用竞技场，以保持无GC的Zig代码可预测。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展调度器以通过比较器中的累计运行时间尊重"批量大小"提示；添加一个测试，断言混合优先级间的公平性。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+<listitem>
+<simpara>修改SLA模拟器以使用<literal>std.log</literal>写入审计条目，并在多种策略下将输出与期望进行比较。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/log.zig">log.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>教<literal>TopK</literal>包装器返回快照和聚合平均值；考虑你将如何通过异步指标钩子公开它。<link xl:href="45__text-formatting-and-unicode.xml">47</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>替代方案和边缘情况</title>
+<itemizedlist>
+<listitem>
+<simpara>如果你需要对具有相同分数的项目进行稳定排序，请将有效负载包装在存储单调递增序列号的结构体中，并将其包含在比较器中。</simpara>
+</listitem>
+<listitem>
+<simpara>对于极大的队列，考虑分块到桶中或使用配对堆——<literal>std.PriorityQueue</literal>是二元的，对于百万项堆可能会产生缓存未命中。</simpara>
+</listitem>
+<listitem>
+<simpara>在模块边界公开队列工厂时，记录分配器所有权并提供显式的<literal>destroy</literal>辅助函数，以防止调用者在运行时更改策略时泄漏。<link xl:href="19__modules-and-imports-root-builtin-discovery.xml">19</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

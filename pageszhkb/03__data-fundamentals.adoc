@@ -1,0 +1,368 @@
+////
+changes: ["数据基础章节初稿"]
+examples_compile: yes
+keywords: ["数组", "切片", "指针"]
+last_updated: 2025-11-01
+last_verified: 2025-11-01
+next_chapter: "04__errors-resource-cleanup"
+open_questions: []
+previous_chapter: "02__control-flow-essentials"
+status: reviewed
+xref_complete: true
+////
+
+= 数据基础
+:chapter-number: 3
+:chapter-slug: data-fundamentals
+:copyright: zigbook
+:doctype: book
+:embedded:
+:experimental:
+:icons: font
+:partnums:
+:pygments-linenums-mode: inline
+:pygments-style: manni
+:safe-mode-level: 0
+:sectanchors:
+:sectids:
+:sectlinks:
+:source-highlighter: pygments
+:sourcedir: example$chapters-data/code
+:webfonts:
+:xrefstyle: short
+:zig-version: 0.15.2
+:linkcss:
+:stylesdir: styles
+:stylesheet: zigbook.css
+
+[[overview]]
+== 概览
+
+控制流只有在操作数据时才有用，因此本章将 Zig 的核心集合类型——数组、切片与哨兵终止字符串——置于实际使用中，同时保持值语义明确。参考 link:https://ziglang.org/documentation/master/#Arrays[#数组] 与 link:https://ziglang.org/documentation/master/#Slices[#切片]。
+
+我们还将使指针、可选类型与对齐友好的转换变得常规，展示如何安全地重新解释内存，同时保留边界检查与对可变性的清晰度。参考 link:https://ziglang.org/documentation/master/#Pointers[#指针] 与 link:https://ziglang.org/documentation/master/#alignCast[#对齐转换]。
+
+[[type-system-context]]
+=== Zig 的类型系统类别
+
+Before diving into specific collection types, it's helpful to understand where arrays, slices, and pointers fit within Zig's type system. Every type in Zig belongs to a category, and each category provides specific operations:
+
+[mermaid]
+....
+graph TB
+    subgraph "Type Categories"
+        PRIMITIVE["Primitive Types<br/>bool, u8, i32, f64, void, ..."]
+        POINTER["Pointer Types<br/>*T, [*]T, []T, [:0]T"]
+        AGGREGATE["Aggregate Types<br/>struct, array, tuple"]
+        FUNCTION["Function Types<br/>fn(...) ReturnType"]
+        SPECIAL["Special Types<br/>anytype, type, comptime_int"]
+    end
+
+    subgraph "Common Type Operations"
+        ABISIZE["abiSize()<br/>Byte size in memory"]
+        ABIALIGN["abiAlignment()<br/>Required alignment"]
+        HASRUNTIME["hasRuntimeBits()<br/>Has runtime storage?"]
+        ELEMTYPE["elemType()<br/>Element type (arrays/slices)"]
+    end
+
+    PRIMITIVE --> ABISIZE
+    POINTER --> ABISIZE
+    AGGREGATE --> ABISIZE
+    
+    PRIMITIVE --> ABIALIGN
+    POINTER --> ABIALIGN
+    AGGREGATE --> ABIALIGN
+    
+    POINTER --> ELEMTYPE
+    AGGREGATE --> ELEMTYPE
+....
+
+Key insights for this chapter:
+
+* *Arrays* are aggregate types with compile-time-known length—their size is `element_size * length`
+* *Slices* are pointer types that store both a pointer and runtime length—always 2 × pointer size
+* *Pointers* come in multiple shapes (single-item `pass:[*T]`, many-item `pass:[[*\]T]`, slice `[]T`) with different safety guarantees
+* All types expose their size and alignment, which affect struct layout and memory allocation
+
+This type-aware design lets the compiler enforce bounds checking on slices while allowing pointer arithmetic on many-item pointers when you explicitly opt out of safety.
+
+[[learning-goals]]
+== 学习目标
+
+* 区分数组值语义与切片视图，包括用于安全回退的零长度习语。
+* 熟悉指针形状（`pass:[*T]`、`pass:[[*\]T]`、`pass:[?*T]`），并在不牺牲安全检查的情况下解包可选类型（参考 link:https://ziglang.org/documentation/master/#Optionals[#可选类型]）。
+* 在与其它 API 互操作时应用哨兵终止字符串与对齐感知转换（`@alignCast`、`@bitCast`、`@intCast`）（参考 link:https://ziglang.org/documentation/master/#Sentinel-Terminated-Pointers[#哨兵终止指针] 与 link:https://ziglang.org/documentation/master/#Explicit-Casts[#显式转换]）。
+
+[[section-1]]
+== 在内存中构建集合
+
+数组拥有存储而切片借用存储，因此编译器在长度、可变性与生命周期方面强制执行不同的保证；掌握它们的相互作用使迭代更可预测，并将大多数边界检查移至调试构建。
+
+[[section-1-sub-a]]
+=== 作为拥有存储的数组
+
+数组在其类型中携带长度，按值复制，并为你提供一个可变的基线，从中可以分割只读与读写切片。
+
+[source,zig]
+----
+
+include::{sourcedir}/03__data-fundamentals/arrays_and_slices.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run arrays_and_slices.zig
+----
+
+.Output
+[source,shell]
+----
+array len=4 allows mutation
+mutable_slice: len=4 head=-3
+prefix: len=2 head=-3
+values[0] after slice write = -3
+empty slice len=0 is zero-length
+copy[0]=-1 owned[0]=1
+zero slice len=0 from literal
+----
+
+[NOTE]
+可变切片与原始数组共享存储，而 `[]const` 前缀阻止写入——这是一个有意的边界，迫使只读消费者保持诚实。
+
+==== 内存布局：数组与切片
+
+Understanding how arrays and slices are laid out in memory clarifies why "arrays own storage while slices borrow it" and why array-to-slice coercion is a cheap operation:
+
+[mermaid]
+....
+graph TB
+    subgraph "Array in Memory"
+        ARRAY_DECL["const values: [4]i32 = .{1, 2, 3, 4}"]
+        ARRAY_MEM["Memory Layout (16 bytes)\n\nstack frame\n| 1 | 2 | 3 | 4 |"]
+        
+        ARRAY_DECL --> ARRAY_MEM
+    end
+    
+    subgraph "Slice in Memory"
+        SLICE_DECL["const slice: []const i32 = &values"]
+        SLICE_MEM["Memory Layout (16 bytes on 64-bit)\n\nstack frame\n|    ptr    |   len=4   |"]
+        POINTS["ptr points to array data"]
+        
+        SLICE_DECL --> SLICE_MEM
+        SLICE_MEM --> POINTS
+    end
+    
+    POINTS -.->|"references"| ARRAY_MEM
+    
+    subgraph "Key Differences"
+        DIFF1["Array: Stores data inline<br/>Size = elem_size × length"]
+        DIFF2["Slice: Stores pointer + length<br/>Size = 2 × pointer_size (16 bytes on 64-bit)"]
+        DIFF3["Coercion: &array → slice<br/>Just creates {ptr, len} pair"]
+    end
+....
+
+**为什么这很重要：**
+
+* 数组具有**值语义**：分配数组会复制所有元素
+* 切片具有**引用语义**：分配切片只会复制指针与长度
+* 数组到切片的强制转换（`&array`）是廉价的——它不复制数据，只是创建一个描述符
+* 切片是“胖指针”：它们携带运行时长度信息，支持边界检查
+
+这就是为什么函数通常接受切片作为参数——它们可以处理数组、切片和两者的部分，而无需复制底层数据。
+
+[[section-1-sub-b]]
+=== 实践中的字符串与哨兵
+
+哨兵终止数组桥接到 C API，而不牺牲切片的安全性；你可以用 `std.mem.span` 重新解释字节流，并在保留哨兵约定时仍然变异底层缓冲区。
+
+[source,zig]
+----
+    
+include::{sourcedir}/03__data-fundamentals/sentinel_strings.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run sentinel_strings.zig
+----
+
+.Output
+[source,shell]
+----
+literal len=17 contents="data fundamentals"
+trimmed slice len=4 -> Labe
+full label after mutation: LabeX
+----
+
+哨兵切片保持尾部零完整，因此即便在本地变异后，为 FFI 获取 `pass:[[*:0\]u8]` 仍然有效，而普通切片在 Zig 内提供符合人体工程学的迭代（参考 link:https://ziglang.org/documentation/master/#Type-Coercion[#类型强制转换]）。
+
+TIP: `std.mem.span` 将哨兵指针转换为普通切片而不克隆数据，当你临时需要边界检查或切片辅助后再返回指针 API 时，它是理想选择。
+
+[[section-1-sub-c]]
+=== 不可变与可变视图
+
+当调用者仅检查数据时，优先使用 `[]const T`——Zig 会乐于将可变切片强制转换为 const 视图，提供 API 清晰度，并让意外写入在一开始就无法编译。
+
+[[section-2]]
+== 指针模式与转换工作流
+
+当你共享存储、与外部布局互操作或超出切片边界时，指针就会出现；通过依赖可选包装与显式转换，你保持意图清晰，并允许安全检查在假设失效时触发。
+
+[[pointer-shapes]]
+=== 指针形状参考
+
+Zig offers multiple pointer types, each with different safety guarantees and use cases. Understanding when to use each shape is essential for writing safe, efficient code:
+
+[mermaid]
+....
+graph TB
+    subgraph "Pointer Shapes"
+        SINGLE["*T<br/>Single-Item Pointer"]
+        MANY["[*]T<br/>Many-Item Pointer"]
+        SLICE["[]T<br/>Slice"]
+        OPTIONAL["?*T<br/>Optional Pointer"]
+        SENTINEL_PTR["[*:0]T<br/>Sentinel Many-Item"]
+        SENTINEL_SLICE["[:0]T<br/>Sentinel Slice"]
+    end
+    
+    subgraph "Characteristics"
+        SINGLE --> S_BOUNDS["✓ Bounds: Single element<br/>✓ Safety: Dereference checked<br/>📍 Use: Function parameters, references"]
+        
+        MANY --> M_BOUNDS["⚠ Bounds: Unknown length<br/>✗ Safety: No bounds checking<br/>📍 Use: C interop, tight loops"]
+        
+        SLICE --> SL_BOUNDS["✓ Bounds: Runtime length<br/>✓ Safety: Bounds checked<br/>📍 Use: Most Zig code, iteration"]
+        
+        OPTIONAL --> O_BOUNDS["✓ Bounds: May be null<br/>✓ Safety: Must unwrap first<br/>📍 Use: Optional references"]
+        
+        SENTINEL_PTR --> SP_BOUNDS["✓ Bounds: Until sentinel<br/>~ Safety: Sentinel must exist<br/>📍 Use: C strings, null-terminated"]
+        
+        SENTINEL_SLICE --> SS_BOUNDS["✓ Bounds: Length + sentinel<br/>✓ Safety: Both length and sentinel<br/>📍 Use: Zig ↔ C string bridge"]
+    end
+....
+
+**比较表：**
+
+|===
+| 形状 | 示例 | 长度已知？ | 边界检查？ | 常见用途
+
+| `*T`
+| `*i32`
+| 单个元素
+| 是（隐式）
+| 单项引用
+
+| `[*]T`
+| `[*]i32`
+| 未知
+| **否**
+| C 数组、指针算术
+
+| `[]T`
+| `[]i32`
+| 运行时（在切片中）
+| **是**
+| 主要 Zig 集合类型
+
+| `?*T`
+| `?*i32`
+| 单个（若非 null）
+| 是 + null 检查
+| 可选引用
+
+| `[*:0]T`
+| `[*:0]u8`
+| 直到哨兵
+| 哨兵必须存在
+| C 字符串（`char*`）
+
+| `[:0]T`
+| `[:0]u8`
+| 运行时 + 哨兵
+| 是 + 哨兵保证
+| 用于 C API 的 Zig 字符串
+|===
+
+**指导原则：**
+
+* **默认使用切片**（`[]T`）用于所有 Zig 代码——它们提供安全与便利
+* **使用单项指针**（`pass:[*T]`）当你需要变异单个值或按引用传递时
+* **避免多项指针**（`pass:[[*\]T]`）除非与 C 接口或在性能关键的内部循环中
+* **使用可选指针**（`pass:[?*T]`）当 null 是有意义的状态时，而非用于错误处理
+* **使用哨兵类型**（`pass:[[*:0\]T]`、`[:0]T`）在 C 边界，内部转换为切片
+
+[[workflow-1]]
+=== 用于共享可变性的可选指针
+
+Optional single-item pointers expose mutability without guessing at lifetimes—capture them only when present, mutate through the dereference, and fall back gracefully when the pointer is absent.
+
+[source,zig]
+----
+
+include::{sourcedir}/03__data-fundamentals/pointers_and_optionals.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run pointers_and_optionals.zig
+----
+
+.Output
+[source,shell]
+----
+alias -> reading 42
+optional pointer empty
+optional pointer mutated to 52
+slice view len=4
+samples[2] via many pointer = 42
+----
+
+`pass:[?*Sensor]` 门控将可变性隐藏在模式匹配之后，而多项指针（`pass:[[*\]i32]`）通过删除边界检查记录别名风险——这是为紧凑循环与 FFI 保留的深思熟虑的权衡。
+
+[[workflow-2]]
+=== 对齐与重新解释数据
+
+当你必须重新解释原始字节时，使用转换内建函数提升对齐、改变指针元素类型，并保持整数/浮点转换的显式性，以便调试构建捕获未定义的假设（参考 link:https://ziglang.org/documentation/master/#bitCast[#位转换]）。
+
+[source,zig]
+----
+    
+include::{sourcedir}/03__data-fundamentals/alignment_and_casts.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run alignment_and_casts.zig
+----
+
+.Output
+[source,shell]
+----
+32-bit value = 0x11223344
+bitcast copy = 0x11223344
+truncate -> 0x44, widen -> 287454020
+floatCast ratio -> 1.875
+----
+
+通过链接 `@alignCast`、`@ptrCast` 与 `@bitCast`，你可以显式断言布局关系；随后 `@truncate`/`@intCast` 的转换在跨 API 变窄或加宽时保持整数宽度的正确性。
+
+[[notes-caveats]]
+== 说明与注意事项
+
+* 哨兵终止指针非常适合 C 桥接，但在 Zig 内部优先选择切片，以便边界检查保持可用且 API 暴露长度。
+* 使用 `@alignCast` 提升指针对齐在地址未对齐时仍会在 Debug 模式触发陷阱——在提升之前证明前置条件。
+* 多项指针（`pass:[[*\]T]`）删除边界检查；谨慎使用，并记录安全切片会强制的不变量。
+
+[[exercises]]
+== 练习
+
+* 扩展 `arrays_and_slices.zig`，从运行时数组创建零长度可变切片，然后通过 `std.ArrayList` 追加，观察切片视图如何保持有效。
+* 修改 `sentinel_strings.zig`，接受用户提供的 `[:0]u8`，通过返回错误联合来防止缺少哨兵的输入。
+* 增强 `alignment_and_casts.zig`，新增在截断前拒绝低字节为零的值的分支，展示 `@intCast` 如何依赖调用者提供的范围保证。

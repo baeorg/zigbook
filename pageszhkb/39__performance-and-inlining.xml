@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>性能和内联</title>
+<subtitle>通过语义内联、调用修饰符和SIMD优化热路径</subtitle>
+<date>2025-11-06</date>
+<copyright>
+<creativeCommons>
+<holder>zigbook</holder>
+</creativeCommons>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>我们的CLI调查为纪律性实验奠定了基础。<xref linkend="38__zig-cli-deep-dive" xrefstyle="short">第38章</xref> 现在我们关注Zig如何将这些命令行切换转换为机器级行为。语义内联、调用修饰符和显式SIMD都为你提供了优化热路径的杠杆——只要你仔细测量并尊重编译器的默认值。<link xl:href="https://ziglang.org/documentation/master/#inline-fn">#内联函数</link>
+</simpara>
+<simpara>下一章通过在其上分层分析和加固工作流来形式化该测量循环。<xref linkend="40__profiling-optimization-hardening" xrefstyle="short">第40章</xref>
+</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>当编译时语义必须胜过启发式时，强制或禁止内联。</simpara>
+</listitem>
+<listitem>
+<simpara>用<literal>@call</literal>和<literal>std.time.Timer</literal>采样热循环以比较构建模式。</simpara>
+</listitem>
+<listitem>
+<simpara>在接触目标特定内联函数之前，使用<literal>@Vector</literal>数学作为可移植SIMD的桥梁。</simpara>
+</listitem>
+</itemizedlist>
+<simpara><emphasis>参考资料：</emphasis> <link xl:href="https://ziglang.org/documentation/master/#call">#调用</link>，<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/time/Timer.zig">Timer.zig</link>，<link xl:href="https://ziglang.org/documentation/master/#vectors">#向量</link>
+</simpara>
+</chapter>
+<chapter xml:id="inline-semantics">
+<title>语义内联与优化器启发式</title>
+<simpara>Zig的<literal>inline</literal>关键字改变评估规则而不是暗示优化器：编译时已知的参数成为编译时常量，允许你生成类型或预计算值，而普通调用会推迟到运行时。</simpara>
+<simpara>内联函数限制了编译器的自由，因此只有在语义重要时才使用它们——传播<literal>comptime</literal>数据、改进调试或满足真实基准测试。</simpara>
+<chapter xml:id="understanding-optimization-modes">
+<title>理解优化模式</title>
+<simpara>在探索内联行为之前，理解影响编译器如何处理代码的优化模式很重要。下图显示了优化配置：</simpara>
+<figure xml:id="figure-optimization-config">
+<title>优化配置图</title>
+<mediaobject>
+<imageobject>
+<imagedata fileref="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAwIiBoZWlnaHQ9IjYwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8ZGVmcz4KICAgIDxzdHlsZT4KICAgICAgLm5vZGUgeyBmaWxsOiAjZjBmMGYwOyBzdHJva2U6ICMzMzM7IHN0cm9rZS13aWR0aDogMnB4OyB9CiAgICAgIC5lZGdlIHsgc3Ryb2tlOiAjMzMzOyBzdHJva2Utd2lkdGg6IDJweDsgfQogICAgPC9zdHlsZT4KICA8L2RlZnM+CiAgPGcgaWQ9Im9wdGltaXphdGlvbiI+CiAgICA8cmVjdCB4PSI1MCIgeT0iNTAiIHdpZHRoPSI3MDAiIGhlaWdodD0iNTAwIiBmaWxsPSJub25lIiBzdHJva2U9IiMzMzMiIHN0cm9rZS13aWR0aD0iMnB4Ii8+CiAgICA8dGV4dCB4PSI0MDAiIHk9IjkwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjI0IiBmb250LXdlaWdodD0iYm9sZCI+T3B0aW1pemF0aW9uPC90ZXh0PgogICAgCiAgICA8IS0tIE9wdGltaXphdGlvbiBTZXR0aW5ncyAtLT4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIxNTAiIHk9IjE1MCIgd2lkdGg9IjIwMCIgaGVpZ2h0PSI4MCIvPgogICAgPHRleHQgeD0iMjUwIiB5PSIxOTAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTYiPk9wdGltaXphdGlvbiBTZXR0aW5nczwvdGV4dD4KICAgIAogICAgPCEtLSBPcHRpbWl6ZSBNb2RlIC0tPgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjEwMCIgeT0iMzAwIiB3aWR0aD0iMTgwIiBoZWlnaHQ9IjgwIi8+CiAgICA8dGV4dCB4PSIxOTAiIHk9IjM0MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+b3B0aW1pemVfbW9kZTogIE9wdGltaXplTW9kZTwvdGV4dD4KICAgIDx0ZXh0IHg9IjE5MCIgeT0iMzYwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEyIj5EZWJ1ZywgUmVsZWFzZVNhZmUsPC90ZXh0PgogICAgPHRleHQgeD0iMTkwIiB5PSIzNzUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTIiPlJlbGVhc2VGYXN0LCBSZWxlYXNlU21hbGw8L3RleHQ+CiAgICAKICAgIDwhLS0gTFRPIC0tPgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjQwMCIgeT0iMzAwIiB3aWR0aD0iMTgwIiBoZWlnaHQ9IjgwIi8+CiAgICA8dGV4dCB4PSI0OTAiIHk9IjM0MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+bHRvOiBib29sPC90ZXh0PgogICAgPHRleHQgeD0iNDkwIiB5PSIzNjAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTIiPkxpbmsgVGltZSBPcHRpbWl6YXRpb248L3RleHQ+CiAgICAKICAgIDwhLS0gRWRnZXMgLS0+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjI1MCIgeTE9IjIzMCIgeDI9IjE5MCIgeTI9IjMwMCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSIyNTAiIHkxPSIyMzAiIHgyPSI0OTAiIHkyPSIzMDAiLz4KICA8L2c+Cjwvc3ZnPgo=">
+</imagedata>
+</imageobject>
+</mediaobject>
+</figure>
+<simpara>Zig提供四种不同的优化模式，每种模式在安全性、速度和二进制大小之间进行不同的权衡。<emphasis>调试</emphasis>模式禁用优化并保持完整的运行时安全检查，使其成为开发和调试的理想选择。编译器保留堆栈帧，发出符号信息，并且除非语义要求，否则从不内联函数。<emphasis>ReleaseSafe</emphasis>启用优化同时保留所有安全检查（边界检查、整数溢出检测等），在性能和错误检测之间取得平衡。<emphasis>ReleaseFast</emphasis>通过禁用运行时安全检查并启用包括启发式内联在内的积极优化来最大化速度。这是本章基准测试中使用的模式。<emphasis>ReleaseSmall</emphasis>优先考虑二进制大小而不是速度，通常完全禁用内联以减少代码重复。</simpara>
+<simpara>此外，<emphasis>链接时优化（LTO）</emphasis>可以通过<literal>-flto</literal>独立启用，允许链接器在整个编译单元上执行全程序优化。在基准测试内联行为时，这些模式会显著影响结果：<literal>inline</literal>函数在模式间行为相同（语义保证），但ReleaseFast中的启发式内联可能会内联调试或ReleaseSmall会保留为调用的函数。本章的示例使用<literal>-OReleaseFast</literal>来展示优化器行为，但你应该在模式间进行测试以理解完整的性能谱。</simpara>
+</chapter>
+<chapter xml:id="inline-fibonacci">
+<title>示例：使用内联函数的编译时数学</title>
+<simpara><literal>inline</literal>递归让我们将小型计算烘焙到二进制文件中，同时为较大输入留下运行时回退路径。<literal>@call</literal>内联函数提供了一个直接句柄，在参数可用时在编译时评估调用站点。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 39__performance-and-inlining.adoc - include::example$chapters-data/code/39__performance-and-inlining/01_inline_semantics.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig test 01_inline_semantics.zig</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>All 3 tests passed.</screen>
+<tip>
+<simpara><literal>.compile_time</literal>修饰符在调用方接触仅运行时状态时会失败。首先将这种实验包装在<literal>comptime</literal>块中，然后添加运行时测试，以便发布构建仍然被覆盖。</simpara>
+</tip>
+</chapter>
+</chapter>
+<chapter xml:id="call-modifiers">
+<title>引导调用进行测量</title>
+<simpara>Zig 0.15.2的自托管后端奖励准确的微基准测试。当与新的线程代码生成管道配对时，它们可以提供显著的速度提升。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#threaded-codegen">v0.15.2</link>
+</simpara>
+<simpara>使用<literal>@call</literal>修饰符比较内联、默认和从不内联调度，而无需重构调用站点。</simpara>
+<chapter xml:id="call-benchmark">
+<title>示例：在ReleaseFast下比较调用修饰符</title>
+<simpara>此基准测试在切换调用修饰符时固定优化器（<literal>-OReleaseFast</literal>）。每个变体产生相同的结果，但时间突出了当函数调用开销占主导地位时<literal>never_inline</literal>如何膨胀热循环。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 39__performance-and-inlining.adoc - include::example$chapters-data/code/39__performance-and-inlining/03_call_benchmark.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig run 03_call_benchmark.zig -OReleaseFast</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>optimize-mode=ReleaseFast iterations=5000000
+auto call   : 161394 ns
+always_inline: 151745 ns
+never_inline : 2116797 ns</screen>
+<note>
+<simpara>在<literal>-OReleaseSafe</literal>下执行相同运行会使差距更大，因为额外的安全检查放大了每次调用开销。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#x86-backend">v0.15.2</link> 当你需要慢速代码路径的编译器端归因时，使用<literal>zig run --time-report</literal>从上一章。<xref linkend="38__zig-cli-deep-dive" xrefstyle="short">第38章</xref>
+</simpara>
+</note>
+</chapter>
+</chapter>
+<chapter xml:id="vectorization">
+<title>使用@Vector进行可移植向量化</title>
+<simpara>当编译器无法自行推断SIMD使用时，<literal>@Vector</literal>类型提供了一个可移植的填充程序，尊重安全检查并回退标量执行。与<literal>@reduce</literal>配对，你可以表达水平归约，而无需编写目标特定的内联函数。<link xl:href="https://ziglang.org/documentation/master/#reduce">#reduce</link>
+</simpara>
+<chapter xml:id="vector-example">
+<title>示例：SIMD友好的点积</title>
+<simpara>标量和向量化版本产生相同的结果。分析确定额外的向量管道是否在目标上得到回报。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 39__performance-and-inlining.adoc - include::example$chapters-data/code/39__performance-and-inlining/02_vector_reduction.zig[]</programlisting>
+<simpara><emphasis>运行</emphasis></simpara>
+<screen>$ zig test 02_vector_reduction.zig</screen>
+<simpara><emphasis>输出</emphasis></simpara>
+<screen>All 1 tests passed.</screen>
+<tip>
+<simpara>一旦开始混合向量和标量，使用<literal>@splat</literal>提升常量并避免向量规则禁止的隐式转换。</simpara>
+</tip>
+</chapter>
+</chapter>
+<chapter xml:id="code-generation-features">
+<title>影响性能的代码生成功能</title>
+<simpara>除了优化模式之外，几个代码生成功能会影响运行时性能和可调试性。理解这些标志有助于你推理性能权衡：</simpara>
+<figure xml:id="figure-codegen-features">
+<title>代码生成功能图</title>
+<mediaobject>
+<imageobject>
+<imagedata fileref="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAwIiBoZWlnaHQ9IjcwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8ZGVmcz4KICAgIDxzdHlsZT4KICAgICAgLm5vZGUgeyBmaWxsOiAjZjBmMGYwOyBzdHJva2U6ICMzMzM7IHN0cm9rZS13aWR0aDogMnB4OyB9CiAgICAgIC5lZGdlIHsgc3Ryb2tlOiAjMzMzOyBzdHJva2Utd2lkdGg6IDJweDsgfQogICAgPC9zdHlsZT4KICA8L2RlZnM+CiAgPGcgaWQ9ImNvZGVnZW4iPgogICAgPHJlY3QgeD0iNTAiIHk9IjUwIiB3aWR0aD0iNzAwIiBoZWlnaHQ9IjYwMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMzMzIiBzdHJva2Utd2lkdGg9IjJweCIvPgogICAgPHRleHQgeD0iNDAwIiB5PSI5MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIyNCIgZm9udC13ZWlnaHQ9ImJvbGQiPkNvZGUgR2VuZXJhdGlvbiBGZWF0dXJlczwvdGV4dD4KICAgIAogICAgPCEtLSBGZWF0dXJlIEZsYWdzIC0tPgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjMwMCIgeT0iMTUwIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjgwIi8+CiAgICA8dGV4dCB4PSI0MDAiIHk9IjE5MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNiI+RmVhdHVyZSBGbGFnczwvdGV4dD4KICAgIAogICAgPCEtLSBVbndpbmQgVGFibGVzIC0tPgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjEwMCIgeT0iMzAwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjgwIi8+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjMzMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+dW53aW5kX3RhYmxlczogYm9vbDwvdGV4dD4KICAgIDx0ZXh0IHg9IjE3NSIgeT0iMzYwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEyIj5HZW5lcmF0ZSAuZWhfZnJhbWU8L3RleHQ+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjM3NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiI+Zm9yIGV4Y2VwdGlvbiBoYW5kbGluZzwvdGV4dD4KICAgIAogICAgPCEtLSBTdGFjayBQcm90ZWN0b3IgLS0+CiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iMzAwIiB5PSIzMDAiIHdpZHRoPSIxNTAiIGhlaWdodD0iODAiLz4KICAgIDx0ZXh0IHg9IjM3NSIgeT0iMzMwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE0Ij5zdGFja19wcm90ZWN0b3I6IGJvb2w8L3RleHQ+CiAgICA8dGV4dCB4PSIzNzUiIHk9IjM2MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiI+U3RhY2sgY2FuYXJ5IGNoZWNrczwvdGV4dD4KICAgIDx0ZXh0IHg9IjM3NSIgeT0iMzc1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEyIj5idWZmZXIgb3ZlcmZsb3cgZGV0ZWN0aW9uPC90ZXh0PgogICAgCiAgICA8IS0tIFN0YWNrIENoZWNrIC0tPgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjUwMCIgeT0iMzAwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjgwIi8+CiAgICA8dGV4dCB4PSI1NzUiIHk9IjMzMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+c3RhY2tfY2hlY2s6IGJvb2w8L3RleHQ+CiAgICA8dGV4dCB4PSI1NzUiIHk9IjM2MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiI+U3RhY2sgcHJvYmluZzwvdGV4dD4KICAgIDx0ZXh0IHg9IjU3NSIgeT0iMzc1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEyIj5wcmV2ZW50cyBvdmVyZmxvdzwvdGV4dD4KICAgIAogICAgPCEtLSBSZWQgWm9uZSAtLT4KICAgIDxyZWN0IGNsYXNzPSJub2RlIiB4PSIxMDAiIHk9IjQ1MCIgd2lkdGg9IjE1MCIgaGVpZ2h0PSI4MCIvPgogICAgPHRleHQgeD0iMTc1IiB5PSI0ODAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiPnJlZF96b25lOiA/Ym9vbDwvdGV4dD4KICAgIDx0ZXh0IHg9IjE3NSIgeT0iNTEwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEyIj5SZWQgem9uZSBvcHRpbWl6YXRpb248L3RleHQ+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjUyNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiI+KHg4Nl82NCwgQUFyY2g2NCk8L3RleHQ+CiAgICAKICAgIDwhLS0gT21pdCBGcmFtZSBQb2ludGVyIC0tPgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjMwMCIgeT0iNDUwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjgwIi8+CiAgICA8dGV4dCB4PSIzNzUiIHk9IjQ4MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+b21pdF9mcmFtZV9wb2ludGVyOiBib29sPC90ZXh0PgogICAgPHRleHQgeD0iMzc1IiB5PSI1MTAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTIiPk9taXQgZnJhbWUgcG9pbnRlcjwvdGV4dD4KICAgIDx0ZXh0IHg9IjM3NSIgeT0iNTI1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEyIj5mb3IgcGVyZm9ybWFuY2U8L3RleHQ+CiAgICAKICAgIDwhLS0gVmFsZ3JpbmQgLS0+CiAgICA8cmVjdCBjbGFzcz0ibm9kZSIgeD0iNTAwIiB5PSI0NTAiIHdpZHRoPSIxNTAiIGhlaWdodD0iODAiLz4KICAgIDx0ZXh0IHg9IjU3NSIgeT0iNDgwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE0Ij52YWxncmluZDogYm9vbDwvdGV4dD4KICAgIDx0ZXh0IHg9IjU3NSIgeT0iNTEwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEyIj5WYWxncmluZCBjbGllbnQgcmVxdWVzdHM8L3RleHQ+CiAgICA8dGV4dCB4PSI1NzUiIHk9IjUyNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiI+Zm9yIG1lbW9yeSBkZWJ1Z2dpbmc8L3RleHQ+CiAgICAKICAgIDwhLS0gU2luZ2xlIFRocmVhZGVkIC0tPgogICAgPHJlY3QgY2xhc3M9Im5vZGUiIHg9IjEwMCIgeT0iNjAwIiB3aWR0aD0iMTUwIiBoZWlnaHQ9IjgwIi8+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjYzMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+c2luZ2xlX3RocmVhZGVkOiBib29sPC90ZXh0PgogICAgPHRleHQgeD0iMTc1IiB5PSI2NjAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTIiPkFzc3VtZSBzaW5nbGUtdGhyZWFkZWQ8L3RleHQ+CiAgICA8dGV4dCB4PSIxNzUiIHk9IjY3NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiI+ZW5hYmxlIG9wdGltaXphdGlvbnM8L3RleHQ+CiAgICAKICAgIDwhLS0gRWRnZXMgLS0+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjQwMCIgeTE9IjIzMCIgeDI9IjE3NSIgeTI9IjMwMCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSI0MDAiIHkxPSIyMzAiIHgyPSIzNzUiIHkyPSIzMDAiLz4KICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iNDAwIiB5MT0iMjMwIiB4Mj0iNTc1IiB5Mj0iMzAwIi8+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjE3NSIgeTE9IjM4MCIgeDI9IjE3NSIgeTI9IjYwMCIvPgogICAgPGxpbmUgY2xhc3M9ImVkZ2UiIHgxPSIzNzUiIHkxPSIzODAiIHgyPSIzNzUiIHkyPSI0NTAiLz4KICAgIDxsaW5lIGNsYXNzPSJlZGdlIiB4MT0iNTc1IiB5MT0iMzgwIiB4Mj0iNTc1IiB5Mj0iNDUwIi8+CiAgICA8bGluZSBjbGFzcz0iZWRnZSIgeDE9IjE3NSIgeTE9IjUzMCIgeDI9IjE3NSIgeTI9IjYwMCIvPgogIDwvZz4KPC9zdmc+Cg==">
+</imagedata>
+</imageobject>
+</mediaobject>
+</figure>
+<simpara><emphasis>omit_frame_pointer</emphasis>标志与性能工作特别相关：启用时（ReleaseFast中典型），编译器释放帧指针寄存器（x86_64上的RBP，ARM上的FP）以供通用使用，改善寄存器分配并启用更积极的优化。然而，这使得堆栈展开更加困难。调试器和分析器可能会产生不完整或缺失的堆栈跟踪。</simpara>
+<simpara><emphasis>red_zone</emphasis>优化（仅限x86_64和AArch64）允许函数使用栈指针下方的128字节而无需调整RSP，减少叶函数中的序言/尾声开销。<emphasis>栈保护</emphasis>添加金丝雀检查以检测缓冲区溢出但增加运行时成本。这就是ReleaseFast禁用它原因。<emphasis>栈检查</emphasis>检测函数以探测栈并防止溢出，对深度递归有用但代价高昂。<emphasis>展开表</emphasis>生成<literal>.eh_frame</literal>段用于异常处理和调试器堆栈遍历。调试模式始终包括它们；发布模式可能会为了大小而省略它们。</simpara>
+<simpara>当练习建议使用<literal>@call(.never_inline, ...)</literal>测量分配器热路径时，这些标志解释了为什么调试模式显示更好的堆栈跟踪（保留帧指针）以较慢执行为代价（额外指令，无寄存器优化）。性能关键代码应使用ReleaseFast进行基准测试，但使用调试进行正确性验证，以捕获优化器可能隐藏的问题。</simpara>
+</chapter>
+<chapter xml:id="exercises">
+<info>
+<title>练习</title>
+</info>
+<itemizedlist>
+<listitem>
+<simpara>为基准测试程序添加<literal>--mode</literal>标志，这样你就可以在无需编辑代码的情况下在调试、ReleaseSafe和ReleaseFast运行之间切换。<xref linkend="38__zig-cli-deep-dive" xrefstyle="short">第38章</xref>
+</simpara>
+</listitem>
+<listitem>
+<simpara>用处理长度不是四的倍数的切片的余数循环扩展点积示例。测量SIMD仍然获胜的交叉点。</simpara>
+</listitem>
+<listitem>
+<simpara>在第10章的分配器热路径上试验<literal>@call(.never_inline, ...)</literal>，以确认调试中改进的堆栈跟踪是否值得运行时成本。<xref linkend="10__allocators-and-memory-management" xrefstyle="short">第10章</xref>
+</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<info>
+<title>替代方案和边缘情况：</title>
+</info>
+<itemizedlist>
+<listitem>
+<simpara>在<literal>zig run</literal>内部运行的微基准测试共享编译缓存。在比较时间之前用虚拟运行预热缓存，以避免偏差。<link xl:href="ZIG_DEEP_WIKI.md#entry-points-and-command-structure">#入口点和命令结构</link>
+</simpara>
+</listitem>
+<listitem>
+<simpara>自托管x86后端速度快但不完美。如果你在探索积极内联模式时注意到错误编译，请回退到<literal>-fllvm</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara>ReleaseSmall通常完全禁用内联以节省大小。当你需要微小二进制文件和调优热路径时，隔离热函数并从ReleaseFast构建的共享库中调用它们。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

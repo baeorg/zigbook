@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>压缩与归档</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览</title>
+<simpara>Zig 将压缩 API 精简为务实内核：高质量解压器可插入新的<literal>std.Io.Reader</literal>/<literal>Writer</literal>接口，为 TAR 与 ZIP 等格式提供数据且无隐藏副作用。<link xl:href="https://ziglang.org/download/0.15.1/release-notes.html#reworked-stdcompressflate">#重构 stdcompressflate</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/compress/flate.zig">flate.zig</link> 将这些部件组合起来，使你能复原日志、打包资源或将注册表直接吸入内存，同时保持一致的显式资源管理纪律。</simpara>
+<simpara>由于 Zig 将归档视为简单字节流，挑战从“魔法助手函数”转移到组合合适的迭代器、缓冲与元数据校验。掌握此处的解压构件可为你的包式流水线与部署工具做准备。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/tar.zig">tar.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/zip.zig">zip.zig</link></simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>直接驱动 <literal>std.compress.flate.Decompress</literal>、<literal>std.compress.lzma2.decompress</literal> 及其同类，直接针对 <literal>std.Io.Reader</literal>/<literal>Writer</literal> 端点。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/compress/flate/Decompress.zig">Decompress.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/compress/lzma2.zig">lzma2.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Io/Writer.zig">Writer.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>选择历史缓冲区、流限制和分配器，以在调试和发布构建下都保持解压缩内存安全。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+<listitem>
+<simpara>动态生成小型 TAR 档案并迭代它们，而不接触磁盘状态。<link xl:href="28__filesystem-and-io.xml">28</link></simpara>
+</listitem>
+<listitem>
+<simpara>检查和提取 ZIP 中心目录条目，同时强制执行文件系统卫生和压缩方法约束。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="streaming-decompression">
+<title>流式解压接口</title>
+<simpara>Zig 的解压缩器使用相同的流式方言：您将任何读取器交给它们，可选择提供临时缓冲区，它们将有效负载发射到您已经拥有的写入器中。这种设计让您可以完全控制分配、错误传播和刷新行为。<link xl:href="22__build-system-deep-dive.xml">22</link></simpara>
+<section xml:id="streaming-decompression-flate">
+<title>实践中的 Flate 容器</title>
+<simpara>Deflate 样式有效负载（原始、zlib、gzip）依赖最多 32 KiB 的历史窗口。Zig 0.15.2 允许您在直接将数据管道传输到另一个写入器时跳过分配该窗口——传递 <literal>&amp;.{}</literal>，解码器将使用最小缓冲调用 <literal>streamRemaining</literal>。</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 49__compression-and-archives.adoc - include::example$chapters-data/code/49__compression-and-archives/inflate_greeting.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run inflate_greeting.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">decoded (49 bytes): Streaming decompression keeps tools predictable.</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara><literal>std.Io.Writer.fixed</literal> 提供具有确定性容量的栈分配接收器；之后始终刷新手动 stdout 缓冲区，以避免进程退出时丢失输出。<link xl:href="01__boot-basics.xml">1</link></simpara>
+</tip>
+</section>
+<section xml:id="streaming-decompression-lzma2">
+<title>无外部工具的 LZMA2</title>
+<simpara>一些注册表仍使用 LZMA2 帧来提供确定性的逐字节有效负载。Zig 将解码器封装在单个辅助函数中，为您扩展一个 <literal>std.Io.Writer.Allocating</literal>——非常适合短配置包或固件块。<link xl:href="12__config-as-data.xml">12</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 49__compression-and-archives.adoc - include::example$chapters-data/code/49__compression-and-archives/lzma2_memory_decode.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run lzma2_memory_decode.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">lzma2 decoded (13 bytes):
+Hello
+World!</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>std.heap.GeneralPurposeAllocator</literal> 现在通过枚举报告泄漏——在清理期间断言 <literal>.ok</literal>，以便损坏的归档在调试构建下显著失败。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/heap.zig">heap.zig</link> <link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</note>
+</section>
+<section xml:id="streaming-decompression-other-codecs">
+<title>zstd、xz 等的窗口大小选择</title>
+<simpara><literal>std.compress.zstd.Decompress</literal> 默认为 8 MiB 窗口，而 <literal>std.compress.xz.Decompress</literal> 在流最终化过程中执行校验和验证。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/compress/zstd.zig">zstd.zig</link> <link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/compress/xz.zig">xz.zig</link> 连接不熟悉的数据源时，请从空的临时缓冲区开始以最小化峰值内存，然后在选择持久化环形缓冲区之前使用 <literal>ReleaseFast</literal> 构建进行性能分析。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</section>
+</chapter>
+<chapter xml:id="archive-workflows">
+<title>归档工作流</title>
+<simpara>掌握了这些解压缩原语后，归档变成了组合练习：特定格式的迭代器为您提供元数据，而您决定是缓冲、丢弃还是流式传输到磁盘。<link xl:href="28__filesystem-and-io.xml">28</link></simpara>
+<section xml:id="archive-workflows-tar">
+<title>在内存中完成 TAR 的往返</title>
+<simpara><literal>std.tar.Writer</literal> 发出确定性 512 字节块，因此您可以在 RAM 中组装小束，检查它们，然后才决定是否持久化它们。<link xl:href="24__zig-package-manager-deep.xml">24</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 49__compression-and-archives.adoc - include::example$chapters-data/code/49__compression-and-archives/tar_roundtrip.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run tar_roundtrip.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">tar archive is 1536 bytes and holds:
+- reports (directory, 0 bytes)
+- reports/summary.txt (file, 19 bytes)
+  contents: cpu=28%
+mem=512MiB</programlisting>
+</para>
+</formalpara>
+<tip>
+<simpara>在常规文件上调用 <literal>Iterator.next</literal> 后，您必须用 <literal>streamRemaining</literal> 清空有效负载；否则，下一个标头将对齐错误，迭代器会抛出 <literal>error.UnexpectedEndOfStream</literal>。</simpara>
+</tip>
+</section>
+<section xml:id="archive-workflows-zip">
+<title>安全窥视 ZIP 中央目录</title>
+<simpara>ZIP 支持通过 <literal>std.zip.Iterator</literal> 公开中央目录，将提取策略留给您决定。通过 <literal>std.testing.tmpDir</literal> 路由条目可保持工件隔离，同时您可以验证压缩方法并检查内容。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/testing.zig">testing.zig</link></simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 49__compression-and-archives.adoc - include::example$chapters-data/code/49__compression-and-archives/zip_iterator_preview.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run zip_iterator_preview.zig</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">zip archive contains:
+- demo/readme.txt (store, 34 bytes)
+  text: Decompression from Zig streaming.
+
+- demo/raw.bin (store, 4 bytes)
+  bytes:
+    00 01 02 03</programlisting>
+</para>
+</formalpara>
+<note>
+<simpara><literal>std.zip.Entry.extract</literal> 仅支持 <literal>store</literal> 和 <literal>deflate</literal>；提前拒绝其他方法，或在互操作性需要时调用第三方库。</simpara>
+</note>
+</section>
+<section xml:id="archive-workflows-patterns">
+<title>混合来源的模式目录</title>
+<simpara>混合这些技术可以从包注册表补充清单，在签名检查之前解压缩发布版本工件，或为 GPU 上传准备二进制 blob——所有这些都无需离开 Zig 的标准工具箱。<link xl:href="35__project-gpu-compute-in-zig.xml">35</link></simpara>
+</section>
+</chapter>
+<chapter xml:id="notes-caveats">
+<title>注意与警示</title>
+<itemizedlist>
+<listitem>
+<simpara>向 <literal>std.compress.flate.Decompress.init</literal> 传递零长度缓冲区会禁用历史记录重用，但大型归档受益于重用 <literal>[flate.max_window_len]u8</literal> 临时数组。</simpara>
+</listitem>
+<listitem>
+<simpara>TAR 迭代器维护未读文件字节的状态；在前进到下一个标头之前，始终流式传输或丢弃它们。</simpara>
+</listitem>
+<listitem>
+<simpara>ZIP 提取仅在 <literal>allow_backslashes = true</literal> 时规范化反斜杠；强制使用正斜杠以避免 Windows 上的目录遍历错误。<link xl:href="33__c-interop-import-export-abi.xml">33</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>重构flate示例，直接流式传输到 <literal>std.fs.File.stdout().writer</literal> 而不使用固定缓冲区，并分析不同构建模式下的差异。<link xl:href="39__performance-and-inlining.xml">39</link></simpara>
+</listitem>
+<listitem>
+<simpara>扩展 TAR 往返演示，附加一个生成的校验和脚注文件，总结每个条目的长度。<link xl:href="43__stdlib-index.xml">43</link></simpara>
+</listitem>
+<listitem>
+<simpara>通过计算提取数据的 CRC32 并与中央目录记录比较，为 ZIP 迭代器添加 <literal>verify_checksums</literal> 校验步骤。<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/hash/crc.zig">crc.zig</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>压缩后端（特别是 zstd）在没有 BMI2 的较旧 CPU 上可能需要更大的缓冲区；在选择精简窗口之前检测 <literal>builtin.cpu.features</literal>。<link xl:href="41__cross-compilation-and-wasm.xml">41</link></simpara>
+</listitem>
+<listitem>
+<simpara>LZMA2 解码仍会分配内部状态；如果您处理许多小帧，请存储一个共享解码器以避免堆抖动。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+</listitem>
+<listitem>
+<simpara>对于可重现的发布归档，明确固定文件顺序和时间戳——否则主机文件系统元数据会泄露。<link xl:href="24__zig-package-manager-deep.xml">24</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>

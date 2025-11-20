@@ -1,0 +1,352 @@
+////
+changes: ["控制流基础章节初稿"]
+examples_compile: yes
+keywords: ["控制流", "循环", "选择"]
+last_updated: 2025-11-01
+last_verified: 2025-11-01
+next_chapter: "03__data-fundamentals"
+open_questions: []
+previous_chapter: "01__boot-basics"
+status: reviewed
+xref_complete: true
+////
+
+= 控制流基础
+:chapter-number: 2
+:chapter-slug: control-flow-essentials
+:copyright: zigbook
+:doctype: book
+:embedded:
+:experimental:
+:icons: font
+:partnums:
+:pygments-linenums-mode: inline
+:pygments-style: manni
+:safe-mode-level: 0
+:sectanchors:
+:sectids:
+:sectlinks:
+:source-highlighter: pygments
+:sourcedir: example$chapters-data/code
+:webfonts:
+:xrefstyle: short
+:zig-version: 0.15.2
+:linkcss:
+:stylesdir: styles
+:stylesheet: zigbook.css
+
+[[overview]]
+== 概览
+
+第1章建立了运行 Zig 程序和处理数据的基础；现在我们将这些值转化为决策，通过遍历语言的控制流原语，详见 link:https://ziglang.org/documentation/master/#if[#if]。Zig 的控制流是面向表达式的，因此选择分支或循环通常会产生一个值，而不仅仅是指导执行。
+
+我们探索循环、标记流与 `switch` 背后的语义，强调 `break`、`continue` 与 `else` 子句如何在安全与发布构建中传达意图；参见 link:https://ziglang.org/documentation/master/#while[#while]、link:https://ziglang.org/documentation/master/#for[#for] 与 link:https://ziglang.org/documentation/master/#switch[#switch]。
+
+[[learning-goals]]
+== 学习目标
+
+* 使用 `if` 表达式（可选负载捕获）在显式处理缺失数据路径的同时派生值。
+* 将 `while`/`for` 循环与标记的 `break`/`continue` 结合，清晰管理嵌套迭代与退出条件。
+* 应用 `switch` 枚举详尽的决策表，包括范围、多个值与枚举。
+* 利用循环 `else` 子句与标记中断，直接从迭代构造返回值。
+
+[[pipeline-overview]]
+== 控制流代码发生了什么
+
+在深入控制流语法之前，了解编译器如何处理你的 `if`、`while` 与 `switch` 语句是有帮助的。Zig 通过多个中间表示（IR）转换源代码，每个阶段服务于特定目的：
+
+[mermaid]
+....
+graph LR
+    SOURCE["Source Code<br/>.zig files"]
+    TOKENS["Token Stream"]
+    AST["AST<br/>(Ast.zig)"]
+    ZIR["ZIR<br/>(Zir)"]
+    AIR["AIR<br/>(Air.zig)"]
+    MIR["MIR<br/>(codegen.AnyMir)"]
+    MACHINE["Machine Code"]
+
+    SOURCE -->|"tokenizer.zig"| TOKENS
+    TOKENS -->|"Parse.zig"| AST
+    AST -->|"AstGen.zig"| ZIR
+    ZIR -->|"Sema.zig"| AIR
+    AIR -->|"codegen.generateFunction()"| MIR
+    MIR -->|"codegen.emitFunction()"| MACHINE
+....
+
+|===
+| IR Stage | Representation | Key Properties | Purpose for Control Flow
+
+| *Tokens*
+| Flat token stream
+| Raw lexical analysis
+| Recognizes `if`, `while`, `switch` keywords
+
+| *AST*
+| Tree structure
+| Syntax-correct, untyped
+| Preserves structure of nested control flow
+
+| *ZIR*
+| Instruction-based IR
+| Untyped, single SSA form per declaration
+| Lowers control flow to blocks and branches
+
+| *AIR*
+| Instruction-based IR
+| Fully typed, single SSA form per function
+| Type-checked branches with known outcomes
+
+| *MIR*
+| Backend-specific IR
+| Near machine code, register-allocated
+| Converts to jumps and conditional instructions
+|===
+
+The control flow constructs you write—`if` expressions, `switch` statements, labeled loops—are systematically lowered through these stages. By the time your code reaches machine code, a `switch` has become a jump table, and a `while` loop is a conditional branch instruction. The diagrams in this chapter show how this lowering happens at the ZIR stage, where control flow becomes explicit blocks and branches.
+
+[[section-1]]
+== 核心控制结构
+
+Zig 的控制流将块与循环视为表达式，这意味着每个构造都可以产生一个值，并直接参与赋值或返回语句。本节逐步介绍条件语句、循环与 `switch`，展示它们如何契合表达式模型同时保持高可读性，详见 link:https://ziglang.org/documentation/master/#Blocks[#Blocks]。
+
+[[section-1-sub-a]]
+=== 作为表达式的条件语句
+
+`if` 的值即为运行分支的结果；可选捕获形式（`if (opt) |value|`）是解包可选值的简洁方式，同时避免遮蔽先前名称。嵌套的标记块（`blk: { ... }`）允许在仍然返回单个值的同时选择多个结果。
+
+[source,zig]
+----
+
+include::{sourcedir}/02__control-flow-essentials/branching.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run branching.zig
+----
+
+.Output
+[source,shell]
+----
+sample 0: positive
+sample 1: zero
+sample 2: missing
+sample 3: negative
+----
+
+该函数返回 `[]const u8`，因为 `if` 表达式本身产生字符串，强调面向表达式的分支如何保持调用点紧凑。`samples` 循环展示 `for` 可使用索引元组 `(item, index)` 迭代，同时仍依赖上游表达式格式化输出。
+
+==== if-else 表达式如何降低到 ZIR
+
+当编译器遇到 `if` 表达式时，会在 ZIR（Zig 中间表示）中将其转换为块与条件分支。确切的降低取决于是否需要结果位置；参见 xref:60__advanced-result-location-semantics.adoc#patterns[result location]：
+
+[mermaid]
+....
+graph TB
+    IfNode["if (cond) then_expr else else_expr"] --> EvalCond["Evaluate condition"]
+
+    EvalCond --> CheckRL["Result location needed?"]
+
+    CheckRL -->|No RL| SimpleIf["Generate condbr<br/>Two blocks with breaks"]
+    CheckRL -->|With RL| BlockIf["Generate block_inline<br/>Shared result pointer"]
+
+    SimpleIf --> ThenBlock["then_block:<br/>eval then_expr<br/>break value"]
+    SimpleIf --> ElseBlock["else_block:<br/>eval else_expr<br/>break value"]
+
+    BlockIf --> AllocResult["alloc_inferred"]
+    BlockIf --> ThenBlockRL["then_block:<br/>write to result ptr"]
+    BlockIf --> ElseBlockRL["else_block:<br/>write to result ptr"]
+....
+
+当你写下 `const result = if (x > 0) "positive" else "negative"` 时，编译器会创建两个块（每个分支一个），并使用 `break` 语句返回所选值。这也是 `if` 表达式可以参与赋值的原因——它们被编译为通过中断产生值的块。
+
+[[section-1-sub-b]]
+=== 带标记的 While 与 For 循环
+
+Zig 中的循环可通过将 `break` 的结果与循环的 `else` 子句配对来直接传递值；当执行在未中断的情况下完成时会触发。标记循环（`outer: while (...)`）协调嵌套迭代，使你可以无需临时布尔变量就提前退出或跳过工作。
+
+[source,zig]
+----
+
+include::{sourcedir}/02__control-flow-essentials/loop_labels.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run loop_labels.zig
+----
+
+.Output
+[source,shell]
+----
+first all-even row: 1
+found target value at row 1, column 1
+----
+
+`while` 循环的 `else null` 捕获“无匹配”情况而无需额外状态；一旦找到目标，标记的 `break :outer` 会立即退出两层循环。该模式保持状态处理紧凑，同时对控制转移保持显式。
+
+==== 循环如何降低到 ZIR
+
+循环被转换为带有显式中断与继续目标的标记块。这使得标记中断与循环 `else` 子句成为可能：
+
+[mermaid]
+....
+graph TB
+    Loop["while/for"] --> LoopLabel["Create labeled block"]
+
+    LoopLabel --> Condition["Generate loop condition"]
+    Condition --> Body["Generate loop body"]
+    Body --> Continue["Generate continue expression"]
+
+    LoopLabel --> BreakTarget["break_block target"]
+    Body --> ContinueTarget["continue_block target"]
+
+    Continue --> CondCheck["Jump back to condition"]
+....
+
+当你写下 `outer: while (x < 10)` 时，编译器会创建：
+
+* *break_block*：`break :outer` 的目标——退出循环
+* *continue_block*：`continue :outer` 的目标——跳转至下一次迭代
+* *循环体*：包含你的代码，并可访问两个目标
+
+这就是为什么可以嵌套循环并使用标记中断退出到特定层级——每个循环标签在 ZIR 中都会创建自己的 break_block。循环的 `else` 子句附加到 break_block，仅在循环未中断而完成时执行。
+
+[[section-1-sub-c]]
+=== 用于详尽决策的 `switch`
+
+`switch` 对值进行详尽检查——覆盖字面量、范围与枚举——编译器会强制完整性，除非你提供 `else` 分支。将 `switch` 与辅助函数结合是集中分类逻辑的干净方式。
+
+[source,zig]
+----
+
+include::{sourcedir}/02__control-flow-essentials/switch_examples.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run switch_examples.zig
+----
+
+.Output
+[source,shell]
+----
+0: no progress
+2: warming up
+5: halfway there
+8: almost done
+10: perfect run
+12: out of range
+mode safe -> factor 16
+----
+
+每个 `switch` 都必须覆盖所有可能性——一旦所有标签都被覆盖，编译器会验证不存在缺失的情况。枚举消除了魔术数字，同时仍允许你基于编译期已知的变体进行分支。
+
+==== `switch` 表达式如何降低到 ZIR
+
+编译器会将 `switch` 语句转换为结构化块，以详尽处理所有情况。范围分支、每个叉的多个值与负载捕获都会在 ZIR 表示中编码：
+
+[mermaid]
+....
+graph TB
+    Switch["switch (target) { ... }"] --> EvalTarget["Evaluate target operand"]
+    EvalTarget --> Prongs["Process switch prongs"]
+
+    Prongs --> Multi["Multiple cases per prong"]
+    Prongs --> Range["Range cases (a...b)"]
+    Prongs --> Capture["Capture payload"]
+
+    Multi --> SwitchBlock["Generate switch_block"]
+    Range --> SwitchBlock
+    Capture --> SwitchBlock
+
+    SwitchBlock --> ExtraData["Store in extra:<br/>- prong count<br/>- case items<br/>- prong bodies"]
+....
+
+详尽性检查发生在语义分析阶段（ZIR 生成之后）且类型已知时。编译器会验证：
+
+* 所有枚举标签均已覆盖（或存在 `else` 分支）
+* 整数范围不重叠
+* 不存在不可达的分支
+
+这也是为什么你无法在枚举的 `switch` 中意外遗漏情况——类型系统在编译期确保完整性。诸如 `0...5` 的范围语法在 ZIR 中被编码为范围情况，而非若干独立值。
+
+[[section-2]]
+== 工作流模式
+
+Combining these constructs unlocks more expressive pipelines: loops gather or filter data, `switch` routes actions, and loop labels keep nested flows precise without introducing mutable sentinels. This section chains the primitives into reusable patterns you can adapt for parsing, simulation, or state machines.
+
+[[workflow-1]]
+=== 使用 `break` 值的脚本处理
+
+该示例解释一段迷你指令流，使用标记的 `for` 循环维护运行总数，并在达到阈值时停止。`switch` 负责命令分派，并在开发期间出现未知标签时故意使用 `unreachable`。
+
+[source,zig]
+----
+
+include::{sourcedir}/02__control-flow-essentials/script_runner.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run script_runner.zig
+----
+
+.Output
+[source,shell]
+----
+stopped at step 3 with total 7
+----
+
+`break :outer` 返回完整的 `Outcome` 结构体，使循环表现得像一次搜索：要么找到目标，要么回退到循环的 `else`。显式的 `unreachable` 记录了假设，并在调试构建中激活安全检查。
+
+[[workflow-2]]
+=== 循环守卫与提前终止
+
+有时数据本身会发出停止信号。该示例先识别第一个负数，然后在遇到 `0` 哨兵前累计偶数值，展示循环的 `else` 子句、标记的 `continue` 以及常规 `break`。
+
+[source,zig]
+----
+
+include::{sourcedir}/02__control-flow-essentials/range_scan.zig[]
+
+----
+
+.Run
+[source,shell]
+----
+$ zig run range_scan.zig
+----
+
+.Output
+[source,shell]
+----
+first negative at index 3
+encountered zero, breaking out
+sum of even prefix values = 16
+----
+
+两个循环展示了互补的退出风格：一个带有 `else` 默认值的循环表达式，另一个通过 `continue` 与 `break` 明确哪些迭代贡献到运行总数的标记循环。
+
+[[notes-caveats]]
+== 说明与注意事项
+
+* 遇到嵌套迭代时优先选择标记循环以提升清晰度；它让 `break`/`continue` 保持显式并避免哨兵变量。
+* `switch` 必须保持详尽——如果依赖 `else`，用注释或 `unreachable` 记录不变量，避免未来新增情况被静默忽略。
+* 循环的 `else` 子句仅在循环自然退出时评估；确保 `break` 路径返回值，避免退回到非预期默认值。
+
+[[exercises]]
+== 练习
+
+* 扩展 `branching.zig`，新增第三个分支以不同方式格式化大于 100 的值，确认 `if` 表达式仍返回单个字符串。
+* 调整 `loop_labels.zig`，通过 `break :outer` 将确切坐标作为结构体返回，并在 `main` 中打印。
+* 修改 `script_runner.zig`，在运行时解析字符（例如来自字节切片），新增一个重置总数的命令，确保 `switch` 保持详尽。

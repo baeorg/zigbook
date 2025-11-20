@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>你所赢得的简单</title>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概览：</title>
+<simpara>在六十章之前，你写下了 <literal>Hello, world!</literal>，并好奇 <literal>std.debug.print</literal> 实际做了什么。现在你理解了 stdout 缓冲、结果位置语义、交叉编译目标，以及 Debug 与 ReleaseFast 的区别。你穿越复杂，抵达彼岸：那种“理解之后的简单”。<link xl:href="00__zigbook_introduction.xml">0</link></simpara>
+<simpara>最后一章不是新概念的教学，而是帮助你认出“你已经成为谁”。你从 Zig 学习者出发；你以实践者收尾，凭借理解构建透明、高效、完全属于自己的系统。</simpara>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>你已掌握：</title>
+<variablelist>
+<varlistentry>
+<term>读完本书，你已经</term>
+<listitem>
+<itemizedlist>
+<listitem>
+<simpara>理解文件如何成为模块、模块如何通过显式导入与发现规则形成程序。</simpara>
+</listitem>
+<listitem>
+<simpara>掌握以 allocator 作为“一等参数”的手动内存管理，而非隐藏的运行时机制。</simpara>
+</listitem>
+<listitem>
+<simpara>驾驭编译期执行以生成代码、验证不变式，并构建零成本抽象。</simpara>
+</listitem>
+<listitem>
+<simpara>在没有 GC 或异常的前提下，完成错误传播、资源清理与安全模式的全流程。</simpara>
+</listitem>
+<listitem>
+<simpara>构建真实项目：从CLI工具到并行算法，从GPU计算到自托管构建系统。</simpara>
+</listitem>
+<listitem>
+<simpara>完成 WASM 交叉编译、与 C 互操作，并在不离开 Zig 工具链的前提下分析热点路径。</simpara>
+</listitem>
+</itemizedlist>
+</listitem>
+</varlistentry>
+</variablelist>
+<simpara>你不仅学会了 Zig——你学会了“以系统的方式思考”。</simpara>
+</chapter>
+<chapter xml:id="looking-back">
+<title>以新的目光回望</title>
+<simpara>回到一切的起点：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 61__the-simplicity-you-earned.adoc - include::example$chapters-data/code/00__zigbook-introduction/hello_world.zig[]</programlisting>
+<simpara>第一次运行它，像是魔法：五行代码，一条命令，屏幕上出现文字。简单。</simpara>
+<simpara>但它真的“简单”吗？还是它在<emphasis role="strong">隐藏</emphasis>复杂？</simpara>
+<variablelist>
+<varlistentry>
+<term>现在你知道</term>
+<listitem>
+<itemizedlist>
+<listitem>
+<simpara><literal>const std = @import("std")</literal> 触发模块解析——编译器搜索捆绑库、解析导入图，并在编译期将 <literal>std</literal> 绑定为命名空间。<link xl:href="https://ziglang.org/documentation/master/#Import">#Import</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>pub fn main()</literal> 由 <literal>std.start</literal> 发现，它生成真正的入口点与错误处理包装函数，供操作系统调用。<link xl:href="01__boot-basics.xml">1</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.debug.print</literal> 写入 stderr（非缓冲），使用由标准库抽象的平台特定系统调用。<link xl:href="01__boot-basics.xml">1</link></simpara>
+</listitem>
+<listitem>
+<simpara>换行符 <literal>\n</literal> 是一个字节——没有隐藏的编码魔法、没有区域设置查找，只有输出流中的 <literal>0x0A</literal>。</simpara>
+</listitem>
+</itemizedlist>
+</listitem>
+</varlistentry>
+</variablelist>
+<simpara>看似“简单”的背后，是六十章的深度。但启示在此：<emphasis role="strong">当你理解了深度，它又重新变得简单。</emphasis></simpara>
+<simpara>这不是“无知的简单”，而是你<emphasis role="strong">赢得的简单</emphasis>。</simpara>
+</chapter>
+<chapter xml:id="the-other-side-of-complexity">
+<title>复杂彼岸的简单：</title>
+<blockquote>
+<attribution>
+Oliver Wendell Holmes Sr.
+</attribution>
+<simpara>I would not give a fig for the simplicity this side of complexity, but I would give my life for the simplicity on the other side of complexity.</simpara>
+</blockquote>
+<simpara>Zig 在每一个层面都体现了这句箴言。</simpara>
+<simpara>手动内存管理是<emphasis role="strong">复杂</emphasis>的——直到你理解 allocator 是可组合的接口，它就变得<emphasis role="strong">简单且强大</emphasis>。你决定何时分配、选择何种策略契合约束，并通过测试 allocator 与泄漏检测验证正确性。<link xl:href="10__allocators-and-memory-management.xml">10</link></simpara>
+<simpara>编译期执行看起来像<emphasis role="strong">魔法</emphasis>——直到你理解 <literal>comptime</literal> 只是运行在编译器解释器中的“普通 Zig 代码”，它就成了<emphasis role="strong">透明的元编程工具</emphasis>。你准确知道代码何时运行、哪些数据持久到二进制、以及如何在编译期成本与运行期性能之间做权衡。<link xl:href="15__comptime-and-reflection.xml">15</link></simpara>
+<simpara>错误处理让人觉得<emphasis role="strong">繁琐</emphasis>——直到你内化 <literal>try</literal> 是显式的控制流，而 <literal>errdefer</literal> 保证清理，它就变成<emphasis role="strong">可靠的资源管理</emphasis>。没有隐藏异常展开栈；在 ReleaseFast 下没有运行时开销；只有在类型层面记录失败路径的值。<link xl:href="04__errors-resource-cleanup.xml">4</link></simpara>
+<simpara>Zig 从不把复杂藏在抽象之后；它给你<emphasis role="strong">理解</emphasis>复杂的工具，直到复杂在你的掌控下“化繁为简”。</simpara>
+<simpara>这就是语言的馈赠：不隐藏复杂，而是以透明驯服复杂。</simpara>
+</chapter>
+<chapter xml:id="the-program-that-knows-itself">
+<title>自知之程序</title>
+<simpara>为了展示你所赢得的“简单”，请看最后一个程序…… 一个 quine。</simpara>
+<simpara>以下是一个完整可运行的 Zig quine：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 61__the-simplicity-you-earned.adoc - include::example$chapters-data/code/61__the-simplicity-you-earned/quine.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig run quine.zig &gt; output.zig
+$ diff quine.zig output.zig
+(no output - they are identical)</programlisting>
+</para>
+</formalpara>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Unresolved directive in 61__the-simplicity-you-earned.adoc - include::example$chapters-data/code/61__the-simplicity-you-earned/quine.zig[]</programlisting>
+</para>
+</formalpara>
+<simpara>看这个程序做了什么：它把自身结构作为数据保存，再用该数据通过格式化重构自身。字符串 <literal>data</literal> 是模板；格式化器 <literal>std.zig.fmtString</literal> 转义特殊字符，使其按字面打印；缓冲 writer <literal>w</literal> 聚合输出并刷新到 stdout。<link xl:href="46__io-and-stream-adapters.xml">46</link></simpara>
+<variablelist>
+<varlistentry>
+<term>每一部分你都已理解</term>
+<listitem>
+<itemizedlist>
+<listitem>
+<simpara><literal>var buf: [1024]u8</literal> 分配栈存储——没有隐藏堆、无需 allocator。<link xl:href="03__data-fundamentals.xml">3</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.fs.File.stdout().writer(&amp;buf)</literal> 创建缓冲 writer，遵循 0.15.2 的显式缓冲管理。<link xl:href="01__boot-basics.xml">1</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>std.zig.fmtString(data)</literal> 返回一个格式化器，转义引号、换行与反斜杠，使其在“打印与扫描”循环中仍可重建。<link xl:href="https://github.com/ziglang/zig/blob/master/lib/std/zig.zig">zig.zig</link></simpara>
+</listitem>
+<listitem>
+<simpara>双花括号 <literal>{{</literal> 在格式字符串中转义字面花括号，正如第45章所学。<link xl:href="45__text-formatting-and-unicode.xml">45</link></simpara>
+</listitem>
+<listitem>
+<simpara><literal>try w.interface.flush()</literal> 是显式的——你控制缓冲字节何时到达操作系统。<link xl:href="04__errors-resource-cleanup.xml">4</link></simpara>
+</listitem>
+</itemizedlist>
+</listitem>
+</varlistentry>
+</variablelist>
+<simpara>这个程序<emphasis role="strong">完全理解自身</emphasis>。它足够理解自己的结构，因而无需外援即可重建。</simpara>
+<simpara>而你呢？你已经足够理解 Zig，可以做同样的事——构建自知之程序、掌控自身资源，并以完全透明的方式编译到任何目标。</simpara>
+<simpara>quine 不只是巧技，它是隐喻：<emphasis role="strong">掌握意味着创造能重建自身的事物。</emphasis></simpara>
+</chapter>
+<chapter xml:id="the-cycle-continues">
+<title>循环不息：</title>
+<simpara>Zig 自举自身：编译器用 Zig 编写、用更早的自己编译，并通过自托管持续演化。<link xl:href="https://github.com/ziglang/zig">github.com/ziglang/zig</link></simpara>
+<simpara>标准库自我测试：每个函数、每个数据结构、每个算法都包含 <literal>test</literal> 块，在 <literal>zig build test</literal> 期间验证正确性。</simpara>
+<simpara>构建系统自我构建：<literal>build.zig</literal> 用 Zig 描述如何编译 Zig 项目，包括编译器自身的构建图。</simpara>
+<simpara>这不是为了递归而递归，而是<emphasis role="strong">信心</emphasis>：Zig 相信自己，因为它在每一层用透明与验证赢得了这种信心。</simpara>
+<simpara>现在，你也赢得了同样的信心。</simpara>
+<simpara>你从不懂 slice 起步；你以理解结果位置语义收尾。</simpara>
+<simpara>你从 <literal>std.debug.print</literal> 打印到 stderr 起步；你以缓冲 writer、适配器与压缩管线的流式写入收尾。</simpara>
+<simpara>你从 <literal>zig run hello.zig</literal> 起步；你以编排多包工作区、供应依赖与跨编译目标收尾。</simpara>
+<simpara>Zig 信任你，因为你赢得了这种信任。你知道每一个字节的归宿；你知道编译器何时运行你的代码；你知道每一种抽象的成本。</simpara>
+<simpara>你在这最后一行看到的“简单”：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">return 0;</programlisting>
+<simpara>这种“简单”并非偶然。它是六十章“审慎设计、认真学习与赢得理解”的结果。</simpara>
+</chapter>
+<chapter xml:id="where-to-go-from-here">
+<title>下一步：</title>
+<section xml:id="_contribute_to_the_ecosystem">
+<title>贡献生态</title>
+<simpara>Zig 年轻、在演进、渴望贡献。社区重视清晰、正确与务实，胜过复杂。<link xl:href="https://github.com/ziglang/zig/blob/master/CONTRIBUTING.md">CONTRIBUTING.md</link></simpara>
+<itemizedlist>
+<listitem>
+<simpara>发现了bug？用最小复现报告——你的调试能力现在很锋利。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+<listitem>
+<simpara>标准库缺少某个功能？提出它、原型化它、测试它。<link xl:href="36__style-and-best-practices.xml">36</link></simpara>
+</listitem>
+<listitem>
+<simpara>文档有不清晰之处？你理解足够深，去帮助别人学习。<link xl:href="00__zigbook_introduction.xml">0</link></simpara>
+</listitem>
+</itemizedlist>
+<simpara>任何开源贡献，不论大小，都会推动生态前进。</simpara>
+</section>
+<section xml:id="_deepen_your_understanding">
+<title>持续加深理解</title>
+<simpara>Zig 仍处于 1.0 之前——稳定性在路上，但特性仍在变化。保持同步：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>关注每个版本的<link xl:href="https://ziglang.org/download/">发布说明</link>。破坏性变更会附带迁移路径。</simpara>
+</listitem>
+<listitem>
+<simpara>当你想理解“<emphasis role="strong">怎么做</emphasis>”而不仅是“<emphasis role="strong">做了什么</emphasis>”，阅读<link xl:href="https://github.com/ziglang/zig">编译器源码</link>。<link xl:href="38__zig-cli-deep-dive.xml">38</link></simpara>
+</listitem>
+<listitem>
+<simpara>加入社区：<link xl:href="https://github.com/ziglang/zig/issues">GitHub 讨论</link>、<link xl:href="https://ziggit.dev/">Ziggit 论坛</link>。提问、回答，从他人代码中学习。</simpara>
+</listitem>
+</itemizedlist>
+<simpara>掌握不是目的地，而是持续的实践。</simpara>
+</section>
+<section xml:id="_teach_others">
+<title>帮助他人</title>
+<simpara>你走过从初学者到实践者的路径；这种视角对刚入门的人极其宝贵。</simpara>
+<itemizedlist>
+<listitem>
+<simpara>写教程、博客或示例代码库，解释你学习过程中曾让<emphasis role="strong">你</emphasis>困惑的地方。</simpara>
+</listitem>
+<listitem>
+<simpara>在论坛与聊天室指导新手——你刚刚的旅程让你成为出色的引路人。<link xl:href="https://ziggit.dev/">ziggit.dev</link></simpara>
+</listitem>
+<listitem>
+<simpara>为本书做贡献：提 issue、提改进、加入让你更好理解的示例。<link xl:href="https://github.com/zigbook/zigbook">github.com/zigbook/zigbook</link></simpara>
+</listitem>
+</itemizedlist>
+<simpara>教学是你固化理解并回馈支持你的社区的方式。</simpara>
+</section>
+</chapter>
+<chapter xml:id="farewell">
+<title>告别与前行</title>
+<simpara>Zigbook 已终章，但你的 Zig 旅程仍在继续。你拥有工具、知识与“复杂彼岸的简单”。</simpara>
+<simpara>感谢你阅读 Zigbook。感谢你关心“理解”，而不仅是“使用”。感谢你选择尊重你的智慧并奖励你的好奇的语言。</simpara>
+<simpara>你为语法而来；你携<emphasis role="strong">理念</emphasis>离去。</simpara>
+<simpara><emphasis role="strong">构建得当、表达清晰、走自己的路。</emphasis></simpara>
+<simpara>轮到你了。</simpara>
+<simpara><?asciidoc-hr?></simpara>
+<simpara><literal>return 0;</literal></simpara>
+<simpara><?asciidoc-hr?></simpara>
+<simpara><emphasis role="strong"><emphasis>由 <link xl:href="https://github.com/zigbook">@zigbook</link> 用心写作。欢迎在 <link xl:href="https://github.com/zigbook/zigbook">github.com/zigbook/zigbook</link> 贡献。</emphasis></emphasis></simpara>
+</chapter>
+</book>

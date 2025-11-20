@@ -1,0 +1,297 @@
+////
+changes: ["New chapter: testing, leaks, and OOM injection"]
+examples_compile: yes
+keywords: ["标准测试","分配器","内存泄漏检测","内存不足注入"]
+last_updated: 2025-11-03
+last_verified: 2025-11-03
+next_chapter: "14__project-path-utility"
+open_questions: []
+previous_chapter: "12__config-as-data"
+status: draft
+xref_complete: true
+////
+
+= 测试与泄漏检测
+:chapter-number: 13
+:chapter-slug: testing-and-leak-detection
+:copyright: zigbook
+:doctype: book
+:embedded:
+:experimental:
+:icons: font
+:partnums:
+:pygments-linenums-mode: inline
+:pygments-style: manni
+:safe-mode-level: 0
+:sectanchors:
+:sectids:
+:sectlinks:
+:source-highlighter: pygments
+:sourcedir: example$chapters-data/code
+:webfonts:
+:xrefstyle: short
+:zig-version: 0.15.2
+:linkcss:
+:stylesdir: styles
+:stylesheet: zigbook.css
+
+[[overview]]
+== 概览
+
+好的测试简短、精确且言出必行。Zig 的 `std.testing` 通过小型、可组合的断言（`expect`、`expectEqual`、`expectError`）和默认检测泄漏的内置测试分配器使这变得容易。结合分配失败注入，您可以执行否则难以触发的错误路径，确保代码正确且确定性地释放资源；参见 xref:10__allocators-and-memory-management.adoc[10] 和 link:https://github.com/ziglang/zig/tree/master/lib/std/testing.zig[testing.zig]。
+
+本章展示如何编写表达性测试，如何解释测试运行器的泄漏诊断，以及如何使用 `std.testing.checkAllAllocationFailures` 来防弹代码免受 `error.OutOfMemory` 影响，而无需编写数百个定制测试；参见 xref:11__project-dynamic-string-builder.adoc[11] 和 link:https://github.com/ziglang/zig/tree/master/lib/std/heap.zig[heap.zig]。
+
+[[learning-goals]]
+== 学习目标
+
+* 使用 `test` 块和 `std.testing` 助手编写专注的单元测试。
+* 在测试中使用 `std.testing.allocator` 和 `defer` 检测和修复内存泄漏；参见 xref:04__errors-resource-cleanup.adoc[04]。
+* 使用 `std.testing.checkAllAllocationFailures` 系统性地测试 OOM 行为；参见 xref:10__allocators-and-memory-management.adoc[10]。
+
+[[testing-basics]]
+== 使用 std.testing 进行基础测试
+
+Zig 的测试运行器在您传递给 `zig test` 的任何文件中发现 `test` 块。断言是返回错误的普通函数，因此它们自然地与 `try`/`catch` 组合。
+
+[[testing-framework-structure]]
+=== std.testing 模块结构
+
+在深入探讨特定断言之前，查看 `std.testing` 中可用的完整工具包是有帮助的。该模块提供三类功能：断言函数、测试分配器和实用工具。
+
+[mermaid]
+....
+graph TB
+    subgraph "std.testing Module"
+        MAIN["std.testing<br/>(lib/std/testing.zig)"]
+
+        subgraph "Assertion Functions"
+            EXPECT["expect()"]
+            EXPECT_EQ["expectEqual()"]
+            EXPECT_ERR["expectError()"]
+            EXPECT_SLICES["expectEqualSlices()"]
+            EXPECT_STR["expectEqualStrings()"]
+            EXPECT_FMT["expectFmt()"]
+        end
+
+        subgraph "Test Allocators"
+            TEST_ALLOC["allocator<br/>(GeneralPurposeAllocator)"]
+            FAIL_ALLOC["failing_allocator<br/>(FailingAllocator)"]
+        end
+
+        subgraph "Utilities"
+            RAND_SEED["random_seed"]
+            TMP_DIR["tmpDir()"]
+            LOG_LEVEL["log_level"]
+        end
+
+        MAIN --> EXPECT
+        MAIN --> EXPECT_EQ
+        MAIN --> EXPECT_ERR
+        MAIN --> EXPECT_SLICES
+        MAIN --> EXPECT_STR
+        MAIN --> EXPECT_FMT
+        MAIN --> TEST_ALLOC
+        MAIN --> FAIL_ALLOC
+        MAIN --> RAND_SEED
+        MAIN --> TMP_DIR
+        MAIN --> LOG_LEVEL
+    end
+....
+
+本章重点介绍核心断言（`expect`、`expectEqual`、`expectError`）和用于泄漏检测的测试分配器。额外的断言函数如 `expectEqualSlices` 和 `expectEqualStrings` 提供专门的比较，而实用工具如 `tmpDir()` 帮助测试文件系统代码；参见 link:https://github.com/ziglang/zig/blob/master/lib/std/testing.zig[testing.zig]。
+
+[[testing-basics-expect]]
+=== 期望：布尔值、相等性和错误
+
+此示例涵盖布尔断言、值相等性、字符串相等性以及期望被测函数出错。
+
+[source,zig]
+----
+include::{sourcedir}/13__testing-and-leak-detection/basic_tests.zig[]
+----
+
+.Run
+[source,shell]
+----
+$ zig test basic_tests.zig
+----
+
+.Output
+[source,shell]
+----
+All 3 tests passed.
+----
+
+
+
+[[leak-detection]]
+== 构建时的泄漏检测
+
+测试分配器（`std.testing.allocator`）是一个配置为跟踪分配并在测试完成时报告泄漏的 `GeneralPurposeAllocator`。这意味着如果测试忘记释放，它们就会失败；参见 xref:10__allocators-and-memory-management.adoc[10]。
+
+[[test-allocator-architecture]]
+=== 测试分配器的工作原理
+
+测试模块提供两个分配器：用于一般测试和泄漏检测的 `allocator`，以及用于模拟分配失败的 `failing_allocator`。了解它们的架构有助于解释它们的不同行为。
+
+[mermaid]
+....
+graph TB
+    subgraph "Test Allocators in lib/std/testing.zig"
+        ALLOC_INST["allocator_instance<br/>GeneralPurposeAllocator"]
+        ALLOC["allocator<br/>Allocator interface"]
+
+        BASE_INST["base_allocator_instance<br/>FixedBufferAllocator"]
+        FAIL_INST["failing_allocator_instance<br/>FailingAllocator"]
+        FAIL["failing_allocator<br/>Allocator interface"]
+
+        ALLOC_INST -->|"allocator()"| ALLOC
+        BASE_INST -->|"provides base"| FAIL_INST
+        FAIL_INST -->|"allocator()"| FAIL
+    end
+
+    subgraph "Usage in Tests"
+        TEST["test block"]
+        ALLOC_CALL["std.testing.allocator.alloc()"]
+        FAIL_CALL["std.testing.failing_allocator.alloc()"]
+
+        TEST --> ALLOC_CALL
+        TEST --> FAIL_CALL
+    end
+
+    ALLOC --> ALLOC_CALL
+    FAIL --> FAIL_CALL
+....
+
+`testing.allocator` 包装了一个配置了堆栈跟踪和泄漏检测的 `GeneralPurposeAllocator`。`failing_allocator` 使用 `FixedBufferAllocator` 作为其基础，然后用失败注入逻辑包装它。两者都暴露标准的 `Allocator` 接口，使它们成为测试中生产分配器的即插即用替代品；参见 link:https://github.com/ziglang/zig/blob/master/lib/std/testing.zig[testing.zig]。
+
+[[leak-detection-fail]]
+=== 泄漏的样子
+
+下面的测试故意忘记 `free`。运行器报告泄漏的地址、分配调用站点的堆栈跟踪，并以非零状态退出。
+
+[source,zig]
+----
+include::{sourcedir}/13__testing-and-leak-detection/leak_demo_fail.zig[]
+----
+
+.Run
+[source,shell]
+----
+$ zig test leak_demo_fail.zig
+----
+
+.Output
+[source,shell]
+----
+[gpa] (err): memory address 0x… leaked: 
+… leak_demo_fail.zig:1:36: … in test.leak detection catches a missing free (leak_demo_fail.zig)
+
+All 1 tests passed.
+1 errors were logged.
+1 tests leaked memory.
+error: the following test command failed with exit code 1:
+…/test --seed=0x…
+----
+
+重要："All N tests passed." 行仅断言测试逻辑；泄漏报告仍然导致整体运行失败。修复泄漏以使套件变绿。xref:04__errors-resource-cleanup.adoc[04]
+
+[[leak-detection-fix]]
+=== 使用 defer 修复泄漏
+
+在成功分配后立即使用 `defer allocator.free(buf)` 以保证在所有路径上释放。
+
+[source,zig]
+----
+include::{sourcedir}/13__testing-and-leak-detection/leak_demo_fix.zig[]
+----
+
+.Run
+[source,shell]
+----
+$ zig test leak_demo_fix.zig
+----
+
+.Output
+[source,shell]
+----
+All 1 tests passed.
+----
+
+xref:04__errors-resource-cleanup.adoc[04], link:https://github.com/ziglang/zig/tree/master/lib/std/mem.zig[mem.zig]
+
+[[leak-detection-flow]]
+=== 泄漏检测生命周期
+
+泄漏检测在每个测试结束时自动发生。了解此时间线有助于解释为什么 `defer` 必须在测试完成前执行，以及为什么即使测试断言通过也会出现泄漏报告。
+
+[mermaid]
+....
+graph TB
+    TEST_START["Test Start"]
+    ALLOC_MEM["Allocate Memory<br/>const data = try testing.allocator.alloc(T, n);"]
+    USE_MEM["Use Memory"]
+    FREE_MEM["Free Memory<br/>defer testing.allocator.free(data);"]
+    TEST_END["Test End<br/>Allocator checks for leaks"]
+
+    TEST_START --> ALLOC_MEM
+    ALLOC_MEM --> USE_MEM
+    USE_MEM --> FREE_MEM
+    FREE_MEM --> TEST_END
+
+    LEAK_CHECK["If leaked: Test fails with<br/>stack trace of allocation"]
+    TEST_END -.->|"Memory not freed"| LEAK_CHECK
+....
+
+当测试结束时，`GeneralPurposeAllocator` 验证所有分配的内存是否已释放。如果任何分配仍然存在，它会打印显示泄漏内存分配位置（而不是应该释放的位置）的堆栈跟踪。这种自动检查消除了整个类别的错误，无需手动跟踪。关键是在成功分配后立即放置 `defer allocator.free(...)`，以便它在所有代码路径上执行，包括提前返回和错误传播；参见 link:https://github.com/ziglang/zig/blob/master/lib/std/heap.zig[heap.zig]。
+
+[[oom-injection]]
+== 分配失败注入
+
+分配内存的代码即使在分配失败时也必须是正确的。`std.testing.checkAllAllocationFailures` 在每个分配站点使用失败分配器重新运行您的函数，验证您清理部分初始化状态并正确传播 `error.OutOfMemory`；参见 xref:10__allocators-and-memory-management.adoc[10]。
+
+[[oom-injection-good]]
+=== 系统性地测试 OOM 安全性
+
+This example uses `checkAllAllocationFailures` with a small function that performs two allocations and frees both with `defer`. The helper simulates failure at each allocation point; the test passes only if no leaks occur and `error.OutOfMemory` is forwarded correctly.
+
+[source,zig]
+----
+include::{sourcedir}/13__testing-and-leak-detection/oom_injection.zig[]
+----
+
+.Run
+[source,shell]
+----
+$ zig test oom_injection.zig
+----
+
+.Output
+[source,shell]
+----
+All 1 tests passed.
+----
+
+NOTE: A deliberately "bad" implementation under `checkAllAllocationFailures` will cause the test runner to record leaked allocations and fail the overall run, even if you `expectError(error.MemoryLeakDetected, …)`. Keep failing examples isolated when teaching or debugging; see xref:10__allocators-and-memory-management.adoc[10].
+
+[[notes-caveats]]
+== 说明与注意事项
+
+* The testing allocator is only available when compiling tests. Attempting to use it in non-test code triggers a compile error.
+* Leak detection relies on deterministic deallocation. Prefer `defer` directly after allocation; avoid hidden control flow that skips frees; see xref:04__errors-resource-cleanup.adoc[04].
+* For integration tests that need lots of allocations, wrap with an arena allocator for speed, but still route ultimate backing through the testing allocator to preserve leak checks; see xref:10__allocators-and-memory-management.adoc[10].
+
+[[exercises]]
+== 练习
+
+* Write a function that builds a `std.ArrayList(u8)` from input bytes, then clears it. Use `checkAllAllocationFailures` to verify OOM safety; see xref:11__project-dynamic-string-builder.adoc[11].
+* Introduce a deliberate early return after the first allocation and watch the leak detector catch a missing `free`; then fix it with `defer`.
+* Add `expectError` tests for a function that returns an error on invalid input; include both the erroring and the successful path.
+
+[[caveats-alternatives-edge-cases]]
+== Alternatives & Edge Cases
+
+* If you need to run a suite that intentionally demonstrates leaks, keep those files separate from your passing tests to avoid failing CI runs. Alternatively, gate them behind a build flag and only opt in locally; see xref:20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.adoc[20].
+* Outside of tests, you can enable `std.heap.GeneralPurposeAllocator` leak detection in debug builds to catch leaks in manual runs, but production builds should disable expensive checks for performance.
+* Allocation-failure injection is most effective on small, self-contained helpers. For higher-level workflows, test critical components in isolation to keep the induced failure space manageable; see xref:36__style-and-best-practices.adoc[37].

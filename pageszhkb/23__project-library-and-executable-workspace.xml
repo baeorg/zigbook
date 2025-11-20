@@ -1,0 +1,381 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<book xmlns="http://docbook.org/ns/docbook" xmlns:xl="http://www.w3.org/1999/xlink" version="5.0" xml:lang="zh">
+<info>
+<title>项目</title>
+<subtitle>库和可执行文件工作区</subtitle>
+<date>2025-11-15</date>
+<copyright>
+<holder>zigbook</holder>
+</copyright>
+</info>
+<chapter xml:id="overview">
+<title>概述</title>
+<simpara>第22章教授了<literal>std.Build</literal> API机制；本章通过完整的项目巩固这些知识：<emphasis role="strong">TextKit</emphasis>，一个文本处理库，配有一个CLI工具，演示了结构化工作区、组织模块、链接产物、集成测试和创建自定义构建步骤的实际模式。参见<link xl:href="22__build-system-deep-dive.xml">22</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build.zig">Build.zig</link>。</simpara>
+<simpara>通过遍历TextKit的实现——从模块组织到构建脚本编排——你将了解专业Zig项目如何在可重用库和应用程序特定可执行文件之间分离关注点，同时维护单个统一构建图，处理编译、测试和分发。参见<link xl:href="21__zig-init-and-package-metadata.xml">21</link>和<link xl:href="https://github.com/ziglang/zig/tree/master/lib/std/Build/Step/Compile.zig">Compile.zig</link>。</simpara>
+</chapter>
+<chapter xml:id="using-the-project">
+<title>使用项目</title>
+<simpara>TextKit 支持多种构建、测试与运行的工作流。<link xl:href="22__build-system-deep-dive.xml">22</link></simpara>
+<section xml:id="building">
+<title>构建库与可执行文件</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build</programlisting>
+<itemizedlist>
+<title>结果</title>
+<listitem>
+<simpara>库：<literal>zig-out/lib/libtextkit.a</literal></simpara>
+</listitem>
+<listitem>
+<simpara>可执行文件：<literal>zig-out/bin/textkit-cli</literal></simpara>
+</listitem>
+</itemizedlist>
+<simpara>两类产物默认安装到标准位置。</simpara>
+</section>
+<section xml:id="testing">
+<title>运行测试</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build test</programlisting>
+<formalpara>
+<title>输出（成功）</title>
+<para>
+<screen>All 5 tests passed.</screen>
+</para>
+</formalpara>
+<simpara>来自 <literal>string_utils.zig</literal>、<literal>text_stats.zig</literal> 与 <literal>main.zig</literal> 的测试共同运行并汇总结果。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</section>
+<section xml:id="running-cli">
+<title>运行 CLI</title>
+<section xml:id="cli-usage">
+<title>查看用法</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build run</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">TextKit CLI - Text processing utility
+
+Usage:
+  textkit-cli analyze &lt;file&gt;      Analyze text file statistics
+  textkit-cli reverse &lt;text&gt;      Reverse the given text
+  textkit-cli count &lt;text&gt; &lt;char&gt; Count character occurrences</programlisting>
+</para>
+</formalpara>
+</section>
+<section xml:id="cli-reverse">
+<title>反转文本</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build run -- reverse "Hello World"</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Original: Hello World
+Reversed: dlroW olleH</programlisting>
+</para>
+</formalpara>
+</section>
+<section xml:id="cli-count">
+<title>计数字符</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build run -- count "mississippi" "s"</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Character 's' appears 4 time(s) in: mississippi</programlisting>
+</para>
+</formalpara>
+</section>
+<section xml:id="cli-analyze">
+<title>分析文件</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build run -- analyze sample.txt</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">File: sample.txt
+  Lines: 7
+  Words: 51
+  Characters: 336
+  ASCII only: true</programlisting>
+</para>
+</formalpara>
+</section>
+<section xml:id="demo-step">
+<title>运行演示步骤</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build demo</programlisting>
+<formalpara>
+<title>输出</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">Original: Hello Zig!
+Reversed: !giZ olleH
+Character 's' appears 4 time(s) in: mississippi</programlisting>
+</para>
+</formalpara>
+<simpara>无需用户输入，顺序执行多条命令——适用于 CI/CD 或快速验证。</simpara>
+</section>
+</section>
+</chapter>
+
+<chapter xml:id="contrasting-workflows">
+<title>对比构建工作流</title>
+<simpara>明确何时使用 <literal>zig build</literal> 与 <literal>zig build-exe</literal> 能帮助你理解构建系统的定位。</simpara>
+<section xml:id="zig-build-exe-approach">
+<title>使用 <literal>zig build-exe</literal> 的直接编译</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build-exe src/main.zig --name textkit-cli --pkg-begin textkit src/textkit.zig --pkg-end</programlisting>
+<simpara>该命令式方式：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>不构建图，立即编译</simpara>
+</listitem>
+<listitem>
+<simpara>需手动指定所有模块与标志</simpara>
+</listitem>
+<listitem>
+<simpara>不提供缓存与增量编译收益</simpara>
+</listitem>
+<listitem>
+<simpara>适合一次性构建或调试</simpara>
+</listitem>
+</itemizedlist>
+</section>
+<section xml:id="zig-build-approach">
+<title>使用 <literal>zig build</literal> 的图式构建</title>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build</programlisting>
+<simpara>该声明式方式：</simpara>
+<itemizedlist>
+<listitem>
+<simpara>执行 <literal>build.zig</literal> 构建依赖图</simpara>
+</listitem>
+<listitem>
+<simpara>缓存产物并跳过未变步骤</simpara>
+</listitem>
+<listitem>
+<simpara>并行独立编译任务</simpara>
+</listitem>
+<listitem>
+<simpara>支持通过 <literal>-D</literal> 标志进行自定义</simpara>
+</listitem>
+<listitem>
+<simpara>集成测试、安装与自定义步骤</simpara>
+</listitem>
+</itemizedlist>
+<simpara>随着项目增长，图式构建的可扩展性更佳，因此 <literal>zig build</literal> 是非平凡代码库的常规选择。<link xl:href="22__build-system-deep-dive.xml">22</link></simpara>
+</section>
+</chapter>
+
+<chapter xml:id="notes-caveats">
+<title>注意事项与警告</title>
+<itemizedlist>
+<listitem>
+<simpara>静态库（<literal>.a</literal> 文件）在 Zig 中并非总是必需，因为模块可直接链接；但产出库制品可用于传统分发方式。</simpara>
+</listitem>
+<listitem>
+<simpara>同时创建公共模块（<literal>b.addModule</literal>）与库制品（<literal>b.addLibrary</literal>）时，确保二者指向相同的根源文件以避免混淆。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>installArtifact()</literal> 默认安装到 <literal>zig-out/</literal>；如需自定义安装路径可设置 <literal>.prefix</literal>。</simpara>
+</listitem>
+<listitem>
+<simpara><literal>main.zig</literal> 中的测试通常仅验证可执行文件能编译；全面功能测试应放在库模块中。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+
+<chapter xml:id="caveats-alternatives-edge-cases">
+<title>注意事项、替代方案与边界情况</title>
+<itemizedlist>
+<listitem>
+<simpara>若库仅为“头文件式”（无运行时代码），无需 <literal>addLibrary()</literal>——只定义模块即可。<link xl:href="20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.xml">20</link></simpara>
+</listitem>
+<listitem>
+<simpara>Zig 0.14.0 弃用在 <literal>ExecutableOptions</literal> 中直接使用 <literal>root_source_file</literal>；请始终使用 <literal>root_module</literal> 包装。</simpara>
+</listitem>
+<listitem>
+<simpara>进行 C 互操作时，可添加 <literal>lib.linkLibC()</literal> 并通过 <literal>lib.addCSourceFile()</literal> 与 <literal>installHeader()</literal> 生成与安装头文件。</simpara>
+</listitem>
+<listitem>
+<simpara>大型项目可将 <literal>build.zig</literal> 拆分为辅助函数或独立文件，并通过 <literal>@import("build_helpers.zig")</literal> 引入——构建脚本本质上是常规 Zig 代码。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="learning-goals">
+<title>学习目标</title>
+<itemizedlist>
+<listitem>
+<simpara>用通用的<literal>build.zig</literal>构建具有库和可执行文件产物的工作区结构。</simpara>
+</listitem>
+<listitem>
+<simpara>将库代码组织成多个模块，以提高可维护性和可测试性。<link xl:href="20__concept-primer-modules-vs-programs-vs-packages-vs-libraries.xml">20</link></simpara>
+</listitem>
+<listitem>
+<simpara>使用<literal>b.addLibrary()</literal>构建静态库并安装它以供外部使用。</simpara>
+</listitem>
+<listitem>
+<simpara>创建导入和使用库模块的可执行文件。<link xl:href="22__build-system-deep-dive.xml">22</link></simpara>
+</listitem>
+<listitem>
+<simpara>为库和可执行文件组件集成综合测试。<link xl:href="13__testing-and-leak-detection.xml">13</link></simpara>
+</listitem>
+<listitem>
+<simpara>定义超出默认安装、运行和测试目标的自定义构建步骤。</simpara>
+</listitem>
+<listitem>
+<simpara>理解<literal>zig build</literal>（基于图）与<literal>zig build-exe</literal>（命令式）之间的对比。</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+<chapter xml:id="project-overview">
+<title>项目结构：TextKit</title>
+<simpara>TextKit是一个文本处理实用程序，包括：</simpara>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">库（<literal>textkit</literal>）</emphasis>：作为模块公开的可重用文本处理函数</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">CLI工具（<literal>tk</literal>）</emphasis>：使用库功能的命令行界面</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">测试套件</emphasis>：库和CLI功能的综合测试</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">构建配置</emphasis>：管理所有产物的统一构建图</simpara>
+</listitem>
+</itemizedlist>
+<simpara>该项目演示了专业Zig工作区中常见的关注点分离。</simpara>
+</chapter>
+<chapter xml:id="library-design">
+<title>库设计：模块化文本处理</title>
+<simpara>TextKit库分为专注于特定文本处理任务的模块：</simpara>
+<section xml:id="library-modules">
+<title>核心库模块</title>
+<simpara><literal>library_design.zig</literal>展示了库模块及其关系：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 23__project-library-and-executable-workspace.adoc - include::example$chapters-data/code/23__project-library-and-executable-workspace/library_design.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build lib-demo
+TextKit库模块已加载</programlisting>
+</para>
+</formalpara>
+<simpara>每个模块处理特定的关注点：统计、转换、验证和格式化。这种模块化使得测试各个组件和独立演化它们变得容易。</simpara>
+</section>
+</chapter>
+<chapter xml:id="executable-design">
+<title>可执行文件设计：CLI前端</title>
+<simpara>CLI工具作为使用TextKit库的薄前端，演示了库与应用程序代码之间的干净分离。</simpara>
+<section xml:id="cli-implementation">
+<title>实现CLI界面</title>
+<simpara><literal>cli_design.zig</literal>展示了CLI如何导入和使用库模块：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 23__project-library-and-executable-workspace.adoc - include::example$chapters-data/code/23__project-library-and-executable-workspace/cli_design.zig[]</programlisting>
+<formalpara>
+<title>运行</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ echo "Hello Zig World" | zig build run -- --count-words
+Word count: 3</programlisting>
+</para>
+</formalpara>
+<simpara>CLI处理参数解析和用户界面，而库处理核心文本处理逻辑。这种分离使得测试业务逻辑独立于用户界面变得容易。</simpara>
+</section>
+</chapter>
+<chapter xml:id="build-configuration">
+<title>构建配置：统一构建图</title>
+<simpara>构建脚本编排所有项目组件，创建管理依赖关系和产物的统一图。</simpara>
+<section xml:id="build-script">
+<title>TextKit构建脚本</title>
+<simpara><literal>textkit_build.zig</literal>演示了完整的构建配置：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 23__project-library-and-executable-workspace.adoc - include::example$chapters-data/code/23__project-library-and-executable-workspace/textkit_build.zig[]</programlisting>
+<formalpara>
+<title>构建命令</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build          # 构建所有产物
+$ zig build test     # 运行所有测试
+$ zig build install  # 安装库和工具
+$ zig build docs     # 生成文档</programlisting>
+</para>
+</formalpara>
+<simpara>构建图创建步骤之间的依赖关系，确保增量构建正确工作，并且测试在库更改时运行。</simpara>
+</section>
+</chapter>
+<chapter xml:id="testing-strategy">
+<title>测试策略：综合覆盖</title>
+<simpara>TextKit采用分层测试方法，在多个级别验证功能：</simpara>
+<section xml:id="test-implementation">
+<title>库和CLI测试</title>
+<simpara><literal>test_strategy.zig</literal>展示了测试如何覆盖库函数和CLI行为：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 23__project-library-and-executable-workspace.adoc - include::example$chapters-data/code/23__project-library-and-executable-workspace/test_strategy.zig[]</programlisting>
+<formalpara>
+<title>运行测试</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build test
+Running library tests...
+Running CLI integration tests...
+All tests passed!</programlisting>
+</para>
+</formalpara>
+<simpara>测试涵盖单元测试（单个函数）、集成测试（模块交互）和端到端测试（完整CLI工作流程）。</simpara>
+</section>
+</chapter>
+<chapter xml:id="distribution-packaging">
+<title>分发和打包</title>
+<simpara>专业项目需要适当的分发机制。TextKit包括安装库和工具的配置。</para>
+<section xml:id="install-config">
+<title>安装配置</title>
+<simpara><literal>install_config.zig</literal>展示了如何设置安装步骤：</simpara>
+<programlisting language="zig" linenumbering="unnumbered">Unresolved directive in 23__project-library-and-executable-workspace.adoc - include::example$chapters-data/code/23__project-library-and-executable-workspace/install_config.zig[]</programlisting>
+<formalpara>
+<title>安装命令</title>
+<para>
+<programlisting language="shell" linenumbering="unnumbered">$ zig build install
+Installing libtextkit.a to ~/.zig/lib/
+Installing tk binary to ~/.zig/bin/</programlisting>
+</para>
+</formalpara>
+<simpara>安装步骤使库可用于其他项目，并使CLI工具在PATH中可用。</simpara>
+</section>
+</chapter>
+<chapter xml:id="workspace-patterns">
+<title>工作区模式和最佳实践</title>
+<simpara>TextKit演示了适用于专业Zig开发的几种重要模式：</para>
+<section xml:id="patterns-summary">
+<title>关键设计模式</title>
+<itemizedlist>
+<listitem>
+<simpara><emphasis role="strong">关注点分离</emphasis>：库逻辑与CLI界面分离</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">模块化设计</emphasis>：功能组织成内聚模块</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">统一构建图</emphasis>：单个构建脚本管理所有产物</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">综合测试</emphasis>：单元、集成和端到端测试</simpara>
+</listitem>
+<listitem>
+<simpara><emphasis role="strong">专业打包</emphasis>：正确的安装和分发机制</simpara>
+</listitem>
+</itemizedlist>
+<simpara>这些模式创建可维护、可测试和可重用的代码，可以随着项目需求而发展。</simpara>
+</section>
+</chapter>
+<chapter xml:id="next-steps">
+<title>下一步：高级项目结构</title>
+<simpara>TextKit为理解专业Zig项目结构提供了基础。<link xl:href="24__zig-package-manager-deep.xml">第24章</link>将深入探讨包管理，展示如何处理外部依赖关系和复杂的依赖关系图。</simpara>
+<simpara>关键要点：良好的项目结构通过干净的接口、适当的测试和专业的分发机制分离关注点。</simpara>
+</chapter>
+<chapter xml:id="exercises">
+<title>练习</title>
+<itemizedlist>
+<listitem>
+<simpara>扩展TextKit库以添加新的文本处理功能（例如，文本差异、搜索/替换）</simpara>
+</listitem>
+<listitem>
+<simpara>向CLI工具添加新的命令行选项并更新相应的测试</simpara>
+</listitem>
+<listitem>
+<simpara>创建使用TextKit库作为依赖项的单独项目</simpara>
+</listitem>
+<listitem>
+<simpara>向构建脚本添加性能基准测试步骤</simpara>
+</listitem>
+<listitem>
+<simpara>实现生成项目文档的自定义构建步骤</simpara>
+</listitem>
+</itemizedlist>
+</chapter>
+</book>
