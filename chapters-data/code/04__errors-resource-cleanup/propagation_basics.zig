@@ -1,9 +1,9 @@
 const std = @import("std");
 
 // Chapter 4 §1.1 – this sample names an error set and shows how `try` forwards
-// 章节 4 §1.1 – 此 sample names 一个 错误集合 和 shows how `try` forwards
+// 第4章§1.1 - 此示例命名错误集合并演示`try`如何
 // failures up to the caller without hiding them along the way.
-// failures up 到 caller without hiding them along way.
+// 在不隐藏的情况下将错误向上转发给调用者
 
 const ParseError = error{ InvalidDigit, Overflow };
 
@@ -18,16 +18,16 @@ fn accumulate(input: []const u8) ParseError!u8 {
     var total: u8 = 0;
     for (input) |ch| {
         // Each digit must parse successfully; `try` re-raises any
-        // 每个 digit must parse successfully; `try` re-raises any
+        // 每个数字必须成功解析；`try`重新抛出任何
         // `ParseError` so the outer function's contract stays accurate.
-        // `ParseError` so outer 函数's contract stays accurate.
+        // `ParseError`以保持外部函数契约的准确性
         const digit = try decodeDigit(ch);
         total = total * 10 + digit;
         if (total > 99) {
             // Propagate a second error variant to demonstrate that callers see
-            // Propagate 一个 second 错误 variant 到 demonstrate 该 callers see
+            // 传播第二个错误变体以演示调用者看到
             // a complete vocabulary of what can go wrong.
-            // 一个 complete vocabulary 的 what can go wrong.
+            // 完整的错误词汇表
             return error.Overflow;
         }
     }
