@@ -1,11 +1,11 @@
 const std = @import("std");
 
 // Chapter 5 – TempConv CLI: walk from parsing arguments through producing a
-// 章节 5 – TempConv 命令行工具: walk 从 解析 arguments through producing 一个
+// 第5章 - TempConv CLI：从解析参数到生成
 // formatted result, exercising everything we have learned about errors and
-// 格式化 result, exercising everything we have learned about 错误 和
+// 格式化结果，锻炼我们学到的所有错误处理知识
 // deterministic cleanup along the way.
-// deterministic cleanup along way.
+// 和确定性清理知识
 
 const CliError = error{ MissingArgs, BadNumber, BadUnit };
 
@@ -18,7 +18,7 @@ fn printUsage() void {
 
 fn parseUnit(token: []const u8) CliError!Unit {
     // Section 1: we accept a single-letter token and normalise it so the CLI
-    // 节 1: we accept 一个 single-letter token 和 normalise it so 命令行工具
+    // 第1节：我们接受单个字母标记并规范化它，以便CLI
     // remains forgiving about casing.
     if (token.len != 1) return CliError.BadUnit;
     const ascii = std.ascii;
