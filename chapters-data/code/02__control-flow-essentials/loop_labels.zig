@@ -1,33 +1,33 @@
 // File: chapters-data/code/02__control-flow-essentials/loop_labels.zig
 
 // Demonstrates labeled loops and while-else constructs in Zig
-// 演示 labeled loops 和 当-否则 constructs 在 Zig
+// 演示Zig中的带标签循环和while-else结构
 const std = @import("std");
 
-// / Searches for the first row where both elements are even numbers.
-// / Searches 用于 首先 row where both elements are even 数字.
-// / Uses a while loop with continue statements to skip invalid rows.
-// / 使用 一个 当 loop 使用 continue statements 到 skip 无效 rows.
-// / Returns the zero-based index of the matching row, or null if none found.
-// / 返回 零-based 索引 的 matching row, 或 空 如果 none found.
+/// Searches for the first row where both elements are even numbers.
+/// 查找第一个两元素都为偶数的行
+/// Uses a while loop with continue statements to skip invalid rows.
+/// 使用while循环和continue语句跳过无效行
+/// Returns the zero-based index of the matching row, or null if none found.
+/// 返回匹配行的基于零的索引，如果未找到则返回null
 fn findAllEvenPair(rows: []const [2]i32) ?usize {
     // Track current row index during iteration
-    // Track 当前 row 索引 during iteration
+    // 在迭代期间跟踪当前行索引
     var row: usize = 0;
     // while-else construct: break provides value, else provides fallback
-    // 当-否则 construct: break provides 值, 否则 provides fallback
+    // while-else结构：break提供值，else提供回退
     const found = while (row < rows.len) : (row += 1) {
         // Extract current pair for examination
-        // Extract 当前 pair 用于 examination
+        // 提取当前对进行检查
         const pair = rows[row];
         // Skip row if first element is odd
-        // Skip row 如果 首先 element is odd
+        // 如果第一个元素是奇数则跳过该行
         if (@mod(pair[0], 2) != 0) continue;
         // Skip row if second element is odd
-        // Skip row 如果 second element is odd
+        // 如果第二个元素是奇数则跳过该行
         if (@mod(pair[1], 2) != 0) continue;
         // Both elements are even: return this row's index
-        // Both elements are even: 返回 此 row's 索引
+        // 两个元素都是偶数：返回此行的索引
         break row;
     } else null; // No matching row found after exhausting all rows
 
