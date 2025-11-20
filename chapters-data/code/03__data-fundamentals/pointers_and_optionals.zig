@@ -1,13 +1,13 @@
 const std = @import("std");
 
-// / A simple structure representing a sensor device with a numeric reading.
-// / 一个 simple structure representing 一个 sensor device 使用 一个 numeric reading.
+/// A simple structure representing a sensor device with a numeric reading.
+/// 表示具有数值读数的传感器设备的简单结构
 const Sensor = struct {
     reading: i32,
 };
 
-// / Prints a sensor's reading value to debug output.
-// / Prints 一个 sensor's reading 值 到 调试 输出.
+/// Prints a sensor's reading value to debug output.
+/// 将传感器的读数值打印到调试输出
 // / Takes a single pointer to a Sensor and displays its current reading.
 // / Takes 一个 single pointer 到 一个 Sensor 和 displays its 当前 reading.
 fn report(label: []const u8, ptr: *Sensor) void {
