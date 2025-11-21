@@ -2,9 +2,7 @@ const std = @import("std");
 
 fn stdout() *std.Io.Writer {
     // Buffered stdout writer per Zig 0.15.2 (Writergate)
-    // 缓冲 stdout writer per Zig 0.15.2 (Writergate)
     // We keep the buffer static so it survives for main's duration.
-    // We keep 缓冲区 static so it survives 用于 主's duration.
     const g = struct {
         var buf: [1024]u8 = undefined;
         var w = std.fs.File.stdout().writer(&buf);
@@ -13,7 +11,6 @@ fn stdout() *std.Io.Writer {
 }
 
 // Compute a tiny lookup table at compile time; print at runtime.
-// Compute 一个 tiny lookup table 在 编译时; 打印 在 runtime.
 fn squaresTable(comptime N: usize) [N]u64 {
     var out: [N]u64 = undefined;
     comptime var i: usize = 0;
@@ -31,12 +28,10 @@ pub fn main() !void {
     try out.print("a (comptime 2+3) = {}\n", .{a});
 
     // @inComptime reports whether we are currently executing at compile-time
-    // @inComptime reports whether we are currently executing 在 编译-time
     const during_runtime = @inComptime();
     try out.print("@inComptime() during runtime: {}\n", .{during_runtime});
 
     // Generate a squares table at compile time
-    // Generate 一个 squares table 在 编译时
     const table = squaresTable(8);
     try out.print("squares[0..8): ", .{});
     var i: usize = 0;

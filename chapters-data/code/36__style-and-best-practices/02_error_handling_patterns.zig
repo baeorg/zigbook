@@ -1,106 +1,80 @@
-// ! Resource-safe error handling patterns with defer and errdefer.
-// ! Resource-安全 错误处理 patterns 使用 defer 和 errdefer.
+// ! 使用defer和errdefer的资源安全错误处理模式。
 
 const std = @import("std");
 
-// / Custom error set for data loading operations.
-// / 自定义 错误集合 用于 数据 loading operations.
-// / Keeping error sets small and explicit helps callers route failures precisely.
-// / Keeping 错误 sets small 和 explicit helps callers route failures precisely.
+/// 用于数据加载操作的自定义错误集合。
+/// 保持错误集合小而明确有助于调用者精确处理失败。
 pub const LoaderError = error{InvalidNumber};
 
-// / Loads floating-point samples from a UTF-8 text file.
-// / Loads floating-point 样本 从 一个 UTF-8 text 文件.
-// / Each non-empty line is parsed as an f64.
-// / 每个 non-空 line is parsed 作为 一个 f64.
-// / Caller owns the returned slice and must free it with the same allocator.
-// / Caller owns returned 切片 和 must 释放 it 使用 same allocator.
+/// 从UTF-8文本文件加载浮点样本。
+/// 每个非空行都被解析为f64。
+/// 调用者拥有返回的切片，必须使用相同的分配器释放它。
 pub fn loadSamples(dir: std.fs.Dir, allocator: std.mem.Allocator, path: []const u8) ![]f64 {
-    // Open the file; propagate any I/O errors to caller
-    // Open 文件; propagate any I/O 错误 到 caller
+    // 打开文件；将任何I/O错误传播给调用者
     var file = try dir.openFile(path, .{});
-    // Guarantee file handle is released when function exits, regardless of path taken
-    // Guarantee 文件 处理 is released 当 函数 exits, regardless 的 路径 taken
+    // 保证函数退出时释放文件句柄，无论采用哪种执行路径
     defer file.close();
 
-    // Start with an empty list; we'll grow it as we parse lines
-    // Start 使用 一个 空 list; we'll grow it 作为 we parse lines
+    // 从空列表开始；解析行时会动态增长
     var list = std.ArrayListUnmanaged(f64){};
-    // If any error occurs after this point, free the list's backing memory
-    // 如果 any 错误 occurs after 此 point, 释放 list's backing 内存
+    // 如果在此之后发生任何错误，释放列表的后备内存
     errdefer list.deinit(allocator);
 
-    // Read entire file into memory; cap at 64KB for safety
-    // 读取 entire 文件 into 内存; cap 在 64KB 用于 safety
+    // 将整个文件读入内存；安全起见限制为64KB
     const contents = try file.readToEndAlloc(allocator, 1 << 16);
-    // Free the temporary buffer once we've parsed it
-    // 释放 temporary 缓冲区 once we've parsed it
+    // 解析完成后释放临时缓冲区
     defer allocator.free(contents);
 
-    // Split contents by newline; iterator yields one line at a time
-    // Split contents 通过 newline; iterator yields 一个 line 在 一个 time
+    // 按换行符分割内容；迭代器逐行产生
     var lines = std.mem.splitScalar(u8, contents, '\n');
     while (lines.next()) |line| {
-        // Strip leading/trailing whitespace and carriage returns
-        // Strip leading/trailing whitespace 和 carriage 返回
+        // 去除首尾空白和回车符
         const trimmed = std.mem.trim(u8, line, " \t\r");
-        // Skip empty lines entirely
-        // Skip 空 lines entirely
+        // 完全跳过空行
         if (trimmed.len == 0) continue;
 
-        // Attempt to parse the line as a float; surface a domain-specific error on failure
-        // 尝试 parse line 作为 一个 float; surface 一个 domain-specific 错误 在 failure
+        // 尝试将行解析为浮点数；失败时返回特定域错误
         const value = std.fmt.parseFloat(f64, trimmed) catch return LoaderError.InvalidNumber;
-        // Append successfully parsed value to the list
-        // Append successfully parsed 值 到 list
+        // 将成功解析的值追加到列表
         try list.append(allocator, value);
     }
 
-    // Transfer ownership of the backing array to the caller
-    // Transfer ownership 的 backing 数组 到 caller
+    // 将后备数组的所有权转移给调用者
     return list.toOwnedSlice(allocator);
 }
 
 test "loadSamples returns parsed floats" {
-    // Create a temporary directory that will be cleaned up automatically
-    // 创建一个 temporary directory 该 will be cleaned up automatically
+    // 创建一个将被自动清理的临时目录
     var tmp_fs = std.testing.tmpDir(.{});
     defer tmp_fs.cleanup();
 
-    // Write sample data to a test file
-    // 写入 sample 数据 到 一个 test 文件
+    // 将示例数据写入测试文件
     const file_path = try tmp_fs.dir.createFile("samples.txt", .{});
     defer file_path.close();
     try file_path.writeAll("1.0\n2.5\n3.75\n");
 
-    // Load and parse the samples; defer ensures cleanup even if assertions fail
-    // Load 和 parse 样本; defer 确保 cleanup even 如果 assertions fail
+    // 加载并解析样本；defer确保即使断言失败也会清理
     const samples = try loadSamples(tmp_fs.dir, std.testing.allocator, "samples.txt");
     defer std.testing.allocator.free(samples);
 
-    // Verify we parsed exactly three values
-    // Verify we parsed exactly 三个 值
+    // 验证我们解析了恰好三个值
     try std.testing.expectEqual(@as(usize, 3), samples.len);
-    // Check each value is within acceptable floating-point tolerance
-    // 检查 每个 值 is within acceptable floating-point tolerance
+    // 检查每个值都在可接受的浮点容差范围内
     try std.testing.expectApproxEqAbs(1.0, samples[0], 0.001);
     try std.testing.expectApproxEqAbs(2.5, samples[1], 0.001);
     try std.testing.expectApproxEqAbs(3.75, samples[2], 0.001);
 }
 
 test "loadSamples surfaces invalid numbers" {
-    // Set up another temporary directory for error-path testing
-    // Set up another temporary directory 用于 错误-路径 testing
+    // 为错误路径测试设置另一个临时目录
     var tmp_fs = std.testing.tmpDir(.{});
     defer tmp_fs.cleanup();
 
-    // Write non-numeric content to trigger parsing failure
-    // 写入 non-numeric content 到 trigger 解析 failure
+    // 写入非数字内容以触发解析失败
     const file_path = try tmp_fs.dir.createFile("bad.txt", .{});
     defer file_path.close();
     try file_path.writeAll("not-a-number\n");
 
-    // Confirm that loadSamples returns the expected domain error
-    // Confirm 该 loadSamples 返回 expected domain 错误
+    // 确认loadSamples返回预期的域错误
     try std.testing.expectError(LoaderError.InvalidNumber, loadSamples(tmp_fs.dir, std.testing.allocator, "bad.txt"));
 }

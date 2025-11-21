@@ -1,33 +1,26 @@
-// File: chapters-data/code/02__control-flow-essentials/script_runner.zig
+// 文件路径: chapters-data/code/02__control-flow-essentials/script_runner.zig
 
-// Demonstrates advanced control flow: switch expressions, labeled loops,
-// 演示 advanced 控制流: switch expressions, labeled loops,
-// and early termination based on threshold conditions
-// 和 early termination 基于 threshold conditions
+// 演示高级控制流：switch表达式、带标签循环
+// 和基于阈值条件的早期终止
 const std = @import("std");
 
-// / Enumeration of all possible action types in the script processor
-// / Enumeration 的 所有 possible action 类型 在 script processor
+/// 脚本处理器中所有可能操作类型的枚举
 const Action = enum { add, skip, threshold, unknown };
 
-// / Represents a single processing step with an associated action and value
-// / Represents 一个 single processing step 使用 一个 associated action 和 值
+/// 表示单个处理步骤，包含相关操作和值
 const Step = struct {
     tag: Action,
     value: i32,
 };
 
-// / Contains the final state after script execution completes or terminates early
-// / Contains 最终 state after script execution completes 或 terminates early
+/// 包含脚本执行完成或提前终止后的最终状态
 const Outcome = struct {
-    index: usize, // Step index where processing stopped
-    total: i32,   // Accumulated total at termination
+    index: usize, // 处理停止的步骤索引
+    total: i32,   // 终止时的累积总值
 };
 
-// / Maps single-character codes to their corresponding Action enum values.
-// / Maps single-character codes 到 their 对应的 Action enum 值.
-// / Returns .unknown for unrecognized codes to maintain exhaustive handling.
-// / 返回 .unknown 用于 unrecognized codes 到 maintain exhaustive handling.
+/// 将单字符代码映射到对应的Action枚举值
+/// 对于无法识别的代码返回.unknown以保持穷举处理
 fn mapCode(code: u8) Action {
     return switch (code) {
         'A' => .add,
@@ -37,63 +30,49 @@ fn mapCode(code: u8) Action {
     };
 }
 
-// / Executes a sequence of steps, accumulating values and checking threshold limits.
-// / Executes 一个 sequence 的 steps, accumulating 值 和 checking threshold limits.
-// / Processing stops early if a threshold step finds the total meets or exceeds the limit.
-// / Processing stops early 如果 一个 threshold step finds total meets 或 exceeds limit.
-// / Returns an Outcome containing the stop index and final accumulated total.
-// / 返回 一个 Outcome containing stop 索引 和 最终 accumulated total.
+/// 执行步骤序列，累积值并检查阈值限制
+/// 如果阈值步骤发现总值达到或超过限制，则提前停止处理
+/// 返回包含停止索引和最终累积总值的Outcome
 fn process(script: []const Step, limit: i32) Outcome {
-    // Running accumulator for add operations
-    // Running accumulator 用于 add operations
+    // 加法操作的运行累积器
     var total: i32 = 0;
 
-    // for-else construct: break provides early termination value, else provides completion value
-    // 用于-否则 construct: break provides early termination 值, 否则 provides completion 值
+    // for-else结构：break提供早期终止值，else提供完成值
     const stop = outer: for (script, 0..) |step, index| {
-        // Dispatch based on the current step's action type
-        // Dispatch 基于 当前 step's action 类型
+        // 根据当前步骤的操作类型分派
         switch (step.tag) {
-            // Add operation: accumulate the step's value to the running total
-            // Add operation: accumulate step's 值 到 running total
+            // 加法操作：将步骤的值累积到运行总值
             .add => total += step.value,
-            // Skip operation: bypass this step without modifying state
-            // Skip operation: bypass 此 step without modifying state
+            // 跳过操作：绕过此步骤而不修改状态
             .skip => continue :outer,
-            // Threshold check: terminate early if limit is reached or exceeded
-            // Threshold 检查: terminate early 如果 limit is reached 或 exceeded
+            // 阈值检查：如果达到或超过限制则提前终止
             .threshold => {
                 if (total >= limit) break :outer Outcome{ .index = index, .total = total };
-                // Threshold not met: continue to next step
-                // Threshold 不 met: continue 到 下一个 step
+                // 未达到阈值：继续下一步
                 continue :outer;
             },
-            // Safety assertion: unknown actions should never appear in validated scripts
-            // Safety assertion: unknown actions should never appear 在 validated scripts
+            // 安全断言：未知操作不应出现在已验证的脚本中
             .unknown => unreachable,
         }
-    } else Outcome{ .index = script.len, .total = total }; // Normal completion after all steps
+    } else Outcome{ .index = script.len, .total = total }; // 所有步骤后正常完成
 
     return stop;
 }
 
 pub fn main() !void {
-    // Define a script sequence demonstrating all action types
-    // 定义一个 script sequence demonstrating 所有 action 类型
+    // 定义演示所有操作类型的脚本序列
     const script = [_]Step{
-        .{ .tag = mapCode('A'), .value = 2 },  // Add 2 → total: 2
-        .{ .tag = mapCode('S'), .value = 0 },  // Skip (no effect)
-        .{ .tag = mapCode('A'), .value = 5 },  // Add 5 → total: 7
-        .{ .tag = mapCode('T'), .value = 6 },  // Threshold check (7 >= 6: triggers early exit)
-        .{ .tag = mapCode('A'), .value = 10 }, // Never executed due to early termination
+        .{ .tag = mapCode('A'), .value = 2 },  // 加2 → 总计: 2
+        .{ .tag = mapCode('S'), .value = 0 },  // 跳过（无效果）
+        .{ .tag = mapCode('A'), .value = 5 },  // 加5 → 总计: 7
+        .{ .tag = mapCode('T'), .value = 6 },  // 阈值检查 (7 >= 6: 触发早期退出)
+        .{ .tag = mapCode('A'), .value = 10 }, // 由于早期终止而永不执行
     };
 
-    // Execute the script with a threshold limit of 6
-    // Execute script 使用 一个 threshold limit 的 6
+    // 使用阈值限制6执行脚本
     const outcome = process(&script, 6);
-    
-    // Report where execution stopped and the final accumulated value
-    // Report where execution stopped 和 最终 accumulated 值
+
+    // 报告执行停止的位置和最终累积值
     std.debug.print(
         "stopped at step {d} with total {d}\n",
         .{ outcome.index, outcome.total },

@@ -1,5 +1,4 @@
 // ! Reinvents a C-style buffer duplication with Zig's defer-based cleanup.
-// ! Reinvents 一个 C-style 缓冲区 duplication 使用 Zig's defer-based cleanup.
 const std = @import("std");
 
 pub const NormalizeError = error{InvalidCharacter} || std.mem.Allocator.Error;

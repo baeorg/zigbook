@@ -1,85 +1,66 @@
-
-// Import the Zig standard library for basic functionality
-// 导入 Zig 标准库 用于 basic functionality
+// 导入Zig标准库以获取基本功能
 const std = @import("std");
 
-// Import C header file using @cImport to interoperate with C code
-// 导入 C header 文件 使用 @cImport 到 interoperate 使用 C 代码
-// This creates a namespace 'c' containing all declarations from "abi.h"
-// 此 creates 一个 namespace 'c' containing 所有 declarations 从 "abi.h"
+// 使用@cImport导入C头文件以与C代码互操作
+// 这会创建一个包含"abi.h"中所有声明的命名空间'c'
 const c = @cImport({
     @cInclude("abi.h");
 });
 
-// Define a Zig struct with 'extern' keyword to match C ABI layout
-// 定义一个 Zig struct 使用 'extern' keyword 到 match C ABI layout
-// The 'extern' keyword ensures the struct uses C-compatible memory layout
-// 'extern' keyword 确保 struct 使用 C-compatible 内存 layout
-// without Zig's automatic padding optimizations
+// 使用'extern'关键字定义Zig结构以匹配C ABI布局
+// 'extern'关键字确保结构使用C兼容的内存布局
+// 而不进行Zig的自动填充优化
 const SensorSample = extern struct {
-    temperature_c: f32,  // Temperature reading in Celsius (32-bit float)
-    status_bits: u16,    // Status flags packed into 16 bits
-    port_id: u8,         // Port identifier (8-bit unsigned)
-    reserved: u8 = 0,    // Reserved byte for alignment/future use, default to 0
+    temperature_c: f32,  // 摄氏温度读数（32位浮点）
+    status_bits: u16,    // 状态标志打包为16位
+    port_id: u8,         // 端口标识符（8位无符号）
+    reserved: u8 = 0,    // 用于对齐/未来保留的字节，默认为0
 };
 
-// Convert a C struct to its Zig equivalent using pointer casting
-// Convert 一个 C struct 到 its Zig equivalent 使用 pointer casting
-// This demonstrates type-punning between C and Zig representations
-// 此 演示 类型-punning between C 和 Zig representations
-// @ptrCast reinterprets the memory layout without copying data
-// @ptrCast reinterprets 内存 layout without copying 数据
+// 使用指针转换将C结构转换为其Zig等效结构
+// 这演示了C和Zig表示之间的类型转换
+// @ptrCast在不复制数据的情况下重新解释内存布局
 fn fromC(sample: c.struct_SensorSample) SensorSample {
     return @as(*const SensorSample, @ptrCast(&sample)).*;
 }
 
 pub fn main() !void {
-    // Create a fixed-size buffer for stdout to avoid allocations
-    // 创建一个 固定大小缓冲区 用于 stdout 到 avoid allocations
+    // 为stdout创建固定大小的缓冲区以避免分配
     var stdout_buffer: [256]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
     const out = &stdout_writer.interface;
 
-    // Print size comparison between C and Zig struct representations
-    // 打印 size comparison between C 和 Zig struct representations
-    // Both should be identical due to 'extern' struct attribute
-    // Both should be identical 由于 'extern' struct attribute
+    // 打印C和Zig结构表示之间的size比较
+    // 由于'extern'结构属性，两者应该完全相同
     try out.print("sizeof(C struct) = {d}\n", .{@sizeOf(c.struct_SensorSample)});
     try out.print("sizeof(Zig extern struct) = {d}\n", .{@sizeOf(SensorSample)});
 
-    // Call C functions to create sensor samples with specific values
-    // Call C 函数 到 创建 sensor 样本 使用 specific 值
+    // 调用C函数以创建具有特定值的传感器样本
     const left = c.make_sensor_sample(42.5, 0x0102, 7);
     const right = c.make_sensor_sample(38.0, 0x0004, 9);
-    
-    // Call C function that operates on C structs and returns a computed value
-    // Call C 函数 该 operates 在 C structs 和 返回 一个 computed 值
+
+    // 调用操作C结构并返回计算值的C函数
     const total = c.combined_voltage(left, right);
 
-    // Convert C structs to Zig structs for idiomatic Zig access
-    // Convert C structs 到 Zig structs 用于 idiomatic Zig access
+    // 将C结构转换为Zig结构以进行惯用Zig访问
     const zig_left = fromC(left);
     const zig_right = fromC(right);
 
-    // Print sensor data from the left port with formatted output
-    // 打印 sensor 数据 从 left port 使用 格式化 输出
+    // 打印来自左端口的传感器数据，带格式化输出
     try out.print(
         "left port {d}: {d} status bits, {d:.2} °C\n",
         .{ zig_left.port_id, zig_left.status_bits, zig_left.temperature_c },
     );
-    
-    // Print sensor data from the right port with formatted output
-    // 打印 sensor 数据 从 right port 使用 格式化 输出
+
+    // 打印来自右端口的传感器数据，带格式化输出
     try out.print(
         "right port {d}: {d} status bits, {d:.2} °C\n",
         .{ zig_right.port_id, zig_right.status_bits, zig_right.temperature_c },
     );
-    
-    // Print the combined voltage result computed by C function
-    // 打印 combined voltage result computed 通过 C 函数
+
+    // 打印由C函数计算的组合电压结果
     try out.print("combined_voltage = {d:.3}\n", .{total});
-    
-    // Flush the buffered output to ensure all data is written
-    // 刷新 缓冲 输出 到 确保 所有 数据 is written
+
+    // 刷新缓冲输出以确保所有数据被写入
     try out.flush();
 }

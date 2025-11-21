@@ -1,14 +1,14 @@
 const std = @import("std");
 
 // Chapter 9 – Project: Hexdump
-// 章节 9 – Project: Hexdump
+// 第9章 - 项目：十六进制转储
 //
 // A small, alignment-aware hexdump that prints:
-// 一个 small, alignment-aware hexdump 该 prints:
+// 一个小的、对齐感知的十六进制转储，打印：
 // OFFSET: 16 hex bytes (grouped 8|8)  ASCII
-// OFFSET: 16 hex bytes (grouped 8|8) ASCII
+// OFFSET: 16 hex bytes (按 8|8 分组) ASCII
 // Default width is 16 bytes per line; override with --width N (4..32).
-// 默认 width is 16 bytes per line; override 使用 --width N (4..32).
+// 默认宽度为每行 16 字节；使用 --width N (4..32) 覆盖。
 //
 // Usage:
 // zig run hexdump.zig -- <path>
@@ -77,8 +77,7 @@ fn dumpLine(stdout: *std.Io.Writer, offset: usize, bytes: []const u8, width: usi
         if (i < bytes.len) {
             try stdout.print("{X:0>2} ", .{bytes[i]});
         } else {
-            // pad absent bytes to keep ASCII column aligned
-            // pad absent bytes 到 keep ASCII column aligned
+            // 填充缺失的字节以保持ASCII列对齐
             try stdout.print("   ", .{});
         }
         if (i + 1 == width / 2) {

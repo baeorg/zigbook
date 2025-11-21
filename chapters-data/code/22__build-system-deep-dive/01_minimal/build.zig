@@ -8,7 +8,7 @@ pub fn build(b: *std.Build) void {
     // Create an executable compilation step with minimal configuration.
     // 创建 一个 executable compilation step 使用 最小化 configuration.
     // This represents the fundamental pattern for producing a binary artifact.
-    // 此 represents fundamental pattern 用于 producing 一个 binary artifact.
+    // 此表示生成二进制工件的基本模式。
     const exe = b.addExecutable(.{
         // The output binary name (becomes "hello" or "hello.exe")
         // 输出 binary name (becomes "hello" 或 "hello.exe")
@@ -29,8 +29,8 @@ pub fn build(b: *std.Build) void {
     });
     
     // Register the executable to be installed to the output directory.
-    // Register executable 到 be installed 到 输出 directory.
+    // 注册可执行文件以安装到输出目录。
     // When `zig build` runs, this artifact will be copied to zig-out/bin/
-    // 当 `zig 构建` runs, 此 artifact will be copied 到 zig-out/bin/
+    // 当运行`zig build`时，此工件将复制到zig-out/bin/。
     b.installArtifact(exe);
 }

@@ -1,12 +1,9 @@
 const std = @import("std");
 
-// Chapter 8 — Struct basics: fields, methods, defaults, namespacing
-// 章节 8 — Struct basics: fields, methods, defaults, namespacing
-// 
-// Demonstrates defining a struct with fields and methods, including
-// 演示 defining 一个 struct 使用 fields 和 methods, including
-// default field values. Also shows namespacing of methods vs free functions.
-// 默认 field 值. Also shows namespacing 的 methods vs 释放 函数.
+// 第8章 — 结构体基础：字段、方法、默认值、命名空间
+//
+// 演示如何使用字段和方法定义结构体，包括
+// 默认字段值。同时展示方法的命名空间与自由函数的区别。
 //
 // Usage: 
 //    zig run struct_basics.zig
@@ -27,8 +24,7 @@ const Point = struct {
     }
 };
 
-// Namespacing: free function in file scope vs method
-// Namespacing: 释放 函数 在 文件 scope vs method
+// 命名空间：文件作用域的自由函数与方法
 fn distanceFromOrigin(p: Point) f64 {
     return p.len();
 }

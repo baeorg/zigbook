@@ -1,21 +1,15 @@
 const std = @import("std");
 
-// / Build script for log-analyzer project demonstrating native and WASI cross-compilation.
-// / 构建 script 用于 log-analyzer project demonstrating native 和 WASI cross-compilation.
-// / Produces two executables: one for native execution and one for WASI runtimes.
-// / Produces 两个 executables: 一个 用于 native execution 和 一个 用于 WASI runtimes.
+/// 为演示原生和WASI交叉编译的log-analyzer项目构建脚本。
+/// 生成两个可执行文件：一个用于原生执行，一个用于WASI运行时。
 pub fn build(b: *std.Build) void {
-    // Standard target and optimization options from command-line flags
-    // 标准 target 和 optimization options 从 command-line flags
-    // These allow users to specify --target and --optimize when building
-    // 这些 allow users 到 specify --target 和 --optimize 当 building
+    // 来自命令行标志的标准目标和优化选项
+    // 这些允许用户在构建时指定--target和--optimize
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Native executable: optimized for fast runtime performance on the host system
-    // Native executable: optimized 用于 fast runtime performance 在 host system
-    // This target respects user-specified target and optimization settings
-    // 此 target respects user-specified target 和 optimization settings
+    // 原生可执行文件：为宿主系统上的快速运行时性能进行优化
+    // 此目标遵循用户指定的目标和优化设置
     const exe_native = b.addExecutable(.{
         .name = "log-analyzer-native",
         .root_module = b.createModule(.{
@@ -24,14 +18,11 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    // Register the native executable for installation to zig-out/bin
-    // Register native executable 用于 installation 到 zig-out/bin
+    // 注册原生可执行文件以安装到zig-out/bin
     b.installArtifact(exe_native);
 
-    // WASI executable: cross-compiled to WebAssembly with WASI support
-    // WASI executable: cross-compiled 到 WebAssembly 使用 WASI support
-    // Uses ReleaseSmall to minimize binary size for portable distribution
-    // 使用 ReleaseSmall 到 minimize binary size 用于 portable distribution
+    // WASI可执行文件：交叉编译为WebAssembly并支持WASI
+    // 使用ReleaseSmall以最小化二进制大小，便于分发
     const wasi_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .wasi,
@@ -41,93 +32,72 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = wasi_target,
-            .optimize = .ReleaseSmall, // Prioritize small binary size over speed
+            .optimize = .ReleaseSmall, // 优先考虑小二进制大小而不是速度
         }),
     });
-    // Register the WASI executable for installation to zig-out/bin
-    // Register WASI executable 用于 installation 到 zig-out/bin
+    // 注册WASI可执行文件以安装到zig-out/bin
     b.installArtifact(exe_wasi);
 
-    // Create run step for native target that executes the compiled binary directly
-    // 创建 run step 用于 native target 该 executes compiled binary directly
+    // 为原生目标创建运行步骤，直接执行编译的二进制文件
     const run_native = b.addRunArtifact(exe_native);
-    // Ensure the binary is built and installed before attempting to run it
-    // 确保 binary is built 和 installed before attempting 到 run it
+    // 确保在尝试运行之前构建并安装二进制文件
     run_native.step.dependOn(b.getInstallStep());
-    // Forward any command-line arguments passed after -- to the executable
-    // Forward any command-line arguments passed after -- 到 executable
+    // 转发在--之后传递的任何命令行参数到可执行文件
     if (b.args) |args| {
         run_native.addArgs(args);
     }
-    // Register the run step so users can invoke it with `zig build run-native`
-    // Register run step so users can invoke it 使用 `zig 构建 run-native`
+    // 注册运行步骤，以便用户可以使用`zig build run-native`调用它
     const run_native_step = b.step("run-native", "Run the native log analyzer");
     run_native_step.dependOn(&run_native.step);
 
-    // Create run step for WASI target with automatic runtime detection
-    // 创建 run step 用于 WASI target 使用 automatic runtime detection
-    // First, attempt to detect an available WASI runtime (wasmtime or wasmer)
-    // 首先, 尝试 detect 一个 available WASI runtime (wasmtime 或 wasmer)
+    // 为WASI目标创建运行步骤，带有自动运行时检测
+    // 首先，尝试检测可用的WASI运行时（wasmtime或wasmer）
     const run_wasi = b.addSystemCommand(&.{"echo"});
     const wasi_runtime = detectWasiRuntime(b) orelse {
-        // If no runtime is found, provide a helpful error message
-        // 如果 不 runtime is found, provide 一个 helpful 错误 message
+        // 如果找不到运行时，提供有用的错误消息
         run_wasi.addArg("ERROR: No WASI runtime (wasmtime or wasmer) found in PATH");
         const run_wasi_step = b.step("run-wasi", "Run the WASI log analyzer (requires wasmtime or wasmer)");
         run_wasi_step.dependOn(&run_wasi.step);
         return;
     };
 
-    // Construct the command to run the WASI binary with the detected runtime
-    // Construct command 到 run WASI binary 使用 detected runtime
+    // 构造使用检测到的运行时运行WASI二进制文件的命令
     const run_wasi_cmd = b.addSystemCommand(&.{wasi_runtime});
-    // Both wasmtime and wasmer require the 'run' subcommand
-    // Both wasmtime 和 wasmer require 'run' subcommand
+    // wasmtime和wasmer都需要'run'子命令
     if (std.mem.eql(u8, wasi_runtime, "wasmtime") or std.mem.eql(u8, wasi_runtime, "wasmer")) {
         run_wasi_cmd.addArg("run");
-        // Grant access to the current directory for file I/O operations
-        // Grant access 到 当前 directory 用于 文件 I/O operations
+        // 授予对当前目录的访问权限以进行文件I/O操作
         run_wasi_cmd.addArg("--dir=.");
     }
-    // Add the WASI binary as the target to execute
-    // Add WASI binary 作为 target 到 execute
+    // 添加WASI二进制文件作为要执行的目标
     run_wasi_cmd.addArtifactArg(exe_wasi);
-    // Forward user arguments after the -- separator to the WASI program
-    // Forward user arguments after -- separator 到 WASI program
+    // 转发用户在--分隔符之后的参数到WASI程序
     if (b.args) |args| {
         run_wasi_cmd.addArg("--");
         run_wasi_cmd.addArgs(args);
     }
-    // Ensure the WASI binary is built before attempting to run it
-    // 确保 WASI binary is built before attempting 到 run it
+    // 确保在尝试运行之前构建WASI二进制文件
     run_wasi_cmd.step.dependOn(b.getInstallStep());
 
-    // Register the WASI run step so users can invoke it with `zig build run-wasi`
-    // Register WASI run step so users can invoke it 使用 `zig 构建 run-wasi`
+    // 注册WASI运行步骤，以便用户可以使用`zig build run-wasi`调用它
     const run_wasi_step = b.step("run-wasi", "Run the WASI log analyzer (requires wasmtime or wasmer)");
     run_wasi_step.dependOn(&run_wasi_cmd.step);
 }
 
-// / Detect available WASI runtime in the system PATH.
-// / Detect available WASI runtime 在 system 路径.
-// / Checks for wasmtime first, then wasmer as a fallback.
-// / Checks 用于 wasmtime 首先, 那么 wasmer 作为 一个 fallback.
-// / Returns the name of the detected runtime, or null if neither is found.
-// / 返回 name 的 detected runtime, 或 空 如果 neither is found.
+/// 检测系统PATH中的可用WASI运行时。
+/// 首先检查wasmtime，然后检查wasmer作为后备。
+/// 返回检测到的运行时的名称，如果都未找到则返回null。
 fn detectWasiRuntime(b: *std.Build) ?[]const u8 {
-    // Attempt to locate wasmtime using the 'which' command
-    // 尝试 locate wasmtime 使用 'which' command
+    // 尝试使用'which'命令定位wasmtime
     var exit_code: u8 = undefined;
     _ = b.runAllowFail(&.{ "which", "wasmtime" }, &exit_code, .Ignore) catch {
-        // If wasmtime is not found, try wasmer as a fallback
-        // 如果 wasmtime is 不 found, try wasmer 作为 一个 fallback
+        // 如果未找到wasmtime，尝试wasmer作为后备
         _ = b.runAllowFail(&.{ "which", "wasmer" }, &exit_code, .Ignore) catch {
-            // Neither runtime was found in PATH
-            // Neither runtime was found 在 路径
+            // 在PATH中未找到运行时
             return null;
         };
         return "wasmer";
     };
-    // wasmtime was successfully located
+    // 成功定位了wasmtime
     return "wasmtime";
 }

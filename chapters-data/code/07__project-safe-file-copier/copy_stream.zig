@@ -1,19 +1,14 @@
 const std = @import("std");
 
-// Chapter 7 – Safe File Copier (manual streaming with errdefer cleanup)
-// 章节 7 – 安全文件复制器 (manual streaming 使用 errdefer cleanup)
+// 第7章 - 安全文件复制器（使用errdefer清理的手动流式传输）
 //
-// Demonstrates opening, reading, writing, and cleaning up safely using
-// 演示 opening, reading, writing, 和 cleaning up safely 使用
-// defer/errdefer. If the copy fails after destination creation, we remove
-// defer/errdefer. 如果 复制 fails after 目标文件 creation, we remove
-// the partial file so callers never observe a truncated artifact.
-// partial 文件 so callers never observe 一个 truncated artifact.
+// 演示使用defer/errdefer安全地打开、读取、写入和清理。
+// 如果在创建目标文件后复制失败，我们会删除
+// 部分文件，以便调用者永远不会观察到截断的产物。
 //
-// Usage:
+// 用法:
 //   zig run copy_stream.zig -- <src> <dst>
-// zig run copy_stream.zig -- --force <src> <dst>
-// zig run copy_stream.zig -- --强制 <src> <dst>
+//   zig run copy_stream.zig -- --force <src> <dst>
 
 const Cli = struct {
     force: bool = false,
@@ -57,8 +52,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Cli {
         std.process.exit(2);
     }
 
-    // Duplicate paths so they remain valid after freeing args.
-    // Duplicate 路径 so they remain valid after freeing 参数.
+    // 复制路径以便在释放args后保持有效
     cli.src = try allocator.dupe(u8, args[i]);
     cli.dst = try allocator.dupe(u8, args[i + 1]);
     return cli;
@@ -70,8 +64,7 @@ pub fn main() !void {
 
     const cwd = std.fs.cwd();
 
-    // Open source and inspect its metadata.
-    // Open 源文件 和 inspect its metadata.
+    // 打开源文件并检查其元数据
     var src = cwd.openFile(cli.src, .{ .mode = .read_only }) catch {
         std.debug.print("error: unable to open source '{s}'\n", .{cli.src});
         std.process.exit(1);
@@ -84,8 +77,7 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    // Safe-by-default: refuse to overwrite unless --force.
-    // 安全-通过-默认: refuse 到 overwrite unless --强制.
+    // 默认安全：拒绝覆盖，除非使用--force
     if (!cli.force) {
         const dest_exists = blk: {
             _ = cwd.statFile(cli.dst) catch |err| switch (err) {
@@ -100,8 +92,7 @@ pub fn main() !void {
         }
     }
 
-    // Create destination with exclusive mode when not forcing overwrite.
-    // 创建 目标文件 使用 exclusive 模式 当 不 forcing overwrite.
+    // 在不强制覆盖时以独占模式创建目标文件
     var dest = cwd.createFile(cli.dst, .{
         .read = false,
         .truncate = cli.force,
@@ -117,15 +108,13 @@ pub fn main() !void {
             std.process.exit(1);
         },
     };
-    // Ensure closure and cleanup order: close first, then delete on error.
-    // 确保 closure 和 cleanup order: close 首先, 那么 delete 在 错误.
+    // 确保关闭和清理顺序：先关闭，错误时再删除
     defer dest.close();
     errdefer cwd.deleteFile(cli.dst) catch {};
 
-    // Wire a Reader/Writer pair and copy using the Writer interface.
-    // Wire 一个 Reader/Writer pair 和 复制 使用 Writer 接口.
+    // 连接Reader/Writer对并使用Writer接口复制
     var reader: std.fs.File.Reader = .initSize(src, &.{}, st.size);
-    var write_buf: [64 * 1024]u8 = undefined; // buffered writes
+    var write_buf: [64 * 1024]u8 = undefined; // 缓冲写入
     var writer = std.fs.File.writer(dest, &write_buf);
 
     _ = writer.interface.sendFileAll(&reader, .unlimited) catch |err| switch (err) {
@@ -133,7 +122,6 @@ pub fn main() !void {
         error.WriteFailed => return writer.err.?,
     };
 
-    // Flush buffered bytes and set the final file length.
-    // 刷新 缓冲 bytes 和 set 最终 文件 length.
+    // 刷新缓冲字节并设置最终文件长度
     try writer.end();
 }

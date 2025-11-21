@@ -1,83 +1,54 @@
-// ! GPU Kernel: Coordinate Capture
-// ! GPU Kernel: Coordinate 捕获
+// ! GPU内核：坐标捕获
 //!
-// ! This module demonstrates a minimal SPIR-V compute kernel that captures GPU dispatch
-// ! 此 module 演示 一个 最小化 SPIR-V compute kernel 该 captures GPU dispatch
-// ! coordinates into a storage buffer. It shows how to use Zig's GPU-specific builtins
-// ! coordinates into 一个 storage 缓冲区. It shows how 到 use Zig's GPU-specific builtins
-// ! and address space annotations to write kernels that compile to SPIR-V.
-// ! 和 address space annotations 到 写入 kernels 该 编译 到 SPIR-V.
+//! 此模块演示一个最小的SPIR-V计算内核，它将GPU调度坐标捕获到存储缓冲区中。
+//! 它展示了如何使用Zig的GPU特定内置函数和地址空间注释来编写编译为SPIR-V的内核。
 
 const builtin = @import("builtin");
 
-// / Represents GPU dispatch coordinates for a single invocation
-// / Represents GPU dispatch coordinates 用于 一个 single invocation
-/// 
-// / Uses `extern` layout to guarantee memory layout matches host-side expectations,
-// / 使用 `extern` layout 到 guarantee 内存 layout matches host-side expectations,
-// / ensuring the kernel's output can be safely interpreted by CPU code reading the buffer.
-// / ensuring kernel's 输出 can be safely interpreted 通过 CPU 代码 reading 缓冲区.
+/// 表示单个调用的GPU调度坐标
+///
+/// 使用`extern`布局来保证内存布局与主机端期望匹配，
+/// 确保内核的输出可以被读取缓冲区的CPU代码安全解释。
 const Coordinates = extern struct {
-    // / Work group ID (which group this invocation belongs to)
-    // / Work group ID (which group 此 invocation belongs 到)
+    // 工作组ID（此调用所属的组）
     group: u32,
-    // / Work group size (number of invocations per group in this dimension)
-    // / Work group size (数字 的 invocations per group 在 此 dimension)
+    // 工作组大小（此维度中每组的调用数）
     group_size: u32,
-    // / Local invocation ID within the work group (0 to group_size-1)
-    // / Local invocation ID within work group (0 到 group_size-1)
+    // 工作组内的本地调用ID（0到group_size-1）
     local: u32,
-    // / Global linear ID across all invocations (group * group_size + local)
-    // / Global linear ID across 所有 invocations (group * group_size + local)
+    // 所有调用的全局线性ID（group * group_size + local）
     linear: u32,
 };
 
-// / GPU kernel entry point that captures dispatch coordinates
-// / GPU kernel 程序入口点 该 captures dispatch coordinates
+/// 捕获调度坐标的GPU内核入口点
 ///
-// / This function must be exported so the SPIR-V compiler generates an entry point.
-// / 此 函数 must be exported so SPIR-V compiler generates 一个 程序入口点.
-// / The `callconv(.kernel)` calling convention tells Zig to emit GPU-specific function
-// / `callconv(.kernel)` calling convention tells Zig 到 emit GPU-specific 函数
-// / attributes and handle parameter passing according to compute shader ABI.
-// / attributes 和 处理 parameter passing 根据 compute shader ABI.
+/// 此函数必须被导出，以便SPIR-V编译器生成入口点。
+/// `callconv(.kernel)`调用约定告诉Zig发出GPU特定函数属性，
+/// 并根据计算着色器ABI处理参数传递。
 ///
-/// Parameters:
-// /   - out: Pointer to storage buffer where coordinates will be written.
-// / - out: Pointer 到 storage 缓冲区 where coordinates will be written.
-// /          The `.storage_buffer` address space annotation ensures proper
-// / `.storage_buffer` address space annotation 确保 proper
-// /          memory access patterns for device-visible GPU memory.
-// / 内存 access patterns 用于 device-visible GPU 内存.
+/// 参数：
+///   - out：指向将写入坐标的存储缓冲区的指针。
+///          `.storage_buffer`地址空间注释确保适当的
+///          设备可见GPU内存的内存访问模式。
 pub export fn captureCoordinates(out: *addrspace(.storage_buffer) Coordinates) callconv(.kernel) void {
-    // Query the work group ID in the X dimension (first dimension)
-    // Query work group ID 在 X dimension (首先 dimension)
-    // @workGroupId is a GPU-specific builtin that returns the current work group's coordinate
-    // @workGroupId is 一个 GPU-specific 内置 该 返回 当前 work group's coordinate
+    // 查询X维度中的工作组ID（第一维度）
+    // @workGroupId是GPU特定的内置函数，返回当前工作组的坐标
     const group = @workGroupId(0);
-    
-    // Query the work group size (how many invocations per group in this dimension)
-    // Query work group size (how many invocations per group 在 此 dimension)
-    // This is set at dispatch time by the host and queried here for completeness
-    // 此 is set 在 dispatch time 通过 host 和 queried here 用于 completeness
+
+    // 查询工作组大小（此维度中每组的调用数）
+    // 这在调度时由主机设置并在此处查询以保持完整性
     const group_size = @workGroupSize(0);
-    
-    // Query the local invocation ID within this work group (0 to group_size-1)
-    // Query local invocation ID within 此 work group (0 到 group_size-1)
-    // @workItemId is the per-work-group thread index
-    // @workItemId is per-work-group thread 索引
+
+    // 查询此工作组内的本地调用ID（0到group_size-1）
+    // @workItemId是每个工作组的线程索引
     const local = @workItemId(0);
-    
-    // Calculate global linear index across all invocations
-    // Calculate global linear 索引 across 所有 invocations
-    // This formula converts 2D coordinates (group, local) to a flat 1D index
-    // 此 formula converts 2D coordinates (group, local) 到 一个 flat 1D 索引
+
+    // 计算所有调用的全局线性索引
+    // 此公式将2D坐标（group, local）转换为扁平1D索引
     const linear = group * group_size + local;
 
-    // Write all captured coordinates to the output buffer
-    // 写入 所有 captured coordinates 到 输出 缓冲区
-    // The GPU will ensure this write is visible to the host after synchronization
-    // GPU will 确保 此 写入 is visible 到 host after synchronization
+    // 将所有捕获的坐标写入输出缓冲区
+    // GPU将确保此写入在同步后对主机可见
     out.* = .{
         .group = group,
         .group_size = group_size,
@@ -86,17 +57,13 @@ pub export fn captureCoordinates(out: *addrspace(.storage_buffer) Coordinates) c
     };
 }
 
-// Compile-time validation to ensure this module is only compiled for SPIR-V targets
-// 编译-time validation 到 确保 此 module is only compiled 用于 SPIR-V targets
-// This prevents accidental compilation for CPU architectures where GPU builtins are unavailable
-// 此 prevents accidental compilation 用于 CPU architectures where GPU builtins are unavailable
+// 编译时验证，确保此模块仅针对SPIR-V目标编译
+// 这可以防止意外编译到GPU内置函数不可用的CPU架构
 comptime {
     switch (builtin.target.cpu.arch) {
-        // Accept both 32-bit and 64-bit SPIR-V architectures
-        // Accept both 32-bit 和 64-bit SPIR-V architectures
+        // 接受32位和64位SPIR-V架构
         .spirv32, .spirv64 => {},
-        // Reject all other architectures with a helpful error message
-        // Reject 所有 other architectures 使用 一个 helpful 错误 message
+        // 使用有用的错误消息拒绝所有其他架构
         else => @compileError("captureCoordinates must be compiled with a SPIR-V target, e.g. -target spirv32-vulkan-none"),
     }
 }

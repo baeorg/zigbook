@@ -53,12 +53,12 @@ pub fn build(b: *std.Build) void {
     
     // ===== RUN STEP =====
     // Create a run step for the executable
-    // 创建一个 run step 用于 executable
+    // 创建可执行文件的运行步骤
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     
     // Forward command-line arguments to the application
-    // Forward command-line arguments 到 application
+    // 转发命令行参数到应用程序
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
@@ -84,7 +84,7 @@ pub fn build(b: *std.Build) void {
     const run_exe_tests = b.addRunArtifact(exe_tests);
     
     // Test step that runs all tests
-    // Test step 该 runs 所有 tests
+    // 运行所有测试的测试步骤
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_exe_tests.step);
@@ -92,7 +92,7 @@ pub fn build(b: *std.Build) void {
     // ===== CUSTOM STEPS =====
     // ===== 自定义 STEPS =====
     // Demo step that shows usage
-    // Demo step 该 shows usage
+    // 展示用法的演示步骤
     const demo_step = b.step("demo", "Run demo commands");
     
     const demo_reverse = b.addRunArtifact(exe);

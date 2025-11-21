@@ -1,65 +1,46 @@
 const std = @import("std");
 
-// / Performs addition with overflow detection and saturation.
-// / Performs addition 使用 overflow detection 和 saturation.
-// / If overflow occurs, returns the maximum u8 value instead of wrapping.
-// / 如果 overflow occurs, 返回 maximum u8 值 而非 wrapping.
-// / Uses @setRuntimeSafety(false) in the non-overflow path for performance.
-// / 使用 @setRuntimeSafety(false) 在 non-overflow 路径 用于 performance.
+/// 执行带溢出检测和饱和的加法。
+/// 如果发生溢出，返回最大值u8而不是环绕。
+/// 在非溢出路径中使用@setRuntimeSafety(false)以提高性能。
 fn guardedUncheckedAdd(a: u8, b: u8) u8 {
-    // Check if addition would overflow using builtin overflow detection
-    // 检查 如果 addition would overflow 使用 内置 overflow detection
+    // 使用内置溢出检测检查加法是否会溢出
     const sum = @addWithOverflow(a, b);
     const overflow = sum[1] == 1;
-    // Saturate to max value on overflow
-    // Saturate 到 max 值 在 overflow
+    // 溢出时饱和到最大值
     if (overflow) return std.math.maxInt(u8);
 
-    // Safe path: disable runtime safety checks for this addition
-    // 安全 路径: disable runtime safety checks 用于 此 addition
-    // since we've already verified no overflow will occur
-    // since we've already verified 不 overflow will occur
+    // 安全路径：为此加法禁用运行时安全检查
+    // 因为我们已经验证不会发生溢出
     return blk: {
         @setRuntimeSafety(false);
         break :blk a + b;
     };
 }
 
-/// Performs addition without runtime safety checks.
-// / This allows the operation to wrap on overflow (undefined behavior in safe mode).
-// / 此 allows operation 到 wrap 在 overflow (undefined behavior 在 安全 模式).
-// / Demonstrates completely disabling safety for a function scope.
-// / 演示 completely disabling safety 用于 一个 函数 scope.
+/// 执行不带运行时安全检查的加法。
+/// 这允许操作在溢出时环绕（安全模式中的未定义行为）。
+/// 演示完全禁用函数作用域的安全性。
 fn wrappingAddUnsafe(a: u8, b: u8) u8 {
-    // Disable all runtime safety checks for this entire function
-    // Disable 所有 runtime safety checks 用于 此 entire 函数
+    // 禁用整个函数的所有运行时安全检查
     @setRuntimeSafety(false);
     return a + b;
 }
 
-// Verifies that guardedUncheckedAdd correctly handles both normal addition
-// Verifies 该 guardedUncheckedAdd correctly handles both normal addition
-// and overflow saturation scenarios.
-// 和 overflow saturation scenarios.
+// 验证guardedUncheckedAdd正确处理正常加法和溢出饱和场景。
 test "guarded unchecked addition saturates on overflow" {
-    // Normal case: 120 + 80 = 200 (no overflow)
-    // Normal case: 120 + 80 = 200 (不 overflow)
+    // 正常情况：120 + 80 = 200（无溢出）
     try std.testing.expectEqual(@as(u8, 200), guardedUncheckedAdd(120, 80));
-    // Overflow case: 240 + 30 = 270 > 255, should saturate to 255
-    // Overflow case: 240 + 30 = 270 > 255, should saturate 到 255
+    // 溢出情况：240 + 30 = 270 > 255，应饱和到255
     try std.testing.expectEqual(std.math.maxInt(u8), guardedUncheckedAdd(240, 30));
 }
 
-// Demonstrates that wrappingAddUnsafe produces the same wrapped result
-// 演示 该 wrappingAddUnsafe produces same wrapped result
-// as @addWithOverflow when overflow occurs.
-// 作为 @addWithOverflow 当 overflow occurs.
+// 演示wrappingAddUnsafe在溢出时产生与@addWithOverflow相同的环绕结果。
 test "wrapping addition mirrors overflow tuple" {
-    // @addWithOverflow returns [wrapped_result, overflow_bit]
-    // @addWithOverflow 返回 [wrapped_result, overflow_bit]
+    // @addWithOverflow返回[wrapped_result, overflow_bit]
     const sum = @addWithOverflow(@as(u8, 250), @as(u8, 10));
-    // Verify overflow occurred (250 + 10 = 260 > 255)
+    // 验证发生了溢出（250 + 10 = 260 > 255）
     try std.testing.expect(sum[1] == 1);
-    // Verify wrapped result matches unchecked addition (260 % 256 = 4)
+    // 验证环绕结果与未检查加法匹配（260 % 256 = 4）
     try std.testing.expectEqual(sum[0], wrappingAddUnsafe(250, 10));
 }

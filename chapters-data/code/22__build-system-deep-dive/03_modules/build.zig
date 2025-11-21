@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
     });
     
     // Create the executable with import of the module
-    // 创建 executable 使用 导入 的 module
+    // 使用导入的模块创建可执行文件
     const exe = b.addExecutable(.{
         .name = "calculator",
         .root_module = b.createModule(.{

@@ -2,117 +2,95 @@ const std = @import("std");
 
 pub fn main() !void {
     // Initialize a general-purpose allocator for dynamic memory allocation
-    // Initialize 一个 general-purpose allocator 用于 dynamic 内存 allocation
+    // 初始化通用分配器用于动态内存分配
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create a working directory for the stream copy demonstration
-    // 创建一个 working directory 用于 stream 复制 demonstration
+    // Create working directory for stream copy demo
+    // 创建用于流复制演示的工作目录
     const dir_name = "fs_stream_copy";
     try std.fs.cwd().makePath(dir_name);
-    // Clean up the directory on exit, ignoring errors if it doesn't exist
-    // Clean up directory 在 退出, ignoring 错误 如果 it doesn't exist
+    // Clean up directory on exit, ignoring errors if it doesn't exist
+    // 退出时清理目录，如果不存在则忽略错误
     defer std.fs.cwd().deleteTree(dir_name) catch {};
 
-    // Construct a platform-neutral path for the source file
-    // Construct 一个 platform-neutral 路径 用于 源文件 文件
+    // Construct platform-neutral path for source file
     const source_path = try std.fs.path.join(allocator, &.{ dir_name, "source.txt" });
     defer allocator.free(source_path);
 
-    // Create the source file with truncate and read permissions
-    // 创建 源文件 文件 使用 truncate 和 读取 permissions
-    // truncate ensures we start with an empty file
-    // truncate 确保 we start 使用 一个 空 文件
+    // Create source file with truncate and read permissions
+    // Truncate ensures we start with an empty file
     var source_file = try std.fs.cwd().createFile(source_path, .{ .truncate = true, .read = true });
     defer source_file.close();
 
-    // Set up a buffered writer for the source file
-    // Set up 一个 缓冲写入器 用于 源文件 文件
-    // Buffering reduces syscall overhead by batching writes
-    // Buffering reduces syscall overhead 通过 batching writes
+    // Set up buffered writer for source file
+    // Buffering reduces syscall overhead via batched writes
     var source_writer_buffer: [128]u8 = undefined;
     var source_writer_state = source_file.writer(&source_writer_buffer);
     const source_writer = &source_writer_state.interface;
 
-    // Write sample data to the source file
-    // 写入 sample 数据 到 源文件 文件
+    // Write sample data to source file
     try source_writer.print("alpha\n", .{});
     try source_writer.print("beta\n", .{});
     try source_writer.print("gamma\n", .{});
     // Flush ensures all buffered data is written to disk
-    // 刷新 确保 所有 缓冲 数据 is written 到 disk
     try source_writer.flush();
 
-    // Rewind the source file cursor to the beginning for reading
-    // Rewind 源文件 文件 cursor 到 beginning 用于 reading
+    // Rewind source file cursor to beginning for reading
     try source_file.seekTo(0);
 
-    // Construct a platform-neutral path for the destination file
-    // Construct 一个 platform-neutral 路径 用于 目标文件 文件
+    // Construct platform-neutral path for destination file
     const dest_path = try std.fs.path.join(allocator, &.{ dir_name, "copy.txt" });
     defer allocator.free(dest_path);
 
-    // Create the destination file with truncate and read permissions
-    // 创建 目标文件 文件 使用 truncate 和 读取 permissions
+    // Create destination file with truncate and read permissions
+    // 创建具有截断和读取权限的目标文件
     var dest_file = try std.fs.cwd().createFile(dest_path, .{ .truncate = true, .read = true });
     defer dest_file.close();
 
-    // Set up a buffered writer for the destination file
-    // Set up 一个 缓冲写入器 用于 目标文件 文件
+    // Set up buffered writer for destination file
     var dest_writer_buffer: [64]u8 = undefined;
     var dest_writer_state = dest_file.writer(&dest_writer_buffer);
     const dest_writer = &dest_writer_state.interface;
 
-    // Allocate a chunk buffer for streaming copy operations
-    // 分配 一个 chunk 缓冲区 用于 streaming 复制 operations
+    // 分配块缓冲区用于流复制操作
     var chunk: [128]u8 = undefined;
     var total_bytes: usize = 0;
 
-    // Stream data from source to destination in chunks
-    // Stream 数据 从 源文件 到 目标文件 在 chunks
-    // This approach is memory-efficient for large files
-    // 此 approach is 内存-efficient 用于 large 文件
+    // 以块为单位从源流式传输数据到目标
+    // 此方法对大文件内存高效
     while (true) {
         const read_len = try source_file.read(&chunk);
-        // A read length of 0 indicates EOF
-        // 一个 读取 length 的 0 indicates EOF
+        // 读取长度为0表示EOF
         if (read_len == 0) break;
-        // Write the exact number of bytes read to the destination
-        // 写入 exact 数字 的 bytes 读取 到 目标文件
+        // 将读取的确切字节数写入目标
         try dest_writer.writeAll(chunk[0..read_len]);
         total_bytes += read_len;
     }
 
-    // Flush the destination writer to ensure all data is persisted
-    // 刷新 目标文件 writer 到 确保 所有 数据 is persisted
+    // 刷新目标写入器以确保所有数据持久化
     try dest_writer.flush();
 
-    // Retrieve file metadata to verify the copy operation
-    // Retrieve 文件 metadata 到 verify 复制 operation
+    // 检索文件元数据以验证复制操作
     const info = try dest_file.stat();
 
-    // Set up a buffered stdout writer for displaying results
-    // Set up 一个 缓冲 stdout writer 用于 displaying results
+    // 设置缓冲标准输出写入器用于显示结果
     var stdout_buffer: [256]u8 = undefined;
     var stdout_state = std.fs.File.stdout().writer(&stdout_buffer);
     const out = &stdout_state.interface;
 
-    // Display copy operation statistics
-    // 显示 复制 operation statistics
+    // 显示复制操作统计信息
     try out.print("copied {d} bytes\n", .{total_bytes});
     try out.print("destination size: {d}\n", .{info.size});
 
-    // Rewind the destination file to read back the copied contents
-    // Rewind 目标文件 文件 到 读取 back copied contents
+    // 将目标文件倒回以读取复制的内容
     try dest_file.seekTo(0);
     const copied = try dest_file.readToEndAlloc(allocator, 16 * 1024);
     defer allocator.free(copied);
 
-    // Display the copied file contents for verification
-    // 显示 copied 文件 contents 用于 verification
+    // 显示复制的文件内容以进行验证
     try out.print("--- copy.txt ---\n{s}", .{copied});
-    // Flush stdout to ensure all output is displayed
-    // 刷新 stdout 到 确保 所有 输出 is displayed
+    // 刷新标准输出以确保所有输出显示
     try out.flush();
 }

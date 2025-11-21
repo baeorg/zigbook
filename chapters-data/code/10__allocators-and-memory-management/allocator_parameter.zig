@@ -21,9 +21,11 @@ fn joinSep(allocator: std.mem.Allocator, parts: []const []const u8, sep: []const
 
 pub fn main() !void {
     // Use GPA to build a string, then free.
-    // Use GPA 到 构建 一个 string, 那么 释放.
+    // 使用 GPA 构建字符串，然后释放。
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer { _ = gpa.deinit(); }
+    defer {
+        _ = gpa.deinit();
+    }
     const A = gpa.allocator();
 
     const joined = try joinSep(A, &.{ "zig", "likes", "allocators" }, "-");
@@ -31,14 +33,13 @@ pub fn main() !void {
     std.debug.print("gpa: {s}\n", .{joined});
 
     // Try with a tiny fixed buffer to demonstrate OOM.
-    // Try 使用 一个 tiny fixed 缓冲区 到 demonstrate OOM.
+    // 尝试使用很小的固定缓冲区来演示 OOM。
     var buf: [8]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     const B = fba.allocator();
 
     if (joinSep(B, &.{ "this", "is", "too", "big" }, ",")) |s| {
         // If it somehow fits, free it (unlikely with 16 bytes here).
-        // 如果 it somehow fits, 释放 it (unlikely 使用 16 bytes here).
         B.free(s);
         std.debug.print("fba unexpectedly succeeded\n", .{});
     } else |err| switch (err) {

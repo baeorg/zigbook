@@ -8,7 +8,6 @@ const Task = struct {
 fn compareTasks(context: void, a: Task, b: Task) std.math.Order {
     _ = context;
     // Higher priority comes first (max-heap behavior)
-    // Higher priority comes 首先 (max-堆 behavior)
     return std.math.order(b.priority, a.priority);
 }
 

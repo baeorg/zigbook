@@ -1,66 +1,52 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// Number of iterations to run each benchmark variant
-// 数字 的 iterations 到 run 每个 benchmark variant
+// 运行每个基准变体的迭代次数
 const iterations: usize = 5_000_000;
 
-// / A simple mixing function that demonstrates the performance impact of inlining.
-// / 一个 simple mixing 函数 该 演示 performance impact 的 inlining.
-// / Uses bit rotation and arithmetic operations to create a non-trivial workload
-// / 使用 bit rotation 和 arithmetic operations 到 创建一个 non-trivial workload
-// / that the optimizer might handle differently based on call modifiers.
-// / 该 optimizer might 处理 differently 基于 call modifiers.
+// 演示内联性能影响的简单混合函数。
+// 使用位旋转和算术运算创建非平凡的工作负载，
+// 优化器可能根据调用修饰符以不同方式处理。
 fn mix(value: u32) u32 {
-    // Rotate left by 7 bits after XORing with a prime-like constant
-    // Rotate left 通过 7 bits after XORing 使用 一个 prime-like constant
+    // 与类素数常量异或后左旋7位
     const rotated = std.math.rotl(u32, value ^ 0x9e3779b9, 7);
-    // Apply additional mixing with wrapping arithmetic to prevent compile-time evaluation
-    // Apply additional mixing 使用 wrapping arithmetic 到 prevent 编译-time evaluation
+    // 使用环绕算术应用额外混合以防止编译时求值
     return rotated *% 0x85eb_ca6b +% 0xc2b2_ae35;
 }
 
-// / Runs the mixing function in a tight loop using the specified call modifier.
-// / Runs mixing 函数 在 一个 tight loop 使用 specified call modifier.
-// / This allows direct comparison of how different inlining strategies affect performance.
-// / 此 allows direct comparison 的 how different inlining strategies affect performance.
+// 使用指定的调用修饰符在紧循环中运行混合函数。
+// 这允许直接比较不同内联策略如何影响性能。
 fn run(comptime modifier: std.builtin.CallModifier) u32 {
     var acc: u32 = 0;
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
-        // The @call builtin lets us explicitly control inlining behavior at the call site
-        // @call 内置 lets us explicitly control inlining behavior 在 call site
+        // @call内置函数让我们在调用点显式控制内联行为
         acc = @call(modifier, mix, .{acc});
     }
     return acc;
 }
 
 pub fn main() !void {
-    // Benchmark 1: Let the compiler decide whether to inline (default heuristics)
-    // Benchmark 1: Let compiler decide whether 到 inline (默认 heuristics)
+    // 基准测试1：让编译器决定是否内联（默认启发式）
     var timer = try std.time.Timer.start();
     const auto_result = run(.auto);
     const auto_ns = timer.read();
 
-    // Benchmark 2: Force inlining at every call site
-    // Benchmark 2: 强制 inlining 在 每个 call site
+    // 基准测试2：在每个调用点强制内联
     timer = try std.time.Timer.start();
     const inline_result = run(.always_inline);
     const inline_ns = timer.read();
 
-    // Benchmark 3: Prevent inlining, always emit a function call
-    // Benchmark 3: Prevent inlining, always emit 一个 函数 call
+    // 基准测试3：防止内联，始终发出函数调用
     timer = try std.time.Timer.start();
     const never_result = run(.never_inline);
     const never_ns = timer.read();
 
-    // Verify all three strategies produce identical results
-    // Verify 所有 三个 strategies produce identical results
+    // 验证所有三种策略产生相同的结果
     std.debug.assert(auto_result == inline_result);
     std.debug.assert(auto_result == never_result);
 
-    // Display the optimization mode and iteration count for reproducibility
-    // 显示 optimization 模式 和 iteration count 用于 reproducibility
+    // 显示优化模式和迭代次数以确保可重现性
     std.debug.print(
         "optimize-mode={s} iterations={}\n",
         .{
@@ -68,8 +54,7 @@ pub fn main() !void {
             iterations,
         },
     );
-    // Report timing results for each call modifier
-    // Report timing results 用于 每个 call modifier
+    // 报告每个调用修饰符的计时结果
     std.debug.print("auto call   : {d} ns\n", .{auto_ns});
     std.debug.print("always_inline: {d} ns\n", .{inline_ns});
     std.debug.print("never_inline : {d} ns\n", .{never_ns});

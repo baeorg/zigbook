@@ -1,11 +1,11 @@
 const std = @import("std");
 
 // Chapter 5 – TempConv CLI: walk from parsing arguments through producing a
-// 第5章 - TempConv CLI：从解析参数到生成
+// 第5章 - TempConv CLI：从解析参数到生成格式化结果的完整过程
 // formatted result, exercising everything we have learned about errors and
-// 格式化结果，锻炼我们学到的所有错误处理知识
+// 练习我们学到的所有错误处理和
 // deterministic cleanup along the way.
-// 和确定性清理知识
+// 确定性清理知识。
 
 const CliError = error{ MissingArgs, BadNumber, BadUnit };
 
@@ -18,8 +18,7 @@ fn printUsage() void {
 
 fn parseUnit(token: []const u8) CliError!Unit {
     // Section 1: we accept a single-letter token and normalise it so the CLI
-    // 第1节：我们接受单个字母标记并规范化它，以便CLI
-    // remains forgiving about casing.
+    // 第1节：我们接受单个字母标记并规范化它，以便CLI对大小写保持宽容。
     if (token.len != 1) return CliError.BadUnit;
     const ascii = std.ascii;
     const lower = ascii.toLower(token[0]);
@@ -48,10 +47,8 @@ fn fromKelvin(value: f64, unit: Unit) f64 {
 }
 
 fn convert(value: f64, from: Unit, to: Unit) f64 {
-    // Section 2: normalise through Kelvin so every pair of units reuses the
-    // 节 2: normalise through Kelvin so 每个 pair 的 units reuses
-    // same formulas, keeping the CLI easy to extend.
-    // same formulas, keeping 命令行工具 easy 到 extend.
+    // 第2节：通过开尔文进行标准化，使每对单位都能重用
+    // 相同的公式，保持CLI易于扩展。
     if (from == to) return value;
     const kelvin = toKelvin(value, from);
     return fromKelvin(kelvin, to);
@@ -75,9 +72,8 @@ pub fn main() !void {
 
     const raw_value = args[1];
     const value = std.fmt.parseFloat(f64, raw_value) catch {
-        // Section 1 also highlights how parsing failures become user-facing
-        // 节 1 also highlights how 解析 failures become user-facing
-        // diagnostics rather than backtraces.
+        // 第1节还突出了解析失败如何成为面向用户的
+        // 诊断信息，而不是堆栈跟踪。
         std.debug.print("error: '{s}' is not a floating-point value\n", .{raw_value});
         std.process.exit(1);
     };

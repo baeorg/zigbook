@@ -1,102 +1,78 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    // Standard target and optimization options allow the build to be configured
-    // 标准 target 和 optimization options allow 构建 到 be configured
-    // for different architectures and optimization levels via CLI flags
-    // 用于 different architectures 和 optimization levels via 命令行工具 flags
+    // 标准目标和优化选项允许通过CLI标志配置构建
+    // 用于不同的架构和优化级别
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Create the analytics module - the foundational module that provides
-    // 创建 analytics module - foundational module 该 provides
-    // core metric calculation and analysis capabilities
-    // core metric calculation 和 analysis capabilities
+    // 创建analytics模块 - 提供核心度量计算和分析功能的基础模块
     const analytics_mod = b.addModule("analytics", .{
         .root_source_file = b.path("workspace/analytics/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // Create the reporting module - depends on analytics to format and display metrics
-    // 创建 reporting module - depends 在 analytics 到 format 和 显示 metrics
-    // Uses addModule() which both creates and registers the module in one step
-    // 使用 addModule() which both creates 和 registers module 在 一个 step
+    // 创建reporting模块 - 依赖analytics来格式化和显示度量
+    // 使用addModule()一步创建和注册模块
     const reporting_mod = b.addModule("reporting", .{
         .root_source_file = b.path("workspace/reporting/lib.zig"),
         .target = target,
         .optimize = optimize,
-        // Import analytics module to access metric types and computation functions
-        // 导入 analytics module 以访问 metric 类型 和 computation 函数
+        // 导入analytics模块以访问度量类型和计算函数
         .imports = &.{.{ .name = "analytics", .module = analytics_mod }},
     });
 
-    // Create the adapters module using createModule() - creates but does not register
-    // 创建 adapters module 使用 createModule() - creates but does 不 register
-    // This demonstrates an anonymous module that other code can import but won't
-    // 此 演示 一个 anonymous module 该 other 代码 can 导入 but won't
-    // appear in the global module namespace
-    // appear 在 global module namespace
+    // 使用createModule()创建adapters模块 - 创建但不注册
+    // 这演示了一个匿名模块，其他代码可以导入但不会
+    // 出现在全局模块命名空间中
     const adapters_mod = b.createModule(.{
         .root_source_file = b.path("workspace/adapters/vendored.zig"),
         .target = target,
         .optimize = optimize,
-        // Adapters need analytics to serialize metric data
-        // Adapters need analytics 到 serialize metric 数据
+        // Adapters需要analytics来序列化度量数据
         .imports = &.{.{ .name = "analytics", .module = analytics_mod }},
     });
 
-    // Create the main application module that orchestrates all dependencies
-    // 创建 主 application module 该 orchestrates 所有 dependencies
-    // This demonstrates how a root module can compose multiple imported modules
-    // 此 演示 how 一个 root module can compose multiple imported modules
+    // 创建编排所有依赖的主应用程序模块
+    // 这演示了根模块如何组合多个导入的模块
     const app_module = b.createModule(.{
         .root_source_file = b.path("workspace/app/main.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            // Import all three workspace modules to access their functionality
-            // 导入 所有 三个 workspace modules 以访问 their functionality
+            // 导入所有三个工作区模块以访问其功能
             .{ .name = "analytics", .module = analytics_mod },
             .{ .name = "reporting", .module = reporting_mod },
             .{ .name = "adapters", .module = adapters_mod },
         },
     });
 
-    // Create the executable artifact using the composed app module as its root
-    // 创建 executable artifact 使用 composed app module 作为 its root
-    // The root_module field replaces the legacy root_source_file approach
-    // root_module field replaces legacy root_source_file approach
+    // 使用组合的app模块作为其根创建可执行文件
+    // root_module字段替换了传统的root_source_file方法
     const exe = b.addExecutable(.{
         .name = "workspace-app",
         .root_module = app_module,
     });
 
-    // Install the executable to zig-out/bin so it can be run after building
-    // Install executable 到 zig-out/bin so it can be run after building
+    // 将可执行文件安装到zig-out/bin，以便构建后可以运行
     b.installArtifact(exe);
 
-    // Set up a run command that executes the built executable
-    // Set up 一个 run command 该 executes built executable
+    // 设置执行构建可执行文件的运行命令
     const run_cmd = b.addRunArtifact(exe);
-    // Forward any command-line arguments passed to the build system to the executable
-    // Forward any command-line arguments passed 到 构建 system 到 executable
+    // 转发传递给构建系统的任何命令行参数到可执行文件
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
 
-    // Create a custom build step "run" that users can invoke with `zig build run`
-    // 创建一个 自定义 构建 step "run" 该 users can invoke 使用 `zig 构建 run`
+    // 创建自定义构建步骤"run"，用户可以使用`zig build run`调用
     const run_step = b.step("run", "Run workspace app with registered modules");
     run_step.dependOn(&run_cmd.step);
 
-    // Create a named write files step to document the module dependency graph
-    // 创建一个 named 写入 文件 step 到 document module dependency graph
-    // This is useful for understanding the workspace structure without reading code
-    // 此 is useful 用于 understanding workspace structure without reading 代码
+    // 创建命名写入文件步骤来记录模块依赖关系图
+    // 这有助于理解工作区结构而不读取代码
     const graph_files = b.addNamedWriteFiles("graph");
-    // Generate a text file documenting the module registration hierarchy
-    // Generate 一个 text 文件 documenting module registration hierarchy
+    // 生成记录模块注册层次结构的文本文件
     _ = graph_files.add("module-graph.txt",
         \\workspace module registration map:
         \\  analytics  -> workspace/analytics/lib.zig
@@ -105,10 +81,8 @@ pub fn build(b: *std.Build) void {
         \\  exe root   -> workspace/app/main.zig
     );
 
-    // Create a custom build step "graph" that generates module documentation
-    // 创建一个 自定义 构建 step "graph" 该 generates module 文档
-    // Users can invoke this with `zig build graph` to output the dependency map
-    // Users can invoke 此 使用 `zig 构建 graph` 到 输出 dependency map
+    // 创建自定义构建步骤"graph"，生成模块文档
+    // 用户可以使用`zig build graph`调用此步骤来输出依赖关系图
     const graph_step = b.step("graph", "Emit module graph summary to zig-out");
     graph_step.dependOn(&graph_files.step);
 }

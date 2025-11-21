@@ -1,5 +1,4 @@
 // ! Bridges domain errors to user-facing log messages.
-// ! Bridges domain 错误 到 user-facing log messages.
 const std = @import("std");
 
 pub const ApiError = error{

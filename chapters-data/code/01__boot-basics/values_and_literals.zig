@@ -1,63 +1,44 @@
-// File: chapters-data/code/01__boot-basics/values_and_literals.zig
+// 文件路径: chapters-data/code/01__boot-basics/values_and_literals.zig
 const std = @import("std");
 
 pub fn main() !void {
-    // Declare a mutable variable with explicit type annotation
-    // Declare 一个 mutable variable 使用 explicit 类型 annotation
-    // u32 is an unsigned 32-bit integer, initialized to 1
-    // u32 is 一个 unsigned 32-bit integer, initialized 到 1
+    // 声明带显式类型标注的可变变量
+    // u32为无符号32位整数，初始化为1
     var counter: u32 = 1;
-    
-    // Declare an immutable constant with inferred type (comptime_int)
-    // Declare 一个 immutable constant 使用 inferred 类型 (comptime_int)
-    // The compiler infers the type from the literal value 2
-    // compiler infers 类型 从 字面量 值 2
+
+    // 声明带推断类型的不可变常量（comptime_int）
+    // 编译器从字面值2推断出类型
     const increment = 2;
-    
-    // Declare a constant with explicit floating-point type
-    // Declare 一个 constant 使用 explicit floating-point 类型
-    // f64 is a 64-bit floating-point number
-    // f64 is 一个 64-bit floating-point 数字
+
+    // 声明带显式浮点类型的常量
+    // f64为64位浮点数
     const ratio: f64 = 0.5;
-    
-    // Boolean constant with inferred type
-    // Boolean constant 使用 inferred 类型
-    // Demonstrates Zig's type inference for simple literals
-    // 演示 Zig's 类型 inference 用于 simple literals
+
+    // 布尔常量，带推断类型
+    // 演示Zig对简单字面值的类型推断
     const flag = true;
-    
-    // Character literal representing a newline
-    // Character 字面量 representing 一个 newline
-    // Single-byte characters are u8 values in Zig
-    // Single-byte characters are u8 值 在 Zig
+
+    // 表示换行的字符字面值
+    // 单字节字符在Zig中是u8值
     const newline: u8 = '\n';
-    
-    // The unit type value, analogous to () in other languages
-    // unit 类型 值, analogous 到 () 在 other languages
-    // Represents "no value" or "nothing" explicitly
-    // Represents "不 值" 或 "nothing" explicitly
+
+    // 单元类型值，类似于其他语言中的()
+    // 显式表示"无值"或"空"
     const unit_value = void{};
 
-    // Mutate the counter by adding the increment
-    // Mutate counter 通过 adding increment
-    // Only var declarations can be modified
+    // 通过增加值来修改计数器
+    // 只有var声明可以被修改
     counter += increment;
 
-    // Print formatted output showing different value types
-    // 打印 格式化 输出 showing different 值 类型
-    // {} is a generic format specifier that works with any type
-    // {} is 一个 通用 format specifier 该 works 使用 any 类型
+    // 打印显示不同值类型的格式化输出
+    // {}是适用于任何类型的通用格式说明符
     std.debug.print("counter={} ratio={} safety={}\n", .{ counter, ratio, flag });
-    
-    // Cast the newline byte to u32 for display as its ASCII decimal value
-    // Cast newline byte 到 u32 用于 显示 作为 its ASCII decimal 值
-    // @as performs explicit type coercion
-    // @作为 performs explicit 类型 coercion
+
+    // 将换行符字节强制转换为u32以显示其ASCII十进制值
+    // @as执行显式类型转换
     std.debug.print("newline byte={} (ASCII)\n", .{@as(u32, newline)});
-    
-    // Use compile-time reflection to print the type name of unit_value
-    // Use 编译-time reflection 到 打印 类型 name 的 unit_value
-    // @TypeOf gets the type, @typeName converts it to a string
-    // @TypeOf gets 类型, @typeName converts it 到 一个 string
+
+    // 使用编译时反射来打印unit_value的类型名称
+    // @TypeOf获取类型，@typeName将其转换为字符串
     std.debug.print("unit literal has type {s}\n", .{@typeName(@TypeOf(unit_value))});
 }

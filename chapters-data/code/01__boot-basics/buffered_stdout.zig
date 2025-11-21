@@ -1,30 +1,22 @@
-// File: chapters-data/code/01__boot-basics/buffered_stdout.zig
+// 文件路径: chapters-data/code/01__boot-basics/buffered_stdout.zig
 const std = @import("std");
 
 pub fn main() !void {
-    // Allocate a 256-byte buffer on the stack for output batching
-    // 分配 一个 256-byte 缓冲区 在 栈 用于 输出 batching
-    // This buffer accumulates write operations to minimize syscalls
-    // 此 缓冲区 accumulates 写入 operations 到 minimize syscalls
+    // 在栈上分配256字节的缓冲区用于批量输出
+    // 此缓冲区聚合写入操作以减少系统调用次数
     var stdout_buffer: [256]u8 = undefined;
-    
-    // Create a buffered writer wrapping stdout
-    // 创建一个 缓冲写入器 wrapping stdout
-    // The writer batches output into stdout_buffer before making syscalls
-    // writer batches 输出 into stdout_buffer before making syscalls
+
+    // 创建包装stdout的缓冲写入器
+    // 写入器在发起系统调用前将输出批量处理到stdout_buffer
     var writer_state = std.fs.File.stdout().writer(&stdout_buffer);
     const stdout = &writer_state.interface;
 
-    // These print calls write to the buffer, not directly to the terminal
-    // 这些 打印 calls 写入 到 缓冲区, 不 directly 到 terminal
-    // No syscalls occur yet—data accumulates in stdout_buffer
-    // 不 syscalls occur yet—数据 accumulates 在 stdout_buffer
+    // 这些打印调用写入缓冲区，而非直接写入终端
+    // 此时尚未发生系统调用——数据累积在stdout_buffer中
     try stdout.print("Buffering saves syscalls.\n", .{});
     try stdout.print("Flush once at the end.\n", .{});
-    
-    // Explicitly flush the buffer to write all accumulated data at once
-    // Explicitly 刷新 缓冲区 到 写入 所有 accumulated 数据 在 once
-    // This triggers a single syscall instead of one per print operation
-    // 此 triggers 一个 single syscall 而非 一个 per 打印 operation
+
+    // 显式刷新缓冲区，一次性写入所有累积的数据
+    // 这将触发单个系统调用，而非每次打印操作一次
     try stdout.flush();
 }

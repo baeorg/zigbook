@@ -1,5 +1,4 @@
 // Conceptual example showing the dependency resolution pipeline
-// Conceptual 示例 showing dependency resolution pipeline
 const std = @import("std");
 
 const DependencyState = enum {
@@ -23,7 +22,6 @@ pub fn main() !void {
     std.debug.print("--- Zig Package Manager Resolution Pipeline ---\n\n", .{});
 
     // Stage 1: Parse build.zig.zon
-    // Stage 1: Parse 构建.zig.zon
     std.debug.print("1. Parse build.zig.zon dependencies\n", .{});
     var deps = [_]Dependency{
         .{
@@ -76,7 +74,6 @@ pub fn main() !void {
     }
 
     // Stage 4: Build script execution triggers lazy fetch
-    // Stage 4: 构建 script execution triggers lazy fetch
     std.debug.print("\n4. Build script requests lazy dependency\n", .{});
     std.debug.print("   - optional_viz requested → fetching now\n", .{});
 

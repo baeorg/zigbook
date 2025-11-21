@@ -9,9 +9,7 @@ fn stdout() *std.Io.Writer {
 }
 
 // A generic function that accepts any element type and sums a slice.
-// 一个 通用 函数 该 accepts any element 类型 和 sums 一个 切片.
 // We use reflection to print type info at runtime.
-// We use reflection 到 打印 类型 info 在 runtime.
 pub fn sum(comptime T: type, slice: []const T) T {
     var s: T = 0;
     var i: usize = 0;
@@ -24,7 +22,6 @@ pub fn describeAny(x: anytype) void {
     const out = stdout();
     out.print("value of type {s}: ", .{@typeName(T)}) catch {};
     // best-effort print
-    // best-effort 打印
     out.print("{any}\n", .{x}) catch {};
 }
 
@@ -32,13 +29,11 @@ pub fn main() !void {
     const out = stdout();
 
     // Explicit type parameter
-    // Explicit 类型 parameter
     const a = [_]u32{ 1, 2, 3, 4 };
     const s1 = sum(u32, &a);
     try out.print("sum(u32,[1,2,3,4]) = {}\n", .{s1});
 
     // Inferred by helper that forwards T
-    // Inferred 通过 helper 该 forwards T
     const b = [_]u64{ 10, 20 };
     const s2 = sum(u64, &b);
     try out.print("sum(u64,[10,20]) = {}\n", .{s2});

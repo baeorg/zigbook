@@ -1,5 +1,4 @@
 // ! Shows how errdefer keeps allocations balanced when joining user snippets.
-// ! Shows how errdefer keeps allocations balanced 当 joining user snippets.
 const std = @import("std");
 
 pub const SnippetError = error{EmptyInput} || std.mem.Allocator.Error;

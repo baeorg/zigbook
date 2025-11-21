@@ -1,13 +1,13 @@
 const std = @import("std");
 
-// / Environment mode for the application
-// / Environment 模式 用于 application
-// / Determines security requirements and runtime behavior
-// / Determines security requirements 和 runtime behavior
+//  Environment mode for the application
+//  应用程序的环境模式
+//  Determines security requirements and runtime behavior
+//  确定安全要求和运行时行为
 const Mode = enum { development, staging, production };
 
-// / Main application configuration structure with nested settings
-// / 主 application configuration structure 使用 nested settings
+//  Main application configuration structure with nested settings
+//  带嵌套设置的主应用程序配置结构
 const AppConfig = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 8080,
@@ -15,26 +15,26 @@ const AppConfig = struct {
     tls: Tls = .{},
     timeouts: Timeouts = .{},
 
-    // / TLS/SSL configuration for secure connections
-    // / TLS/SSL configuration 用于 secure connections
+    //  TLS/SSL configuration for secure connections
+    //  用于安全连接的 TLS/SSL 配置
     pub const Tls = struct {
         enabled: bool = false,
         cert_path: ?[]const u8 = null,
         key_path: ?[]const u8 = null,
     };
 
-    // / Timeout settings for network operations
-    // / Timeout settings 用于 network operations
+    //  Timeout settings for network operations
+    //  网络操作的超时设置
     pub const Timeouts = struct {
         connect_ms: u32 = 200,
         read_ms: u32 = 1200,
     };
 };
 
-// / Explicit error set for all configuration validation failures
-// / Explicit 错误集合 用于 所有 configuration validation failures
-// / Each variant represents a specific invariant violation
-// / 每个 variant represents 一个 specific invariant violation
+//  Explicit error set for all configuration validation failures
+//  所有配置验证失败的显式错误集合
+//  Each variant represents a specific invariant violation
+//  每个变体代表一个特定的不变式违反
 const ConfigError = error{
     InvalidPort,
     InsecureProduction,
@@ -42,31 +42,31 @@ const ConfigError = error{
     TimeoutOrdering,
 };
 
-// / Validates configuration invariants and business rules
-// / Validates configuration invariants 和 business rules
-// / config: the configuration to validate
-// / config: configuration 到 验证
-// / Returns: ConfigError if any validation rule is violated
-// / 返回: ConfigError 如果 any validation rule is violated
+//  Validates configuration invariants and business rules
+//  验证配置不变式和业务规则
+//  config: the configuration to validate
+//  config: 要验证的配置
+//  Returns: ConfigError if any validation rule is violated
+//  返回：如果违反任何验证规则则返回 ConfigError
 fn validate(config: AppConfig) ConfigError!void {
     // Port 0 is reserved and invalid for network binding
-    // Port 0 is reserved 和 无效 用于 network binding
+    // 端口0是保留的，用于网络绑定无效
     if (config.port == 0) return error.InvalidPort;
-    
+
     // Ports below 1024 require elevated privileges (except standard HTTPS)
-    // Ports below 1024 require elevated privileges (except 标准 HTTPS)
+    // 1024以下的端口需要提升权限（标准HTTPS除外）
     // Reject them to avoid privilege escalation requirements
-    // Reject them 到 avoid privilege escalation requirements
+    // 拒绝它们以避免权限提升要求
     if (config.port < 1024 and config.port != 443) return error.InvalidPort;
 
     // Production environments must enforce TLS to protect data in transit
-    // Production environments must enforce TLS 到 protect 数据 在 transit
+    // 生产环境必须强制使用TLS以保护传输中的数据
     if (config.mode == .production and !config.tls.enabled) {
         return error.InsecureProduction;
     }
 
     // When TLS is enabled, both certificate and private key must be provided
-    // 当 TLS is enabled, both certificate 和 private key must be provided
+    // 当启用TLS时，必须同时提供证书和私钥
     if (config.tls.enabled) {
         if (config.tls.cert_path == null or config.tls.key_path == null) {
             return error.MissingTlsMaterial;
@@ -74,24 +74,25 @@ fn validate(config: AppConfig) ConfigError!void {
     }
 
     // Read timeout must exceed connect timeout to allow data transfer
-    // 读取 timeout must exceed connect timeout 到 allow 数据 transfer
+    // 读取超时必须超过连接超时以允许数据传输
     // Otherwise connections would time out immediately after establishment
+    // 否则连接会在建立后立即超时
     if (config.timeouts.read_ms < config.timeouts.connect_ms) {
         return error.TimeoutOrdering;
     }
 }
 
 // / Reports validation result in human-readable format
-// / Reports validation result 在 human-readable format
+// / 以人类可读格式报告验证结果
 // / writer: output destination for the report
-// / writer: 输出 目标文件 用于 report
+// / writer: 报告的输出目标
 // / label: descriptive name for this configuration test case
-// / 标签: descriptive name 用于 此 configuration test case
+// / label: 此配置测试用例的描述性名称
 // / config: the configuration to validate and report on
-// / config: configuration 到 验证 和 report 在
+// / config: 要验证和报告的配置
 fn report(writer: anytype, label: []const u8, config: AppConfig) !void {
     try writer.print("{s}: ", .{label});
-    
+
     // Attempt validation and catch any errors
     // 尝试 validation 和 捕获 any 错误
     validate(config) catch |err| {
@@ -99,7 +100,7 @@ fn report(writer: anytype, label: []const u8, config: AppConfig) !void {
         // 如果 validation fails, report 错误 name 和 返回
         return try writer.print("error {s}\n", .{@errorName(err)});
     };
-    
+
     // If validation succeeded, report success
     // 如果 validation succeeded, report 成功
     try writer.print("ok\n", .{});
@@ -158,11 +159,11 @@ pub fn main() !void {
     };
 
     // Set up buffered stdout writer to reduce syscalls
-    // Set up 缓冲 stdout writer 到 reduce syscalls
+    // 设置缓冲stdout写入器以减少系统调用
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
     const stdout = &stdout_writer.interface;
-    
+
     // Run validation reports for all test cases
     // Run validation reports 用于 所有 test 情况
     // Each report will validate the config and print the result
@@ -171,8 +172,8 @@ pub fn main() !void {
     try report(stdout, "insecure", insecure);
     try report(stdout, "misordered", misordered);
     try report(stdout, "missing_tls_material", missing_tls_material);
-    
+
     // Ensure all buffered output is written to stdout
-    // 确保 所有 缓冲 输出 is written 到 stdout
+    // 确保所有缓冲输出写入stdout
     try stdout.flush();
 }

@@ -1,5 +1,4 @@
 // ! Mirrors Rust's Option and Result idioms with Zig optionals and error unions.
-// ! Mirrors Rust's Option 和 Result idioms 使用 Zig optionals 和 错误 unions.
 const std = @import("std");
 
 pub fn findPortLine(env: []const u8) ?[]const u8 {

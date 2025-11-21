@@ -1,16 +1,12 @@
 const std = @import("std");
 
-// Number of parallel operations per vector
-// 数字 的 parallel operations per vector
+// 每个向量的并行操作数
 const lanes = 4;
-// Vector type that processes 4 f32 values simultaneously using SIMD
-// Vector 类型 该 processes 4 f32 值 simultaneously 使用 SIMD
+// 处理4个f32值同时使用SIMD的向量类型
 const Vec = @Vector(lanes, f32);
 
-// / Loads 4 consecutive f32 values from a slice into a SIMD vector.
-// / Loads 4 consecutive f32 值 从 一个 切片 into 一个 SIMD vector.
-// / The caller must ensure that start + 3 is within bounds.
-// / caller must 确保 该 start + 3 is within bounds.
+// 从切片加载4个连续的f32值到SIMD向量中。
+// 调用者必须确保start + 3在边界内。
 fn loadVec(slice: []const f32, start: usize) Vec {
     return .{
         slice[start + 0],
@@ -20,58 +16,46 @@ fn loadVec(slice: []const f32, start: usize) Vec {
     };
 }
 
-// / Computes the dot product of two f32 slices using scalar operations.
-// / Computes dot product 的 两个 f32 slices 使用 scalar operations.
-// / This is the baseline implementation that processes one element at a time.
-// / 此 is baseline implementation 该 processes 一个 element 在 一个 time.
+// 使用标量操作计算两个f32切片的点积。
+// 这是基线实现，一次处理一个元素。
 fn dotScalar(values_a: []const f32, values_b: []const f32) f32 {
     std.debug.assert(values_a.len == values_b.len);
     var sum: f32 = 0.0;
-    // Multiply corresponding elements and accumulate the sum
-    // Multiply 对应的 elements 和 accumulate sum
+    // 乘以对应元素并累积求和
     for (values_a, values_b) |a, b| {
         sum += a * b;
     }
     return sum;
 }
 
-// / Computes the dot product using SIMD vectorization for improved performance.
-// / Computes dot product 使用 SIMD vectorization 用于 improved performance.
-// / Processes 4 elements at a time, then reduces the vector accumulator to a scalar.
-// / Processes 4 elements 在 一个 time, 那么 reduces vector accumulator 到 一个 scalar.
-// / Requires that the input length is a multiple of the lane count (4).
-// / Requires 该 输入 length is 一个 multiple 的 lane count (4).
+// 使用SIMD向量化计算点积以提高性能。
+// 一次处理4个元素，然后将向量累加器归约为标量。
+// 要求输入长度是通道数（4）的倍数。
 fn dotVectorized(values_a: []const f32, values_b: []const f32) f32 {
     std.debug.assert(values_a.len == values_b.len);
     std.debug.assert(values_a.len % lanes == 0);
 
-    // Initialize accumulator vector with zeros
-    // Initialize accumulator vector 使用 zeros
+    // 用零初始化累加器向量
     var accum: Vec = @splat(0.0);
     var index: usize = 0;
-    // Process 4 elements per iteration using SIMD
-    // Process 4 elements per iteration 使用 SIMD
+    // 每次迭代使用SIMD处理4个元素
     while (index < values_a.len) : (index += lanes) {
         const lhs = loadVec(values_a, index);
         const rhs = loadVec(values_b, index);
-        // Perform element-wise multiplication and add to accumulator
-        // 执行 element-wise multiplication 和 add 到 accumulator
+        // 执行按元素乘法并添加到累加器
         accum += lhs * rhs;
     }
 
-    // Sum all lanes of the accumulator vector into a single scalar value
-    // Sum 所有 lanes 的 accumulator vector into 一个 single scalar 值
+    // 将累加器向量的所有通道求和为单个标量值
     return @reduce(.Add, accum);
 }
 
-// Verifies that the vectorized implementation produces the same result as the scalar version.
-// Verifies 该 vectorized implementation produces same result 作为 scalar version.
+// 验证向量化实现产生与标量版本相同的结果。
 test "vectorized dot product matches scalar" {
     const lhs = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
     const rhs = [_]f32{ 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0 };
     const scalar = dotScalar(&lhs, &rhs);
     const vector = dotVectorized(&lhs, &rhs);
-    // Allow small floating-point error tolerance
-    // Allow small floating-point 错误 tolerance
+    // 允许小的浮点误差容忍度
     try std.testing.expectApproxEqAbs(scalar, vector, 0.0001);
 }

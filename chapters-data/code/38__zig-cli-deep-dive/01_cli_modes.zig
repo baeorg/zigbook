@@ -3,23 +3,19 @@ const builtin = @import("builtin");
 
 pub fn main() !void {
     // Set up a general-purpose allocator for dynamic memory allocation
-    // Set up 一个 general-purpose allocator 用于 dynamic 内存 allocation
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();
-    
+
     // Retrieve all command-line arguments passed to the program
-    // Retrieve 所有 command-line arguments passed 到 program
     const argv = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, argv);
 
     // Display the optimization mode used during compilation (Debug, ReleaseSafe, ReleaseFast, ReleaseSmall)
-    // 显示 optimization 模式 used during compilation (调试, ReleaseSafe, ReleaseFast, ReleaseSmall)
     std.debug.print("optimize-mode: {s}\n", .{@tagName(builtin.mode)});
-    
+
     // Display the target platform triple (architecture-os-abi)
-    // 显示 target platform triple (architecture-os-abi)
     std.debug.print(
         "target-triple: {s}-{s}-{s}\n",
         .{
@@ -28,20 +24,17 @@ pub fn main() !void {
             @tagName(builtin.target.abi),
         },
     );
-    
+
     // Display whether the program was compiled in single-threaded mode
-    // 显示 whether program was compiled 在 single-threaded 模式
     std.debug.print("single-threaded: {}\n", .{builtin.single_threaded});
 
     // Check if any user arguments were provided (argv[0] is the program name itself)
-    // 检查 如果 any user arguments were provided (argv[0] is program name itself)
     if (argv.len <= 1) {
         std.debug.print("user-args: <none>\n", .{});
         return;
     }
 
     // Print all user-provided arguments (skipping the program name at argv[0])
-    // 打印 所有 user-provided arguments (skipping program name 在 argv[0])
     std.debug.print("user-args:\n", .{});
     for (argv[1..], 0..) |arg, idx| {
         std.debug.print("  arg[{d}] = {s}\n", .{ idx, arg });

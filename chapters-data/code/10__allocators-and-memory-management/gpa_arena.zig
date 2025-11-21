@@ -2,7 +2,6 @@ const std = @import("std");
 
 pub fn main() !void {
     // GeneralPurposeAllocator with leak detection on deinit.
-    // GeneralPurposeAllocator 使用 leak detection 在 deinit.
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer {
         const leaked = gpa.deinit() == .leak;
@@ -18,8 +17,7 @@ pub fn main() !void {
     for (nums) |n| sum += n;
     std.debug.print("gpa sum: {}\n", .{sum});
 
-    // Arena allocator: bulk free with deinit.
-    // Arena allocator: bulk 释放 使用 deinit.
+    // 区域分配器：通过deinit进行批量释放。
     var arena_inst = std.heap.ArenaAllocator.init(alloc);
     defer arena_inst.deinit();
     const arena = arena_inst.allocator();

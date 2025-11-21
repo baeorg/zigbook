@@ -1,5 +1,4 @@
 // ! Converts a C function-pointer callback pattern into type-safe Zig shims.
-// ! Converts 一个 C 函数-pointer callback pattern into 类型-安全 Zig shims.
 const std = @import("std");
 
 pub const LegacyCallback = *const fn (ctx: *anyopaque) void;

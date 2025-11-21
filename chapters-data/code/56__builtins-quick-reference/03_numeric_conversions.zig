@@ -1,5 +1,4 @@
 // ! Exercises numeric conversion builtins with guarded tests.
-// ! Exercises numeric conversion builtins 使用 guarded tests.
 const std = @import("std");
 
 fn toU8Lossy(value: u16) u8 {

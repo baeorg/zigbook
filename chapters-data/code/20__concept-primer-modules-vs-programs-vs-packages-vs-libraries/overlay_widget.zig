@@ -1,7 +1,7 @@
 const std = @import("std");
 
-// / Summary of a package registration as seen from the consumer invoking `--pkg-begin`.
-// / Summary 的 一个 package registration 作为 seen 从 consumer invoking `--pkg-begin`.
+//  Summary of a package registration as seen from the consumer invoking `--pkg-begin`.
+//  从调用 `--pkg-begin` 的消费者视角看到的包注册摘要。
 pub const PackageDetails = struct {
     package_name: []const u8,
     role: []const u8,
@@ -9,8 +9,8 @@ pub const PackageDetails = struct {
     target_os: []const u8,
 };
 
-// / Render a formatted summary that demonstrates how package registration exposes modules by name.
-// / Render 一个 格式化 summary 该 演示 how package registration exposes modules 通过 name.
+//  Render a formatted summary that demonstrates how package registration exposes modules by name.
+//  渲染格式化摘要，演示包注册如何按名称公开模块。
 pub fn renderSummary(writer: anytype, details: PackageDetails) !void {
     try writer.print("registered package: {s}\n", .{details.package_name});
     try writer.print("role advertised: {s}\n", .{details.role});
@@ -24,6 +24,6 @@ pub fn renderSummary(writer: anytype, details: PackageDetails) !void {
 
 fn moduleDeclCount() usize {
     // Enumerate the declarations exported by this module to simulate API surface reporting.
-    // Enumerate declarations exported 通过 此 module 到 simulate API surface reporting.
+    // 枚举此模块导出的声明以模拟API表面报告。
     return std.meta.declarations(@This()).len;
 }

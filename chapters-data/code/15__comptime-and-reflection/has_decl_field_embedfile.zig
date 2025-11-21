@@ -20,7 +20,6 @@ pub fn main() !void {
     const out = stdout();
 
     // Detect declarations and fields at comptime
-    // Detect declarations 和 fields 在 comptime
     comptime {
         if (!@hasDecl(WithStuff, "greet")) {
             @compileError("missing greet decl");
@@ -31,7 +30,6 @@ pub fn main() !void {
     }
 
     // @embedFile: include file contents in the binary at build time
-    // @embedFile: include 文件 contents 在 binary 在 构建 time
     const embedded = @embedFile("hello.txt");
 
     try out.print("has greet: {}\n", .{@hasDecl(WithStuff, "greet")});

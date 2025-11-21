@@ -12,7 +12,6 @@ pub fn main() !void {
     try list.append(allocator, 20);
 
     // Take a pointer to the first element
-    // Take 一个 pointer 到 首先 element
     const first_ptr = list.at(0);
     std.debug.print("First item: {d}\n", .{first_ptr.*});
 

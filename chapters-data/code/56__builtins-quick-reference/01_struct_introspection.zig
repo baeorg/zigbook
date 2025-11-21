@@ -1,5 +1,4 @@
 // ! Summarizes struct metadata using @typeInfo and @field.
-// ! Summarizes struct metadata 使用 @typeInfo 和 @field.
 const std = @import("std");
 
 fn describeStruct(comptime T: type, writer: anytype) !void {

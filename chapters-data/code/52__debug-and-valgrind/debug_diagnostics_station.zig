@@ -3,11 +3,9 @@ const builtin = @import("builtin");
 
 pub fn main() !void {
     // Emit a quick note to stderr using the convenience helper.
-    // Emit 一个 quick note 到 stderr 使用 convenience helper.
     std.debug.print("[stderr] staged diagnostics\n", .{});
 
     // Lock stderr explicitly for a multi-line message.
-    // Lock stderr explicitly 用于 一个 multi-line message.
     {
         const writer = std.debug.lockStderrWriter(&.{});
         defer std.debug.unlockStderrWriter();
@@ -19,7 +17,6 @@ pub fn main() !void {
     const out = &stdout_writer.interface;
 
     // Capture a trimmed stack trace without printing raw addresses.
-    // 捕获 一个 trimmed 栈 trace without printing raw addresses.
     var frame_storage: [8]usize = undefined;
     var trace = std.builtin.StackTrace{
         .index = 0,
@@ -29,7 +26,6 @@ pub fn main() !void {
     try out.print("frames captured -> {d}\n", .{trace.index});
 
     // Guard a sentinel with the debug assertions that participate in safety mode.
-    // Guard 一个 sentinel 使用 调试 assertions 该 participate 在 safety 模式.
     const marker = "panic probe";
     std.debug.assert(marker.len == 11);
 
@@ -38,7 +34,6 @@ pub fn main() !void {
     std.debug.assertAligned(&buffer, .@"1");
 
     // Report build configuration facts gathered from std.debug.
-    // Report 构建 configuration facts gathered 从 std.调试.
     try out.print(
         "runtime_safety -> {s}\n",
         .{if (std.debug.runtime_safety) "enabled" else "disabled"},
@@ -49,7 +44,6 @@ pub fn main() !void {
     );
 
     // Show manual formatting against a fixed buffer, useful when stderr is locked.
-    // Show manual formatting against 一个 fixed 缓冲区, useful 当 stderr is locked.
     var scratch: [96]u8 = undefined;
     var stream = std.io.fixedBufferStream(&scratch);
     try stream.writer().print("captured slice -> {s}\n", .{marker});

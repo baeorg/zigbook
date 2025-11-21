@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(lib);
 
     // Create an executable that links the library
-    // 创建 一个 executable 该 links 库
+    // 创建链接库的可执行文件
     const exe = b.addExecutable(.{
         .name = "demo",
         .root_module = b.createModule(.{

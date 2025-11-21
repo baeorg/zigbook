@@ -1,7 +1,6 @@
 const std = @import("std");
 
 // Reads at most N bytes from an input using std.Io.Reader.Limited
-// Reads 在 most N bytes 从 一个 输入 使用 std.Io.Reader.Limited
 pub fn main() !void {
     const input = "Hello, world!\nRest is skipped";
     var r: std.Io.Reader = .fixed(input);
@@ -13,7 +12,6 @@ pub fn main() !void {
     var out: std.Io.Writer = .fixed(&out_buf);
 
     // Pump until limit triggers EndOfStream for the limited reader
-    // Pump until limit triggers EndOfStream 用于 limited reader
     _ = limited.interface.streamRemaining(&out) catch |err| {
         switch (err) {
             error.WriteFailed, error.ReadFailed => unreachable,

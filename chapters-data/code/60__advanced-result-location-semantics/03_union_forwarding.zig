@@ -1,5 +1,4 @@
 // ! Demonstrates union construction that forwards nested result locations.
-// ! 演示 union construction 该 forwards nested result locations.
 const std = @import("std");
 
 pub const Resource = struct {

@@ -13,12 +13,10 @@ pub fn main() !void {
     std.debug.print("Fingerprint: 0x{x}\n\n", .{fingerprint});
 
     // Validate semantic version format
-    // 验证 semantic version format
     const version_valid = validateSemVer(pkg_version);
     std.debug.print("Version format valid: {}\n", .{version_valid});
 
     // Check fingerprint uniqueness
-    // 检查 fingerprint uniqueness
     std.debug.print("\nFingerprint ensures:\n", .{});
     std.debug.print("  - Globally unique package identity\n", .{});
     std.debug.print("  - Unambiguous version detection\n", .{});
@@ -30,7 +28,6 @@ pub fn main() !void {
 
 fn validateSemVer(version: []const u8) bool {
     // Simplified validation: check for X.Y.Z format
-    // Simplified validation: 检查 X.Y.Z format
     var parts: u8 = 0;
     for (version) |c| {
         if (c == '.') parts += 1;

@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
     ) orelse "MyApp";
 
     // Create options module to pass config to code
-    // 创建 options module 到 pass config 到 代码
+    // 创建选项模块以将配置传递给代码
     const config = b.addOptions();
     config.addOption(bool, "enable_logging", enable_logging);
     config.addOption([]const u8, "app_name", app_name);

@@ -1,9 +1,7 @@
 const std = @import("std");
 
-// Chapter 4 §2.1 – `defer` binds cleanup to acquisition so readers see the
-// 章节 4 §2.1 – `defer` binds cleanup 到 acquisition so readers see
-// full lifetime of a resource inside one lexical scope.
-// 满 lifetime 的 一个 resource inside 一个 lexical scope.
+// 第4章 §2.1 - `defer`将清理与获取绑定，使读者能够在
+// 一个词法作用域内看到资源的完整生命周期。
 
 const JobError = error{CalibrateFailed};
 
@@ -22,10 +20,8 @@ const Resource = struct {
 fn runJob(name: []const u8, should_fail: bool) JobError!void {
     std.debug.print("acquiring {s}\n", .{name});
     var res = Resource{ .name = name };
-    // Place `defer` right after acquiring the resource so its release triggers
-    // Place `defer` right after acquiring resource so its 发布 triggers
-    // on every exit path, successful or otherwise.
-    // 在 每个 退出 路径, successful 或 otherwise.
+    // 在获取资源后立即放置`defer`，确保其释放操作
+    // 在每个退出路径（无论是成功还是其他情况）都会触发。
     defer res.release();
 
     std.debug.print("working with {s}\n", .{name});
@@ -46,10 +42,8 @@ pub fn main() !void {
     for (jobs) |job| {
         std.debug.print("-- cycle {s} --\n", .{job.name});
         runJob(job.name, job.fail) catch |err| {
-            // Even when a job fails, the earlier `defer` has already scheduled
-            // Even 当 一个 job fails, earlier `defer` has already scheduled
-            // the cleanup that keeps our resource balanced.
-            // cleanup 该 keeps our resource balanced.
+            // 即使作业失败，早期的`defer`也已经调度了
+            // 保持资源平衡的清理操作。
             std.debug.print("{s} bubbled up {s}\n", .{ job.name, @errorName(err) });
         };
     }

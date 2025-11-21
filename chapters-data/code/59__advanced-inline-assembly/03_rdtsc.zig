@@ -1,5 +1,4 @@
 // ! Reads the x86 time stamp counter using inline assembly outputs.
-// ! Reads x86 time stamp counter 使用 inline assembly outputs.
 const std = @import("std");
 const builtin = @import("builtin");
 
