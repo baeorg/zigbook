@@ -1,4 +1,4 @@
-// ! Demonstrates `@fieldParentPtr` to recover container pointers safely.
+// ! 演示使用 `@fieldParentPtr` 安全恢复容器指针。
 const std = @import("std");
 
 const Node = struct {

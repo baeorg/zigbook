@@ -1,52 +1,52 @@
-// This program demonstrates how compile-time configuration affects binary size
-// by conditionally enabling debug tracing based on the build mode.
+// 此程序演示了编译时配置如何影响二进制文件大小
+// 通过根据构建模式有条件地启用调试跟踪。
 const std = @import("std");
 const builtin = @import("builtin");
 
-// Compile-time flag that enables tracing only in Debug mode
-// This demonstrates how dead code elimination works in release builds
+// 编译时标志，仅在 Debug 模式下启用跟踪
+// 这演示了死代码消除在发布构建中的工作方式
 const enable_tracing = builtin.mode == .Debug;
 
-// Computes a FNV-1a hash for a given word
-// FNV-1a is a fast, non-cryptographic hash function
-// @param word: The input byte slice to hash
-// @return: A 64-bit hash value
+// 计算给定单词的 FNV-1a 哈希值
+// FNV-1a 是一种快速、非密码学的哈希函数
+// @param word: 要哈希的输入字节切片
+// @return: 64 位哈希值
 fn checksumWord(word: []const u8) u64 {
-    // FNV-1a 64-bit offset basis
+    // FNV-1a 64 位偏移基数
     var state: u64 = 0xcbf29ce484222325;
 
-    // Process each byte of the input
+    // 处理输入的每个字节
     for (word) |byte| {
-        // XOR with the current byte
+        // 与当前字节进行异或
         state ^= byte;
-        // Multiply by FNV-1a 64-bit prime (with wrapping multiplication)
+        // 乘以 FNV-1a 64 位素数（带环绕乘法）
         state = state *% 0x100000001b3;
     }
     return state;
 }
 
 pub fn main() !void {
-    // Sample word list to demonstrate the checksum functionality
+    // 示例单词列表以演示校验和功能
     const words = [_][]const u8{ "profiling", "optimization", "hardening", "zig" };
 
-    // Accumulator for combining all word checksums
+    // 组合所有单词校验和的累加器
     var digest: u64 = 0;
 
-    // Process each word and combine their checksums
+    // 处理每个单词并组合其校验和
     for (words) |word| {
         const word_sum = checksumWord(word);
-        // Combine checksums using XOR
+        // 使用 XOR 组合校验和
         digest ^= word_sum;
 
-        // Conditional tracing that will be compiled out in release builds
-        // This demonstrates how build mode affects binary size
+        // 条件跟踪，将在发布构建中编译掉
+        // 这演示了构建模式如何影响二进制文件大小
         if (enable_tracing) {
             std.debug.print("trace: {s} -> {x}\n", .{ word, word_sum });
         }
     }
 
-    // Output the final result along with the current build mode
-    // Shows how the same code behaves differently based on compilation settings
+    // 输出最终结果以及当前构建模式
+    // 展示了相同的代码如何根据编译设置表现不同
     std.debug.print(
         "mode={s} digest={x}\n",
         .{

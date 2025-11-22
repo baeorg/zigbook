@@ -30,7 +30,7 @@ pub fn main() !void {
         std.debug.print("Node: {d}\n", .{data_node.data});
     }
 
-    // Clean up
+    // 清理
     allocator.destroy(node1);
     allocator.destroy(node2);
     allocator.destroy(node3);

@@ -7,7 +7,7 @@ pub fn main() !void {
 
     const original = "Hello, World!";
 
-    // Encode
+    // 编码
     const encoded_len = std.base64.standard.Encoder.calcSize(original.len);
     const encoded = try allocator.alloc(u8, encoded_len);
     defer allocator.free(encoded);
@@ -16,7 +16,7 @@ pub fn main() !void {
     std.debug.print("Original: {s}\n", .{original});
     std.debug.print("Encoded: {s}\n", .{encoded});
 
-    // Decode
+    // 解码
     var decoded_buf: [100]u8 = undefined;
     const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(encoded);
     try std.base64.standard.Decoder.decode(&decoded_buf, encoded);

@@ -1,4 +1,4 @@
-// ! Exercises numeric conversion builtins with guarded tests.
+// ! 通过受保护的测试练习数字转换内置函数。
 const std = @import("std");
 
 fn toU8Lossy(value: u16) u8 {

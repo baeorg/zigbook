@@ -1,88 +1,88 @@
 const std = @import("std");
 
-//  Arguments passed to the server thread so it can accept exactly one client and reply.
+//  传递给服务器线程的参数，使其能够准确接受一个客户端并进行回复。
 const ServerTask = struct {
     server: *std.net.Server,
     ready: *std.Thread.ResetEvent,
 };
 
-//  Reads a single line from a `std.Io.Reader`, stripping the trailing newline.
-//  Returns `null` when the stream ends before any bytes are read.
+//  从 `std.Io.Reader` 中读取单行，并移除末尾的换行符。
+//  如果在读取任何字节之前流结束，则返回 `null`。
 fn readLine(reader: *std.Io.Reader, buffer: []u8) !?[]const u8 {
     var len: usize = 0;
     while (true) {
-        // Attempt to read a single byte from the stream
+        // 尝试从流中读取单个字节
         const byte = reader.takeByte() catch |err| switch (err) {
             error.EndOfStream => {
-                // Stream ended: return null if no data was read, otherwise return what we have
+                // 流结束：如果没有读取到数据则返回 null，否则返回已读取到的内容
                 if (len == 0) return null;
                 return buffer[0..len];
             },
             else => return err,
         };
 
-        // Complete the line when newline is encountered
+        // 遇到换行符时完成读取行
         if (byte == '\n') return buffer[0..len];
-        // Skip carriage returns to handle both Unix (\n) and Windows (\r\n) line endings
+        // 跳过回车符以处理 Unix (\n) 和 Windows (\r\n) 两种换行符
         if (byte == '\r') continue;
 
-        // Guard against buffer overflow
+        // 防止缓冲区溢出
         if (len == buffer.len) return error.StreamTooLong;
         buffer[len] = byte;
         len += 1;
     }
 }
 
-// / Blocks waiting for a single client, echoes what the client sent, then exits.
+// / 阻塞等待单个客户端，回显客户端发送的内容，然后退出。
 fn serveOne(task: ServerTask) void {
-    // Signal the main thread that the server thread reached the accept loop.
-    // This synchronization prevents the client from attempting connection before the server is ready.
+    // 通知主线程服务器线程已进入接受循环。
+    // 这种同步机制防止客户端在服务器准备好之前尝试连接。
     task.ready.set();
 
-    // Block until a client connects; handle connection errors gracefully
+    // 阻塞直到客户端连接；优雅地处理连接错误
     const connection = task.server.accept() catch |err| {
         std.debug.print("accept failed: {s}\n", .{@errorName(err)});
         return;
     };
-    // Ensure the connection is closed when this function exits
+    // 确保此函数退出时连接已关闭
     defer connection.stream.close();
 
-    // Set up a buffered reader to receive data from the client
+    // 设置一个缓冲读取器以接收来自客户端的数据
     var inbound_storage: [128]u8 = undefined;
     var net_reader = connection.stream.reader(&inbound_storage);
     const conn_reader = net_reader.interface();
 
-    // Read one line from the client using our custom line-reading logic
+    // 使用自定义的行读取逻辑从客户端读取一行
     var line_storage: [128]u8 = undefined;
     const maybe_line = readLine(conn_reader, &line_storage) catch |err| {
         std.debug.print("receive failed: {s}\n", .{@errorName(err)});
         return;
     };
 
-    // Handle case where connection closed without sending data
+    // 处理连接在未发送数据的情况下关闭的情况
     const line = maybe_line orelse {
         std.debug.print("connection closed before any data arrived\n", .{});
         return;
     };
 
-    // Clean up any trailing whitespace from the received line
+    // 清理接收行中任何尾随的空白字符
     const trimmed = std.mem.trimRight(u8, line, "\r\n");
 
-    // Build a response message that echoes what the server observed
+    // 构建一个回显服务器观察到的内容的响应消息
     var response_storage: [160]u8 = undefined;
     const response = std.fmt.bufPrint(&response_storage, "server observed \"{s}\"\n", .{trimmed}) catch |err| {
         std.debug.print("format failed: {s}\n", .{@errorName(err)});
         return;
     };
 
-    // Send the response back to the client using a buffered writer
+    // 使用缓冲写入器将响应发送回客户端
     var outbound_storage: [128]u8 = undefined;
     var net_writer = connection.stream.writer(&outbound_storage);
     net_writer.interface.writeAll(response) catch |err| {
         std.debug.print("write error: {s}\n", .{@errorName(err)});
         return;
     };
-    // Ensure all buffered data is transmitted before the connection closes
+    // 确保所有缓冲数据在连接关闭前传输
     net_writer.interface.flush() catch |err| {
         std.debug.print("flush error: {s}\n", .{@errorName(err)});
         return;
@@ -90,59 +90,59 @@ fn serveOne(task: ServerTask) void {
 }
 
 pub fn main() !void {
-    // Initialize allocator for dynamic memory needs
+    // 初始化分配器以满足动态内存需求
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create a loopback server on 127.0.0.1 with an OS-assigned port (port 0)
+    // 在 127.0.0.1 上创建一个回环服务器，使用操作系统分配的端口（端口 0）
     const address = try std.net.Address.parseIp("127.0.0.1", 0);
     var server = try address.listen(.{ .reuse_address = true });
     defer server.deinit();
 
-    // Create a synchronization primitive to coordinate server readiness
+    // 创建一个同步原语以协调服务器就绪状态
     var ready = std.Thread.ResetEvent{};
-    // Spawn the server thread that will accept and handle one connection
+    // 启动服务器线程，该线程将接受并处理一个连接
     const server_thread = try std.Thread.spawn(.{}, serveOne, .{ServerTask{
         .server = &server,
         .ready = &ready,
     }});
-    // Ensure the server thread completes before main() exits
+    // 确保服务器线程在 main() 退出前完成
     defer server_thread.join();
 
-    // Block until the server thread signals it has reached accept()
-    // This prevents a race condition where the client tries to connect too early
+    // 阻塞直到服务器线程发出已到达 accept() 的信号
+    // 这可以防止客户端过早尝试连接的竞态条件
     ready.wait();
 
-    // Retrieve the dynamically assigned port number and connect as a client
+    // 检索动态分配的端口号并作为客户端连接
     const port = server.listen_address.in.getPort();
     var stream = try std.net.tcpConnectToHost(allocator, "127.0.0.1", port);
     defer stream.close();
 
-    // Send a test message to the server using a buffered writer
+    // 使用缓冲写入器向服务器发送测试消息
     var outbound_storage: [64]u8 = undefined;
     var client_writer = stream.writer(&outbound_storage);
     const payload = "ping over loopback\n";
     try client_writer.interface.writeAll(payload);
-    // Force transmission of buffered data
+    // 强制传输缓冲数据
     try client_writer.interface.flush();
 
-    // Receive the server's response using a buffered reader
+    // 使用缓冲读取器接收服务器的响应
     var inbound_storage: [128]u8 = undefined;
     var client_reader = stream.reader(&inbound_storage);
     const client_reader_iface = client_reader.interface();
     var reply_storage: [128]u8 = undefined;
     const maybe_reply = try readLine(client_reader_iface, &reply_storage);
     const reply = maybe_reply orelse return error.EmptyReply;
-    // Strip any trailing whitespace from the server's reply
+    // 移除服务器回复中任何尾随的空白字符
     const trimmed = std.mem.trimRight(u8, reply, "\r\n");
 
-    // Display the results to stdout using a buffered writer for efficiency
+    // 使用缓冲写入器将结果显示到标准输出以提高效率
     var stdout_storage: [256]u8 = undefined;
     var stdout_state = std.fs.File.stdout().writer(&stdout_storage);
     const out = &stdout_state.interface;
     try out.writeAll("loopback handshake succeeded\n");
     try out.print("client received: {s}\n", .{trimmed});
-    // Ensure all output is visible before program exits
+    // 确保在程序退出前所有输出可见
     try out.flush();
 }

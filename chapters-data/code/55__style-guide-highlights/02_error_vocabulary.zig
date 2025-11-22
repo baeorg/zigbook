@@ -1,14 +1,14 @@
-// ! Keeps error vocabulary tight for a numeric parser so callers can react precisely.
+// ! 保持数值解析器的错误词汇紧凑，以便调用者能精确响应。
 const std = @import("std");
 
-// / Enumerates the failure modes that the parser can surface to its callers.
+// / 枚举解析器可以向其调用者报告的故障模式。
 pub const ParseCountError = error{
     EmptyInput,
     InvalidDigit,
     Overflow,
 };
 
-// / Parses a decimal counter while preserving descriptive error information.
+// / 解析十进制计数器，同时保留描述性错误信息。
 pub fn parseCount(input: []const u8) ParseCountError!u32 {
     if (input.len == 0) return ParseCountError.EmptyInput;
 

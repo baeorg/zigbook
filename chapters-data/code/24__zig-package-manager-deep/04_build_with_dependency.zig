@@ -4,13 +4,13 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Fetch the dependency defined in build.zig.zon
+    // 获取 build.zig.zon 中定义的依赖项
     const mylib_dep = b.dependency("mylib", .{
         .target = target,
         .optimize = optimize,
     });
 
-    // Get the module from the dependency
+    // 从依赖项中获取模块
     const mylib_module = mylib_dep.module("mylib");
 
     const exe = b.addExecutable(.{
@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // Import the dependency module
+    // 导入依赖项模块
     exe.root_module.addImport("mylib", mylib_module);
 
     b.installArtifact(exe);

@@ -1,72 +1,72 @@
-// ! GPU Dispatch Planning Utility
+// ! GPU 调度规划工具
 //!
-// ! This module demonstrates how to calculate workgroup dispatch parameters for GPU compute shaders.
-// ! It shows the relationship between total work items, workgroup size, and the resulting dispatch
-// ! configuration, including handling of "tail" elements that don't fill a complete workgroup.
+// ! 该模块演示了如何计算 GPU 计算着色器的工作组调度参数。
+// ! 它展示了总工作项、工作组大小和由此产生的调度
+// ! 配置之间的关系，包括处理未填满完整工作组的“尾部”元素。
 
 const std = @import("std");
 
-// / Represents a complete dispatch configuration for parallel execution
-// / Contains all necessary parameters to launch a compute kernel or parallel task
+// / 表示用于并行执行的完整调度配置
+// / 包含启动计算内核或并行任务所需的所有参数
 const DispatchPlan = struct {
-    // / Size of each workgroup (number of threads/invocations per group)
+    // / 每个工作组的大小（每组的线程/调用数）
     workgroup_size: u32,
-    // / Number of workgroups needed to cover all items
+    // / 覆盖所有项目所需的工作组数量
     group_count: u32,
-    // / Total invocations including padding (always a multiple of workgroup_size)
+    // / 包括填充在内的总调用次数（始终是 workgroup_size 的倍数）
     padded_invocations: u32,
-    // / Number of padded/unused invocations in the last workgroup
+    // / 最后一个工作组中填充/未使用的调用次数
     tail: u32,
 };
 
-// / Computes optimal dispatch parameters for a given problem size and workgroup configuration
+// / 为给定的问题大小和工作组配置计算最佳调度参数
 ///
-// / Calculates how many workgroups are needed to process all items, accounting for the fact
-// / that the last workgroup may be partially filled. This is essential for GPU compute shaders
-// / where work must be dispatched in multiples of the workgroup size.
+// / 计算处理所有项目所需的工作组数量，考虑到
+// / 最后一个工作组可能部分填充的事实。这对于 GPU 计算着色器至关重要，
+// / 其中工作必须以工作组大小的倍数进行调度。
 fn computeDispatch(total_items: u32, workgroup_size: u32) DispatchPlan {
-    // Ensure workgroup size is valid (GPU workgroups cannot be empty)
+    // 确保工作组大小有效（GPU 工作组不能为空）
     std.debug.assert(workgroup_size > 0);
 
-    // Calculate number of workgroups needed, rounding up to ensure all items are covered
+    // 计算所需工作组的数量，向上取整以确保所有项目都被覆盖
     const groups = std.math.divCeil(u32, total_items, workgroup_size) catch unreachable;
 
-    // Calculate total invocations including padding (GPU always launches complete workgroups)
+    // 计算包括填充在内的总调用次数（GPU 总是启动完整的工作组）
     const padded = groups * workgroup_size;
 
     return .{
         .workgroup_size = workgroup_size,
         .group_count = groups,
         .padded_invocations = padded,
-        // Tail represents wasted invocations that must be handled with bounds checks
+        // 尾部表示必须通过边界检查处理的浪费的调用
         .tail = padded - total_items,
     };
 }
 
-// / Simulates CPU-side parallel execution planning using the same dispatch logic
+// / 使用相同的调度逻辑模拟 CPU 侧并行执行规划
 ///
-// / Demonstrates that the workgroup dispatch formula applies equally to CPU thread batching,
-// / ensuring consistent behavior between GPU and CPU fallback implementations.
+// / 演示了工作组调度公式同样适用于 CPU 线程批处理，
+// / 确保 GPU 和 CPU 回退实现之间的一致行为。
 fn simulateCpuFallback(total_items: u32, lanes: u32) DispatchPlan {
-    // Reuse the GPU formula so host-side chunking matches device scheduling.
+    // 重用 GPU 公式，使主机侧分块与设备调度匹配。
     return computeDispatch(total_items, lanes);
 }
 
 pub fn main() !void {
-    // Define a sample problem: processing 1000 items
+    // 定义一个示例问题：处理 1000 个项目
     const problem_size: u32 = 1000;
 
-    // Typical GPU workgroup size (often 32, 64, or 256 depending on hardware)
+    // 典型的 GPU 工作组大小（通常为 32、64 或 256，取决于硬件）
     const workgroup_size: u32 = 64;
 
-    // Calculate GPU dispatch configuration
+    // 计算 GPU 调度配置
     const plan = computeDispatch(problem_size, workgroup_size);
     std.debug.print(
         "gpu dispatch: {d} groups × {d} lanes => {d} invocations (tail {d})\n",
         .{ plan.group_count, plan.workgroup_size, plan.padded_invocations, plan.tail },
     );
 
-    // Simulate CPU fallback with fewer parallel lanes
+    // 模拟 CPU 回退，并行通道更少
     const fallback_threads: u32 = 16;
     const cpu = simulateCpuFallback(problem_size, fallback_threads);
     std.debug.print(

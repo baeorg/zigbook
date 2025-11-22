@@ -1,10 +1,10 @@
-// ! Converts a C function-pointer callback pattern into type-safe Zig shims.
+// ! 将 C 函数指针回调模式转换为类型安全的 Zig shim。
 const std = @import("std");
 
 pub const LegacyCallback = *const fn (ctx: *anyopaque) void;
 
 fn callLegacy(callback: LegacyCallback, ctx: *anyopaque) void {
-    callback(ctx);
+    callLegacy(callback, ctx);
 }
 
 const Counter = struct {

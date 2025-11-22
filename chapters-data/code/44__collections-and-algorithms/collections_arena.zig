@@ -21,7 +21,7 @@ pub fn main() !void {
     }
     std.debug.print("Map has {d} entries\n", .{map.count()});
 
-    // No need to call list.deinit() or map.deinit()
-    // arena.deinit() frees everything at once
+    // 无需调用 list.deinit() 或 map.deinit()
+    // arena.deinit() 一次性释放所有内容
     std.debug.print("All freed at once via arena.deinit()\n", .{});
 }

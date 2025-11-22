@@ -10,15 +10,15 @@ pub fn main() !void {
 
     try list.appendSlice(allocator, &.{ 1, 2, 3, 4 });
 
-    // Insert 99 at index 1
+    // 在索引 1 处插入 99
     try list.insert(allocator, 1, 99);
     std.debug.print("After insert at 1: {any}\n", .{list.items});
 
-    // Remove at index 2 (shifts elements)
+    // 移除索引 2 处的元素（元素会移动）
     _ = list.orderedRemove(2);
     std.debug.print("After orderedRemove at 2: {any}\n", .{list.items});
 
-    // Remove at index 1 (swaps with last, no shift)
+    // 移除索引 1 处的元素（与最后一个元素交换，不移动）
     _ = list.swapRemove(1);
     std.debug.print("After swapRemove at 1: {any}\n", .{list.items});
 }

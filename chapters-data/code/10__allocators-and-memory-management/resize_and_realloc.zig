@@ -10,20 +10,17 @@ pub fn main() !void {
     for (buf, 0..) |*b, i| b.* = 'A' + @as(u8, @intCast(i));
     std.debug.print("len={} contents={s}\n", .{ buf.len, buf });
 
-    // Grow using realloc (may move).
-    // 使用 realloc 增长（可能会移动）。
+    // 使用 realloc 增长（可能会移动内存）。
     buf = try alloc.realloc(buf, 8);
     for (buf[4..], 0..) |*b, i| b.* = 'a' + @as(u8, @intCast(i));
     std.debug.print("grown len={} contents={s}\n", .{ buf.len, buf });
 
-    // Shrink in-place using resize; remember to slice.
-    // 使用 resize 就地缩小；记住要切片。
+    // 使用 resize 原地缩小；记得切片。
     if (alloc.resize(buf, 3)) {
         buf = buf[0..3];
         std.debug.print("shrunk len={} contents={s}\n", .{ buf.len, buf });
     } else {
-        // Fallback when in-place shrink not supported by allocator.
-        // 当分配器不支持就地缩小时的后备方案。
+        // 当分配器不支持原地缩小时的回退方案。
         buf = try alloc.realloc(buf, 3);
         std.debug.print("shrunk (realloc) len={} contents={s}\n", .{ buf.len, buf });
     }

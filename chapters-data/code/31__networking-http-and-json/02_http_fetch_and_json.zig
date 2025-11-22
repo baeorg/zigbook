@@ -1,41 +1,41 @@
 const std = @import("std");
 
-//  Arguments passed to the HTTP server thread so it can respond to a single request.
+//  传递给 HTTP 服务器线程的参数，使其能够响应单个请求。
 const HttpTask = struct {
     server: *std.net.Server,
     ready: *std.Thread.ResetEvent,
 };
 
-//  Minimal HTTP handler: accept one client, reply with a JSON document, and exit.
+//  最小化的 HTTP 处理程序：接受一个客户端，用 JSON 文档回复，然后退出。
 fn serveJson(task: HttpTask) void {
-    // Signal the main thread that the server thread reached the accept loop.
-    // This synchronization prevents the client from attempting connection before the server is ready.
+    // 通知主线程服务器线程已进入接受循环。
+    // 这种同步机制防止客户端在服务器准备好之前尝试连接。
     task.ready.set();
 
-    // Block until a client connects; handle connection errors gracefully
+    // 阻塞直到客户端连接；优雅地处理连接错误
     const connection = task.server.accept() catch |err| {
         std.debug.print("accept failed: {s}\n", .{@errorName(err)});
         return;
     };
-    // Ensure the connection is closed when this function exits
+    // 确保此函数退出时连接已关闭
     defer connection.stream.close();
 
-    // Allocate buffers for receiving HTTP request and sending HTTP response
+    // 分配用于接收 HTTP 请求和发送 HTTP 响应的缓冲区
     var recv_buffer: [4096]u8 = undefined;
     var send_buffer: [4096]u8 = undefined;
-    // Create buffered reader and writer for the TCP connection
+    // 为 TCP 连接创建缓冲读取器和写入器
     var conn_reader = connection.stream.reader(&recv_buffer);
     var conn_writer = connection.stream.writer(&send_buffer);
-    // Initialize HTTP server state machine with the buffered connection interfaces
+    // 使用缓冲连接接口初始化 HTTP 服务器状态机
     var server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
 
-    // Parse the HTTP request headers (method, path, version, etc.)
+    // 解析 HTTP 请求头（方法、路径、版本等）
     var request = server.receiveHead() catch |err| {
         std.debug.print("receive head failed: {s}\n", .{@errorName(err)});
         return;
     };
 
-    // Define the shape of our JSON response payload
+    // 定义 JSON 响应有效负载的形状
     const Body = struct {
         service: []const u8,
         message: []const u8,
@@ -44,28 +44,28 @@ fn serveJson(task: HttpTask) void {
         sequence: u32,
     };
 
-    // Build a response that echoes request details back to the client
+    // 构建一个回显请求详细信息给客户端的响应
     const payload = Body{
         .service = "loopback-api",
         .message = "hello from Zig HTTP server",
-        .method = @tagName(request.head.method), // Convert HTTP method enum to string
-        .path = request.head.target, // Echo the requested path
+        .method = @tagName(request.head.method), // 将 HTTP 方法枚举转换为字符串
+        .path = request.head.target, // 回显请求的路径
         .sequence = 1,
     };
 
-    // Allocate a buffer for the JSON-encoded response body
+    // 为 JSON 编码的响应体分配缓冲区
     var json_buffer: [256]u8 = undefined;
-    // Create a fixed-size writer that writes into our buffer
+    // 创建一个固定大小的写入器，写入我们的缓冲区
     var body_writer = std.Io.Writer.fixed(json_buffer[0..]);
-    // Serialize the payload struct into JSON format
+    // 将有效负载结构序列化为 JSON 格式
     std.json.Stringify.value(payload, .{}, &body_writer) catch |err| {
         std.debug.print("json encode failed: {s}\n", .{@errorName(err)});
         return;
     };
-    // Get the slice containing the actual JSON bytes written
+    // 获取包含实际写入的 JSON 字节的切片
     const body = std.Io.Writer.buffered(&body_writer);
 
-    // Send HTTP 200 response with the JSON body and appropriate content-type header
+    // 发送 HTTP 200 响应，包含 JSON 正文和适当的 Content-Type 头
     request.respond(body, .{
         .extra_headers = &.{
             .{ .name = "content-type", .value = "application/json" },
@@ -77,59 +77,59 @@ fn serveJson(task: HttpTask) void {
 }
 
 pub fn main() !void {
-    // Initialize allocator for dynamic memory needs (HTTP client requires allocation)
+    // 初始化分配器以满足动态内存需求（HTTP 客户端需要分配）
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create a loopback server on 127.0.0.1 with an OS-assigned port (port 0)
+    // 在 127.0.0.1 上创建一个回环服务器，使用操作系统分配的端口（端口 0）
     const address = try std.net.Address.parseIp("127.0.0.1", 0);
     var server = try address.listen(.{ .reuse_address = true });
     defer server.deinit();
 
-    // Create a synchronization primitive to coordinate server readiness
+    // 创建一个同步原语以协调服务器就绪状态
     var ready = std.Thread.ResetEvent{};
-    // Spawn the server thread that will accept and handle one HTTP request
+    // 启动服务器线程，该线程将接受并处理一个 HTTP 请求
     const server_thread = try std.Thread.spawn(.{}, serveJson, .{HttpTask{
         .server = &server,
         .ready = &ready,
     }});
-    // Ensure the server thread completes before main() exits
+    // 确保服务器线程在 main() 退出前完成
     defer server_thread.join();
 
-    // Block until the server thread signals it has reached accept()
-    // This prevents a race condition where the client tries to connect too early
+    // 阻塞直到服务器线程发出已到达 accept() 的信号
+    // 这可以防止客户端过早尝试连接的竞态条件
     ready.wait();
 
-    // Retrieve the dynamically assigned port number for the client connection
+    // 检索客户端连接的动态分配端口号
     const port = server.listen_address.in.getPort();
 
-    // Initialize HTTP client with our allocator
+    // 使用我们的分配器初始化 HTTP 客户端
     var client = std.http.Client{ .allocator = allocator };
     defer client.deinit();
 
-    // Construct the full URL for the HTTP request
+    // 构造 HTTP 请求的完整 URL
     var url_buffer: [64]u8 = undefined;
     const url = try std.fmt.bufPrint(&url_buffer, "http://127.0.0.1:{d}/stats", .{port});
 
-    // Allocate buffer to receive the HTTP response body
+    // 分配缓冲区以接收 HTTP 响应体
     var response_buffer: [512]u8 = undefined;
-    // Create a fixed-size writer that will capture the response
+    // 创建一个固定大小的写入器，将捕获响应
     var response_writer = std.Io.Writer.fixed(response_buffer[0..]);
 
-    // Perform the HTTP GET request with custom User-Agent header
+    // 执行带有自定义 User-Agent 头部的 HTTP GET 请求
     const fetch_result = try client.fetch(.{
         .location = .{ .url = url },
-        .response_writer = &response_writer, // Where to write response body
+        .response_writer = &response_writer, // 写入响应体的位置
         .headers = .{
             .user_agent = .{ .override = "zigbook-demo/0.15.2" },
         },
     });
 
-    // Get the slice containing the actual response body bytes
+    // 获取包含实际响应体字节的切片
     const body = std.Io.Writer.buffered(&response_writer);
 
-    // Define the expected structure of the JSON response
+    // 定义 JSON 响应的预期结构
     const ResponseShape = struct {
         service: []const u8,
         message: []const u8,
@@ -138,22 +138,22 @@ pub fn main() !void {
         sequence: u32,
     };
 
-    // Parse the JSON response into a typed struct
+    // 将 JSON 响应解析为类型化的结构体
     var parsed = try std.json.parseFromSlice(ResponseShape, allocator, body, .{});
-    // Free the memory allocated during JSON parsing
+    // 释放 JSON 解析期间分配的内存
     defer parsed.deinit();
 
-    // Set up a buffered writer for stdout to efficiently output results
+    // 设置一个缓冲写入器以高效地将结果输出到标准输出
     var stdout_storage: [256]u8 = undefined;
     var stdout_state = std.fs.File.stdout().writer(&stdout_storage);
     const out = &stdout_state.interface;
-    // Display the HTTP response status code
+    // 显示 HTTP 响应状态码
     try out.print("status: {d}\n", .{@intFromEnum(fetch_result.status)});
-    // Display the parsed JSON fields
+    // 显示解析后的 JSON 字段
     try out.print("service: {s}\n", .{parsed.value.service});
     try out.print("method: {s}\n", .{parsed.value.method});
     try out.print("path: {s}\n", .{parsed.value.path});
     try out.print("message: {s}\n", .{parsed.value.message});
-    // Ensure all output is visible before program exits
+    // 确保在程序退出前所有输出可见
     try out.flush();
 }

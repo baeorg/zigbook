@@ -22,7 +22,7 @@ pub fn main() !void {
         std.debug.print("Entity {d}: id={d}, x={d}, y={d}\n", .{ i, entity.id, entity.x, entity.y });
     }
 
-    // Access a single field slice for efficient iteration
+    // 访问单个字段切片以进行高效迭代
     const x_coords = entities.items(.x);
     var sum: f32 = 0;
     for (x_coords) |x| {

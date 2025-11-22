@@ -1,7 +1,7 @@
 const std = @import("std");
 
-// Demonstrates legacy fixedBufferStream (deprecated in favor of std.Io.Writer.fixed)
-// to highlight migration paths.
+// 演示传统 fixedBufferStream（已弃用，推荐使用 std.Io.Writer.fixed）
+// 以突出迁移路径。
 pub fn main() !void {
     var backing: [64]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&backing);

@@ -1,35 +1,35 @@
-//! SPIR-V Kernel: element-wise vector squaring
+//! SPIR-V 内核：逐元素向量平方
 //!
-// ! This kernel expects three storage buffers: an input vector (`in_values`), an
-// ! output vector (`out_values`), and a descriptor struct `Submission` that
-// ! communicates the logical element count. Each invocation squares one element
-// ! and writes the result back to `out_values`.
+// ! 该内核需要三个存储缓冲区：一个输入向量 (`in_values`)，一个
+// ! 输出向量 (`out_values`)，以及一个描述符结构体 `Submission`，它
+// ! 传递逻辑元素计数。每次调用都会将一个元素平方
+// ! 并将结果写入 `out_values`。
 
 const builtin = @import("builtin");
 
-// / Maximum number of elements the kernel will touch.
+// / 内核将触及的最大元素数量。
 pub const lane_capacity: u32 = 1024;
 
-// / Submission header shared between the host and the kernel.
+// / 主机和内核之间共享的提交头。
 ///
-// / The `extern` layout ensures the struct matches bindings created by Vulkan or
-/// WebGPU descriptor tables.
+// / `extern` 布局确保结构与 Vulkan 或
+/// WebGPU 描述符表创建的绑定匹配。
 const Submission = extern struct {
-    // / Logical element count requested by the host.
+    // / 主机请求的逻辑元素计数。
     len: u32,
     _padding: u32 = 0,
 };
 
-// / Storage buffer layout expected by the kernel.
+// / 内核预期的存储缓冲区布局。
 const VectorPayload = extern struct {
     values: [lane_capacity]f32,
 };
 
-// / Squares each element of `in_values` and writes the result to `out_values`.
+// / 将 `in_values` 的每个元素平方并将结果写入 `out_values`。
 ///
-// / The kernel is written defensively: it checks both the logical length passed
-// / by the host and the static `lane_capacity` to avoid out-of-bounds writes when
-// / dispatched with more threads than necessary.
+// / 内核是防御性编写的：它检查主机传递的逻辑长度
+// / 和静态 `lane_capacity`，以避免在调度时出现越界写入，
+// / 当调度线程数量超过所需时。
 pub export fn squareVector(
     submission: *addrspace(.storage_buffer) const Submission,
     in_values: *addrspace(.storage_buffer) const VectorPayload,
@@ -47,7 +47,7 @@ pub export fn squareVector(
     out_values.*.values[linear] = value * value;
 }
 
-// Guard compilation so this file is only compiled when targeting SPIR-V.
+// 保护编译，使此文件仅在目标为 SPIR-V 时编译。
 comptime {
     switch (builtin.target.cpu.arch) {
         .spirv32, .spirv64 => {},

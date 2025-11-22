@@ -1,13 +1,11 @@
 const std = @import("std");
 
-// Demonstrating library creation
-// Demonstrating 库 creation
+// 演示库创建
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Create a static library
-    // 创建一个 static 库
+    // 创建一个静态库
     const lib = b.addLibrary(.{
         .name = "utils",
         .root_module = b.createModule(.{
@@ -21,7 +19,6 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(lib);
 
-    // Create an executable that links the library
     // 创建链接库的可执行文件
     const exe = b.addExecutable(.{
         .name = "demo",

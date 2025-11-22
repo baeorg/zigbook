@@ -1,19 +1,19 @@
-// Import the standard library for printing and platform utilities
+// 导入标准库以获取打印和平台工具
 const std = @import("std");
-// Import builtin to access compile-time target information
+// 导入内置模块以访问编译时目标信息
 const builtin = @import("builtin");
 
-// Entry point that demonstrates cross-compilation by displaying target platform information
+// 演示通过显示目标平台信息进行交叉编译的入口点
 pub fn main() void {
-    // Print the target platform's CPU architecture, OS, and ABI
-    // Uses builtin.target to access compile-time target information
+    // 打印目标平台的 CPU 架构、操作系统和 ABI
+    // 使用 builtin.target 访问编译时目标信息
     std.debug.print("hello from {s}-{s}-{s}!\n", .{
         @tagName(builtin.target.cpu.arch),
         @tagName(builtin.target.os.tag),
         @tagName(builtin.target.abi),
     });
 
-    // Retrieve the platform-specific executable file extension (e.g., ".exe" on Windows, "" on Linux)
+    // 检索特定于平台的 EXE 文件扩展名（例如，Windows 上的“.exe”，Linux 上的“”）
     const suffix = std.Target.Os.Tag.exeFileExt(builtin.target.os.tag, builtin.target.cpu.arch);
     std.debug.print("default executable suffix: {s}\n", .{suffix});
 }

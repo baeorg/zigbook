@@ -35,8 +35,7 @@ pub fn main() !void {
     // This allows using std.fmt.format-style print operations
     var writer = builder.writer();
     for (items, 0..) |item, index| {
-        // Format each item as a numbered list entry with name and count
-        // Format 每个 item 作为 一个 numbered list entry 使用 name 和 count
+        // 将每个项目格式化为带编号的列表项，包含名称和计数
         try writer.print("* {d}. {s}: {d}\n", .{ index + 1, item.name, item.count });
     }
 

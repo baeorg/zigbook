@@ -1,19 +1,16 @@
 const std = @import("std");
 
-// Demonstrating module creation and imports
-// Demonstrating module creation 和 imports
+// 演示模块创建和导入
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     
-    // Create a reusable module (public)
-    // 创建一个 reusable module (public)
+    // 创建一个可重用模块（public）
     const math_mod = b.addModule("math", .{
         .root_source_file = b.path("math.zig"),
         .target = target,
     });
     
-    // Create the executable with import of the module
     // 使用导入的模块创建可执行文件
     const exe = b.addExecutable(.{
         .name = "calculator",

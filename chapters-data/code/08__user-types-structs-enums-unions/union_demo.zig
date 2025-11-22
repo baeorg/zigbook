@@ -1,16 +1,12 @@
 const std = @import("std");
 
-// Chapter 8 — Unions: tagged and untagged
-// 章节 8 — Unions: tagged 和 untagged
+// 第8章 — 联合体：带标签与不带标签
 //
-// Demonstrates a tagged union (with enum discriminant) and an untagged union
-// 演示 一个 tagged union (使用 enum discriminant) 和 一个 untagged union
-// (without discriminant). Tagged unions are safe and idiomatic; untagged
-// (without discriminant). Tagged unions are 安全 和 idiomatic; untagged
-// unions are advanced and unsafe if used incorrectly.
-// unions are advanced 和 unsafe 如果 used incorrectly.
+// 演示带标签的联合体（使用枚举判别符）和不带标签的联合体
+// （无判别符）。带标签的联合体是安全且符合语言习惯的；不带标签的
+// 联合体是高级用法，若使用不当则不安全。
 //
-// Usage: 
+// 用法:
 //    zig run union_demo.zig
 
 const Kind = enum { number, text };
@@ -20,8 +16,7 @@ const Value = union(Kind) {
     text: []const u8,
 };
 
-// Untagged union (advanced): requires external tracking and is unsafe if used wrong.
-// Untagged union (advanced): requires external tracking 和 is unsafe 如果 used wrong.
+// 不带标签的联合体（高级）：需要外部跟踪，若使用不当则不安全。
 const Raw = union { u: u32, i: i32 };
 
 pub fn main() !void {
@@ -31,8 +26,7 @@ pub fn main() !void {
     v = .{ .text = "hi" };
     printValue("update: ", v);
 
-    // Untagged example: write as u32, read as i32 (bit reinterpret).
-    // Untagged 示例: 写入 作为 u32, 读取 作为 i32 (bit reinterpret).
+    // 不带标签的示例：以 u32 写入，以 i32 读取（位重新解释）。
     const r = Raw{ .u = 0xFFFF_FFFE }; // -2 as signed 32-bit
     const as_i: i32 = @bitCast(r.u);
     std.debug.print("raw u=0x{X:0>8} i={d}\n", .{ r.u, as_i });

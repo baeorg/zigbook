@@ -5,7 +5,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // ArrayList with explicit allocator
+    // 带显式分配器的 ArrayList
     var list: std.ArrayList(u32) = .empty;
     defer list.deinit(allocator);
 
@@ -15,7 +15,7 @@ pub fn main() !void {
 
     std.debug.print("Managed list length: {d}\n", .{list.items.len});
 
-    // Transfer ownership to a slice
+    // 将所有权转移到切片
     const owned_slice = try list.toOwnedSlice(allocator);
     defer allocator.free(owned_slice);
 

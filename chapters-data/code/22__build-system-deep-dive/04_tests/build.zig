@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// Demonstrating test integration
+// 演示测试集成
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -10,21 +10,18 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
     
-    // Create tests for the library module
-    // 创建 tests 用于 库 module
+    // 为库模块创建测试
     const lib_tests = b.addTest(.{
         .root_module = lib_mod,
     });
     
     const run_lib_tests = b.addRunArtifact(lib_tests);
     
-    // Create a test step
-    // 创建一个 test step
+    // 创建测试步骤
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_lib_tests.step);
     
-    // Also create an executable that uses the library
-    // Also 创建 一个 executable 该 使用 库
+    // 同时创建一个使用该库的可执行文件
     const exe = b.addExecutable(.{
         .name = "app",
         .root_module = b.createModule(.{

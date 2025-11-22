@@ -1,29 +1,30 @@
 .{
-    // Package identifier following Zig naming conventions
+    // 遵循 Zig 命名约定的包标识符
     .name = .workspace_dashboard,
     
-    // Semantic version for this workspace (major.minor.patch)
+    // 此工作区的语义版本 (major.minor.patch)
     .version = "0.1.0",
     
-    // Minimum Zig compiler version required to build this project
+    // 构建此项目所需的最低 Zig 编译器版本
+    // 确保与语言特性和构建系统 API 的兼容性
     .minimum_zig_version = "0.15.2",
     
-    // Explicit list of paths included in the package for distribution and source tracking
-    // This controls what gets packaged when this project is published or vendored
+    // 包中包含的用于分发和源跟踪的显式路径列表
+    // 这控制了当此项目发布或作为供应商提供时所打包的内容
     .paths = .{
-        "build.zig",        // Main build script
-        "build.zig.zon",    // This manifest file
-        "deps.zig",         // Centralized dependency configuration
-        "app",              // Application entry point and executable code
-        "packages",         // Local workspace packages (libA, libB)
-        "vendor",           // Vendored third-party dependencies (palette)
+        "build.zig",        // 主构建脚本
+        "build.zig.zon",    // 此清单文件
+        "deps.zig",         // 集中式依赖项配置
+        "app",              // 应用程序入口点和可执行代码
+        "packages",         // 本地工作区包 (libA, libB)
+        "vendor",           // 供应商提供的第三方依赖项 (palette)
     },
     
-    // External dependencies fetched from remote sources
-    // Empty in this workspace as all dependencies are local/vendored
+    // 从远程源获取的外部依赖项
+    // 此工作区中为空，因为所有依赖项都是本地/供应商提供的
     .dependencies = .{},
     
-    // Cryptographic hash for integrity verification of the package manifest
-    // Automatically computed by the Zig build system
+    // 用于包清单完整性验证的加密哈希
+    // 由 Zig 构建系统自动计算
     .fingerprint = 0x88b8c5fe06a5c6a1,
 }

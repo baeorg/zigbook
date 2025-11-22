@@ -37,6 +37,7 @@ pub fn build(b: *std.Build) void {
     // 创建编排所有依赖的主应用程序模块
     // 这演示了根模块如何组合多个导入的模块
     const app_module = b.createModule(.{
+        .name = "app", // 给模块一个名字
         .root_source_file = b.path("workspace/app/main.zig"),
         .target = target,
         .optimize = optimize,

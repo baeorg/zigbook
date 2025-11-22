@@ -1,18 +1,18 @@
-// ! Demonstrates naming and documentation conventions for a small diagnostic helper.
+// ! 演示小型诊断辅助函数的命名和文档约定。
 const std = @import("std");
 
-// / Represents a labelled temperature reading captured during diagnostics.
+// / 表示诊断期间捕获的带标签的温度读数。
 pub const TemperatureReading = struct {
     label: []const u8,
     value_celsius: f32,
 
-    // / Writes the reading to the provided writer using canonical casing and units.
+    // / 使用规范的大小写和单位将读数写入提供的写入器。
     pub fn format(self: TemperatureReading, writer: anytype) !void {
         try writer.print("{s}: {d:.1}°C", .{ self.label, self.value_celsius });
     }
 };
 
-// / Creates a reading with the given label and temperature value in Celsius.
+// / 使用给定标签和摄氏温度值创建读数。
 pub fn createReading(label: []const u8, value_celsius: f32) TemperatureReading {
     return .{
         .label = label,

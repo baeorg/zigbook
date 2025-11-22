@@ -39,20 +39,17 @@ pub fn analyze(values: []const f64) Stats {
     var min_value: f64 = values[0];
     var max_value: f64 = values[0];
     var mean_value: f64 = 0.0;
-    // M2 is the sum of squares of differences from the current mean (Welford's algorithm)
-    // M2是当前均值的平方差之和（Welford算法）
+    // M2 是当前均值平方差之和（Welford 算法）
     var m2: f64 = 0.0;
     var index: usize = 0;
 
     while (index < values.len) : (index += 1) {
         const value = values[index];
-        // Track minimum and maximum values
-        // Track minimum 和 maximum 值
+        // 追踪最小值和最大值
         if (value < min_value) min_value = value;
         if (value > max_value) max_value = value;
 
-        // Welford's online algorithm for mean and variance
-        // Welford在线算法用于均值和方差
+        // Welford 在线算法用于均值和方差
         const count = index + 1;
         const delta = value - mean_value;
         mean_value += delta / @as(f64, @floatFromInt(count));
@@ -60,8 +57,7 @@ pub fn analyze(values: []const f64) Stats {
         m2 += delta * delta2;
     }
 
-    // Calculate sample variance using Bessel's correction (n-1)
-    // Calculate sample variance 使用 Bessel's correction (n-1)
+    // 使用 Bessel 校正（n-1）计算样本方差
     const count_f = @as(f64, @floatFromInt(values.len));
     const variance_value = if (values.len > 1)
         m2 / (count_f - 1.0)
@@ -77,20 +73,15 @@ pub fn analyze(values: []const f64) Stats {
     };
 }
 
-// / Computes the sample standard deviation from precomputed statistics.
-// / Computes sample 标准 deviation 从 precomputed statistics.
-// / Standard deviation is the square root of variance.
+// / 从预计算的统计数据中计算样本标准差。
 // / 标准差是方差的平方根。
 pub fn sampleStdDev(stats: Stats) f64 {
     return std.math.sqrt(stats.variance);
 }
 
-// / Calculates the z-score (standard score) for a given value.
-// / Calculates z-score (标准 score) 用于 一个 given 值.
-// / Measures how many standard deviations a value is from the mean.
-// / Measures how many 标准 deviations 一个 值 is 从 mean.
-// / Returns 0 if standard deviation is 0 to avoid division by zero.
-// / 如果标准差为0则返回0以避免除零。
+// / 为给定值计算 z-score（标准分数）。
+// / 衡量一个值与平均值相差多少个标准差。
+// / 如果标准差为 0，则返回 0 以避免除零。
 pub fn zScore(value: f64, stats: Stats) f64 {
     const dev = sampleStdDev(stats);
     if (dev == 0.0) return 0.0;

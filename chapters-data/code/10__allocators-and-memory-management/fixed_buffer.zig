@@ -13,8 +13,7 @@ pub fn main() !void {
     _ = b;
     _ = c;
 
-    // This one should fail (32 total capacity, 24 already used).
-    // 这个应该失败（总容量32，已使用24）。
+    // 这个应该会失败（总容量32，已用24）。
     if (A.alloc(u8, 16)) |_| {
         std.debug.print("unexpected success\n", .{});
     } else |err| switch (err) {

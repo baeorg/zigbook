@@ -1,22 +1,18 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    // Standard target and optimization options
-    // 标准 target 和 optimization options
+    // 标准目标和优化选项
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     
-    // ===== LIBRARY =====
     // ===== 库 =====
-    // Create the TextKit library module
-    // 创建 TextKit 库 module
+    // 创建 TextKit 库模块
     const textkit_mod = b.addModule("textkit", .{
         .root_source_file = b.path("src/textkit.zig"),
         .target = target,
     });
     
-    // Build static library artifact
-    // 构建 static 库 artifact
+    // 构建静态库产物
     const lib = b.addLibrary(.{
         .name = "textkit",
         .root_module = b.createModule(.{
@@ -28,13 +24,11 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
     });
     
-    // Install the library (to zig-out/lib/)
-    // Install 库 (到 zig-out/lib/)
+    // 安装库 (到 zig-out/lib/)
     b.installArtifact(lib);
     
-    // ===== EXECUTABLE =====
-    // Create executable that uses the library
-    // 创建 executable 该 使用 库
+    // ===== 可执行文件 =====
+    // 创建使用库的可执行文件
     const exe = b.addExecutable(.{
         .name = "textkit-cli",
         .root_module = b.createModule(.{
@@ -47,17 +41,14 @@ pub fn build(b: *std.Build) void {
         }),
     });
     
-    // Install the executable (to zig-out/bin/)
-    // Install executable (到 zig-out/bin/)
+    // 安装可执行文件 (到 zig-out/bin/)
     b.installArtifact(exe);
     
-    // ===== RUN STEP =====
-    // Create a run step for the executable
+    // ===== 运行步骤 =====
     // 创建可执行文件的运行步骤
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     
-    // Forward command-line arguments to the application
     // 转发命令行参数到应用程序
     if (b.args) |args| {
         run_cmd.addArgs(args);
@@ -66,32 +57,27 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the TextKit CLI");
     run_step.dependOn(&run_cmd.step);
     
-    // ===== TESTS =====
-    // Library tests
-    // 库 tests
+    // ===== 测试 =====
+    // 库测试
     const lib_tests = b.addTest(.{
         .root_module = textkit_mod,
     });
     
     const run_lib_tests = b.addRunArtifact(lib_tests);
     
-    // Executable tests (minimal for main.zig)
-    // Executable tests (最小化 用于 主.zig)
+    // 可执行文件测试 (main.zig 的最小测试)
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
     });
     
     const run_exe_tests = b.addRunArtifact(exe_tests);
     
-    // Test step that runs all tests
     // 运行所有测试的测试步骤
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     
-    // ===== CUSTOM STEPS =====
-    // ===== 自定义 STEPS =====
-    // Demo step that shows usage
+    // ===== 自定义步骤 =====
     // 展示用法的演示步骤
     const demo_step = b.step("demo", "Run demo commands");
     

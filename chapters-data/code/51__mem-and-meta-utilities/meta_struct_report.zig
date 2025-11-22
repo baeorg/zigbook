@@ -12,7 +12,7 @@ const Field = std.meta.FieldEnum(Settings);
 const whitespace = " \t\r";
 
 const raw_config =
-    \\# overrides loaded from a repro case
+    \\# 从重现案例加载的覆盖
     \\render = true
     \\retries = 4
     \\mode = fast-render

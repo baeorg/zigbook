@@ -1,13 +1,13 @@
 const std = @import("std");
 
-//  Tiny, allocator-friendly path utilities for didactic purposes.
-//  Note: These do not attempt full platform semantics; they aim to be predictable
-//  and portable for teaching. Prefer std.fs.path for production code.
+//  用于教学目的的、小巧且对分配器友好的路径工具。
+//  注意：这些工具不尝试实现完整的平台语义；它们旨在为教学提供可预测性
+//  和可移植性。生产代码请优先使用 std.fs.path。
 pub const pathutil = struct {
-    //  Join parts with exactly one separator between components.
-    //  - Collapses duplicate separators at boundaries
-    //  - Preserves a leading root (e.g. "/" on POSIX) if the first non-empty part starts with a separator
-    //  - Does not resolve dot segments or drive letters
+    //  用一个分隔符连接组件。
+    //  - 合并边界处的重复分隔符
+    //  - 如果第一个非空部分以分隔符开头，则保留前导根（例如 POSIX 上的“/”）
+    //  - 不解析点段或驱动器号
     pub fn joinAlloc(allocator: std.mem.Allocator, parts: []const []const u8) ![]u8 {
         var list: std.ArrayListUnmanaged(u8) = .{};
         defer list.deinit(allocator);
@@ -49,8 +49,8 @@ pub const pathutil = struct {
         return list.toOwnedSlice(allocator);
     }
 
-    //  Return the last path component. Trailing separators are ignored.
-    //  Examples: "a/b/c" -> "c", "/a/b/" -> "b", "/" -> "/", "" -> "".
+    //  返回最后一个路径组件。尾部多余的分隔符将被忽略。
+    //  示例: "a/b/c" -> "c", "/a/b/" -> "b", "/" -> "/", "" -> ""
     pub fn basename(path: []const u8) []const u8 {
         if (path.len == 0) return path;
 
@@ -71,8 +71,8 @@ pub const pathutil = struct {
         return path[start..end];
     }
 
-    //  Return the directory portion (without trailing separators).
-    //  Examples: "a/b/c" -> "a/b", "a" -> ".", "/" -> "/".
+    //  返回目录部分（不带尾随分隔符）。
+    //  示例: "a/b/c" -> "a/b", "a" -> ".", "/" -> "/"
     pub fn dirpath(path: []const u8) []const u8 {
         if (path.len == 0) return ".";
 
@@ -96,8 +96,8 @@ pub const pathutil = struct {
         return path[0..d_end];
     }
 
-    //  Return the extension (without dot) of the last component or "" if none.
-    //  Examples: "file.txt" -> "txt", "a.tar.gz" -> "gz", ".gitignore" -> "".
+    //  返回最后一个组件的扩展名（不带点），如果没有则返回""。
+    //  示例: "file.txt" -> "txt", "a.tar.gz" -> "gz", ".gitignore" -> ""
     pub fn extname(path: []const u8) []const u8 {
         const base = basename(path);
         if (base.len == 0) return base;
@@ -115,8 +115,8 @@ pub const pathutil = struct {
         return "";
     }
 
-    //  Return a newly-allocated path with the extension replaced by `new_ext` (no dot).
-    //  If there is no existing extension, appends one if `new_ext` is non-empty.
+    //  返回一个新分配的路径，其扩展名被`new_ext`（不带点）替换。
+    //  如果不存在现有扩展名，且`new_ext`不为空，则追加一个。
     pub fn changeExtAlloc(allocator: std.mem.Allocator, path: []const u8, new_ext: []const u8) ![]u8 {
         const base = basename(path);
         const dir = dirpath(path);
@@ -164,7 +164,7 @@ inline fn isSep(ch: u8) bool {
 }
 
 inline fn isOtherSep(ch: u8) bool {
-    // Be forgiving in parsing: treat both '/' and '\\' as separators on any platform
-    // but only emit std.fs.path.sep when joining.
+    // 解析时要宽容：在任何平台上都将'/'和'\\'视作分隔符
+    // 但在连接时只发出 std.fs.path.sep。
     return ch == '/' or ch == '\\';
 }

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// Demonstrates composing Reader -> Writer pipeline with delimiter streaming.
+// 演示使用分隔符流将 Reader -> Writer 管道组合。
 pub fn main() !void {
     const data = "alpha\nbeta\ngamma\n";
     var r: std.Io.Reader = .fixed(data);
@@ -9,7 +9,7 @@ pub fn main() !void {
     var out: std.Io.Writer = .fixed(&out_buf);
 
     while (true) {
-        // Stream one line (excluding the delimiter) then print processed form
+        // 流式传输一行（不包括分隔符），然后打印处理后的形式
         const line_opt = r.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => unreachable,
             error.ReadFailed => return err,

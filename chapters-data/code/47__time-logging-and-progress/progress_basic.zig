@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub fn main() void {
-    // Progress can draw to stderr; disable printing in this demo for deterministic output.
+    // 进度可以绘制到 stderr；在此演示中禁用打印以获得确定性输出。
     const root = std.Progress.start(.{ .root_name = "build", .estimated_total_items = 3, .disable_printing = true });
     var compile = root.start("compile", 2);
     compile.completeOne();

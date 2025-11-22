@@ -2,10 +2,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub fn main() !void {
-    // Emit a quick note to stderr using the convenience helper.
+    // 使用便利辅助函数向 stderr 发送一个简短的通知。
     std.debug.print("[stderr] staged diagnostics\n", .{});
 
-    // Lock stderr explicitly for a multi-line message.
+    // 明确锁定 stderr 以处理多行消息。
     {
         const writer = std.debug.lockStderrWriter(&.{});
         defer std.debug.unlockStderrWriter();
@@ -16,7 +16,7 @@ pub fn main() !void {
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
     const out = &stdout_writer.interface;
 
-    // Capture a trimmed stack trace without printing raw addresses.
+    // 捕获一个修剪过的堆栈跟踪，而不打印原始地址。
     var frame_storage: [8]usize = undefined;
     var trace = std.builtin.StackTrace{
         .index = 0,
@@ -25,7 +25,7 @@ pub fn main() !void {
     std.debug.captureStackTrace(null, &trace);
     try out.print("frames captured -> {d}\n", .{trace.index});
 
-    // Guard a sentinel with the debug assertions that participate in safety mode.
+    // 使用参与安全模式的调试断言来守护一个哨兵。
     const marker = "panic probe";
     std.debug.assert(marker.len == 11);
 
@@ -33,7 +33,7 @@ pub fn main() !void {
     std.debug.assertReadable(buffer[0..]);
     std.debug.assertAligned(&buffer, .@"1");
 
-    // Report build configuration facts gathered from std.debug.
+    // 报告从 std.debug 收集的构建配置事实。
     try out.print(
         "runtime_safety -> {s}\n",
         .{if (std.debug.runtime_safety) "enabled" else "disabled"},
@@ -43,7 +43,7 @@ pub fn main() !void {
         .{@tagName(builtin.mode)},
     );
 
-    // Show manual formatting against a fixed buffer, useful when stderr is locked.
+    // 针对固定缓冲区显示手动格式化，在 stderr 被锁定时很有用。
     var scratch: [96]u8 = undefined;
     var stream = std.io.fixedBufferStream(&scratch);
     try stream.writer().print("captured slice -> {s}\n", .{marker});

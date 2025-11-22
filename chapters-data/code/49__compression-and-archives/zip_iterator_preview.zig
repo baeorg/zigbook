@@ -30,6 +30,7 @@ pub fn main() !void {
     var name_buf: [std.fs.max_path_bytes]u8 = undefined;
 
     try stdout.print("zip archive contains:\n", .{});
+    // zip 归档包含：
 
     while (try iter.next()) |entry| {
         try entry.extract(&archive_reader, .{}, &name_buf, tmp.dir);

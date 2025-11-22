@@ -1,55 +1,51 @@
 const std = @import("std");
 
 pub fn main() !void {
-    // Initialize a general-purpose allocator for dynamic memory allocation
     // 初始化通用分配器用于动态内存分配
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create working directory for stream copy demo
     // 创建用于流复制演示的工作目录
     const dir_name = "fs_stream_copy";
     try std.fs.cwd().makePath(dir_name);
-    // Clean up directory on exit, ignoring errors if it doesn't exist
     // 退出时清理目录，如果不存在则忽略错误
     defer std.fs.cwd().deleteTree(dir_name) catch {};
 
-    // Construct platform-neutral path for source file
+    // 为源文件构造平台无关的路径
     const source_path = try std.fs.path.join(allocator, &.{ dir_name, "source.txt" });
     defer allocator.free(source_path);
 
-    // Create source file with truncate and read permissions
-    // Truncate ensures we start with an empty file
+    // 创建具有截断和读取权限的源文件
+    // 截断确保我们从空文件开始
     var source_file = try std.fs.cwd().createFile(source_path, .{ .truncate = true, .read = true });
     defer source_file.close();
 
-    // Set up buffered writer for source file
-    // Buffering reduces syscall overhead via batched writes
+    // 为源文件设置缓冲写入器
+    // 缓冲区通过批量写入减少系统调用开销
     var source_writer_buffer: [128]u8 = undefined;
     var source_writer_state = source_file.writer(&source_writer_buffer);
     const source_writer = &source_writer_state.interface;
 
-    // Write sample data to source file
+    // 向源文件写入示例数据
     try source_writer.print("alpha\n", .{});
     try source_writer.print("beta\n", .{});
     try source_writer.print("gamma\n", .{});
-    // Flush ensures all buffered data is written to disk
+    // 刷新确保所有缓冲数据写入磁盘
     try source_writer.flush();
 
-    // Rewind source file cursor to beginning for reading
+    // 将源文件光标倒回到开头以进行读取
     try source_file.seekTo(0);
 
-    // Construct platform-neutral path for destination file
+    // 为目标文件构造平台无关的路径
     const dest_path = try std.fs.path.join(allocator, &.{ dir_name, "copy.txt" });
     defer allocator.free(dest_path);
 
-    // Create destination file with truncate and read permissions
     // 创建具有截断和读取权限的目标文件
     var dest_file = try std.fs.cwd().createFile(dest_path, .{ .truncate = true, .read = true });
     defer dest_file.close();
 
-    // Set up buffered writer for destination file
+    // 为目标文件设置缓冲写入器
     var dest_writer_buffer: [64]u8 = undefined;
     var dest_writer_state = dest_file.writer(&dest_writer_buffer);
     const dest_writer = &dest_writer_state.interface;

@@ -1,30 +1,30 @@
-// ! Highlights a layered module layout with focused helper functions and tests.
+// ! 突出显示具有集中辅助函数和测试的分层模块布局。
 const std = @import("std");
 
-// / Errors that can emerge while normalizing user-provided retry policies.
+// / 规范化用户提供的重试策略时可能出现的错误。
 pub const RetryPolicyError = error{
     ZeroAttempts,
     ExcessiveDelay,
 };
 
-// / Encapsulates retry behaviour for a network client, including sensible defaults.
+// / 封装网络客户端的重试行为，包括合理的默认值。
 pub const RetryPolicy = struct {
     max_attempts: u8 = 3,
     delay_ms: u32 = 100,
 
-    /// Indicates whether exponential backoff is active.
+    /// 指示指数退避是否激活。
     pub fn isBackoffEnabled(self: RetryPolicy) bool {
         return self.delay_ms > 0 and self.max_attempts > 1;
     }
 };
 
-//  Partial options provided by configuration files or CLI flags.
+//  由配置文件或 CLI 标志提供的部分选项。
 pub const PartialRetryOptions = struct {
     max_attempts: ?u8 = null,
     delay_ms: ?u32 = null,
 };
 
-//  Builds a retry policy from optional overrides while keeping default reasoning centralized.
+//  从可选覆盖构建重试策略，同时保持默认推理集中。
 pub fn makeRetryPolicy(options: PartialRetryOptions) RetryPolicy {
     return RetryPolicy{
         .max_attempts = options.max_attempts orelse 3,
@@ -38,7 +38,7 @@ fn validate(policy: RetryPolicy) RetryPolicyError!RetryPolicy {
     return policy;
 }
 
-//  Produces a validated policy, emphasising the flow from raw input to constrained output.
+//  生成一个经过验证的策略，强调从原始输入到受限输出的流程。
 pub fn finalizeRetryPolicy(options: PartialRetryOptions) RetryPolicyError!RetryPolicy {
     const policy = makeRetryPolicy(options);
     return validate(policy);

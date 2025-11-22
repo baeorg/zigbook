@@ -17,11 +17,17 @@ const Mode = enum { fast, safe, tiny };
 fn describeScore(score: u8) []const u8 {
     return switch (score) {
         0 => "no progress",           // Exact match for zero
+        // 精确匹配零值
         1...3 => "warming up",         // Range syntax: matches 1, 2, or 3
+        // 范围语法：匹配 1, 2 或 3
         4, 5 => "halfway there",       // Multiple discrete values
+        // 匹配多个离散值
         6...9 => "almost done",        // Range: matches 6 through 9
+        // 范围语法：匹配 6 到 9
         10 => "perfect run",           // Maximum valid score
+        // 最大有效分数
         else => "out of range",        // Catch-all for any other value
+        // 通配符：匹配所有其他值
     };
 }
 
@@ -46,8 +52,11 @@ pub fn main() !void {
     // 必须处理所有枚举情况（穷尽性匹配）
     const factor = switch (mode) {
         .fast => 32,  // Optimization for speed
+        // 速度优化
         .safe => 16,  // Balanced mode
+        // 平衡模式
         .tiny => 4,   // Optimization for size
+        // 体积优化
     };
 
     // Print the selected mode and its corresponding factor

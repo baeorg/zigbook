@@ -1,4 +1,4 @@
-// ! Mirrors Rust's Option and Result idioms with Zig optionals and error unions.
+// ! 使用 Zig 的可选类型和错误联合体模仿 Rust 的 Option 和 Result 习惯用法。
 const std = @import("std");
 
 pub fn findPortLine(env: []const u8) ?[]const u8 {

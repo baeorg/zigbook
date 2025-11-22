@@ -1,28 +1,24 @@
 const std = @import("std");
 
-// Demonstrating custom build options
-// Demonstrating 自定义 构建 options
+// 演示自定义构建选项
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Custom boolean option
-    // 自定义 boolean option
+    // 自定义布尔选项
     const enable_logging = b.option(
         bool,
         "enable-logging",
         "Enable debug logging",
     ) orelse false;
 
-    // Custom string option
-    // 自定义 string option
+    // 自定义字符串选项
     const app_name = b.option(
         []const u8,
         "app-name",
         "Application name",
     ) orelse "MyApp";
 
-    // Create options module to pass config to code
     // 创建选项模块以将配置传递给代码
     const config = b.addOptions();
     config.addOption(bool, "enable_logging", enable_logging);

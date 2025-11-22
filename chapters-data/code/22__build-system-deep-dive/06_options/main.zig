@@ -1,29 +1,21 @@
 
 // Import standard library for debug printing functionality
-// 导入 标准库 用于 调试 printing functionality
+// 导入标准库用于调试打印功能
 const std = @import("std");
 // Import build-time configuration options defined in build.zig
-// 导入 构建-time configuration options defined 在 构建.zig
+// 从 build.zig 导入构建时配置选项
 const config = @import("config");
 
-// / Entry point of the application demonstrating the use of build options.
-// / 入口点 application demonstrating use 的 构建 options.
-// / This function showcases how to access and use configuration values that
-// / 此 函数 showcases how 以访问 和 use configuration 值 该
-// / are set during the build process through the Zig build system.
-// / are set during 构建 process through Zig 构建 system.
+// / 应用程序的入口点，演示构建选项的使用。
+// / 此函数展示了如何通过 Zig 构建系统访问和使用在构建过程中设置的配置值。
 pub fn main() !void {
-    // Display the application name from build configuration
-    // 显示 application name 从 构建 configuration
+    // 显示构建配置中的应用程序名称
     std.debug.print("Application: {s}\n", .{config.app_name});
-    // Display the logging toggle status from build configuration
-    // 显示 logging toggle 状态 从 构建 configuration
+    // 显示构建配置中的日志开关状态
     std.debug.print("Logging enabled: {}\n", .{config.enable_logging});
 
-    // Conditionally execute debug logging based on build-time configuration
-    // Conditionally execute 调试 logging 基于 构建-time configuration
-    // This demonstrates compile-time branching using build options
-    // 此 演示 编译-time 分支 使用 构建 options
+    // 根据构建时配置有条件地执行调试日志记录
+    // 这演示了使用构建选项的编译时分支
     if (config.enable_logging) {
         std.debug.print("[DEBUG] This is a debug message\n", .{});
     }

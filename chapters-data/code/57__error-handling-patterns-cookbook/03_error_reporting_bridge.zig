@@ -1,4 +1,4 @@
-// ! Bridges domain errors to user-facing log messages.
+// ! 将领域错误桥接到面向用户的日志消息。
 const std = @import("std");
 
 pub const ApiError = error{

@@ -3,7 +3,7 @@ const std = @import("std");
 // Configure logging for this program
 // 为此程序配置日志记录
 pub const std_options: std.Options = .{
-    .log_level = .info, // hide debug
+    .log_level = .info, // 隐藏调试信息
     .logFn = std.log.defaultLog,
 };
 

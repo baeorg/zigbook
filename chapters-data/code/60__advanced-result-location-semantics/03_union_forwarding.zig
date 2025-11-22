@@ -1,4 +1,4 @@
-// ! Demonstrates union construction that forwards nested result locations.
+// ! 演示转发嵌套结果位置的联合体构造。
 const std = @import("std");
 
 pub const Resource = struct {

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// Simple counting example using Writer.fixed and buffered length.
+// 使用 Writer.fixed 和缓冲长度的简单计数示例。
 pub fn main() !void {
     var buf: [128]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);

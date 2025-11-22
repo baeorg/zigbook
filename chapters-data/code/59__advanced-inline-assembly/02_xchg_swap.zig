@@ -1,4 +1,4 @@
-// ! Swaps two words using the x86 xchg instruction with memory constraints.
+// ! 使用带内存约束的 x86 xchg 指令交换两个字。
 const std = @import("std");
 const builtin = @import("builtin");
 
